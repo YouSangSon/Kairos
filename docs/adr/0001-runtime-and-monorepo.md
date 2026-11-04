@@ -10,6 +10,8 @@ Kairos는 iOS·Android·web 클라이언트, 여러 증권 API, 정확한 원장
 
 ## Decision
 
+DDD·클린 아키텍처의 내부 책임과 의존성은 [ADR-0002](0002-domain-module-boundaries.md)를 따른다.
+
 ```text
 apps/client (Flutter: iOS, Android, web)
           |
