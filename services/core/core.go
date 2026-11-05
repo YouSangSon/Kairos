@@ -25,8 +25,10 @@ import (
 	"time"
 	"unicode/utf8"
 
-	_ "github.com/mattn/go-sqlite3"
 	"omni-folio/services/core/internal/exact"
+	"omni-folio/services/core/internal/ledgerdomain"
+
+	_ "github.com/mattn/go-sqlite3"
 )
 
 const (
@@ -71,29 +73,14 @@ type Service struct {
 	activityCursorKey [32]byte
 }
 
-type APIError struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
-	Field   string `json:"field,omitempty"`
-}
+type APIError = ledgerdomain.APIError
+type Transaction = ledgerdomain.Transaction
+type Money = ledgerdomain.Money
+type Holding = ledgerdomain.Holding
+type Provenance = ledgerdomain.Provenance
+type PortfolioSnapshot = ledgerdomain.PortfolioSnapshot
 
-type Transaction struct {
-	EventID               string `json:"event_id"`
-	SourceEventID         string `json:"source_event_id"`
-	AccountID             string `json:"account_id"`
-	Type                  string `json:"type"`
-	OccurredAt            string `json:"occurred_at"`
-	InstrumentID          string `json:"instrument_id,omitempty"`
-	Symbol                string `json:"symbol,omitempty"`
-	Quantity              string `json:"quantity,omitempty"`
-	Price                 string `json:"price,omitempty"`
-	Fee                   string `json:"fee,omitempty"`
-	Currency              string `json:"currency"`
-	Amount                string `json:"amount"`
-	CounterCurrency       string `json:"counter_currency,omitempty"`
-	CounterAmount         string `json:"counter_amount,omitempty"`
-	CorrectsSourceEventID string `json:"corrects_source_event_id,omitempty"`
-}
+const fifoCostBasisPolicy = ledgerdomain.FIFOCostBasisPolicy
 
 type PreviewRow struct {
 	RowNumber        int               `json:"row_number"`
@@ -157,40 +144,6 @@ type ApplyReceipt struct {
 	ReceivedAt           string `json:"received_at"`
 	RecordedAt           string `json:"recorded_at"`
 }
-
-type Money struct {
-	Currency string `json:"currency"`
-	Amount   string `json:"amount"`
-}
-
-type Holding struct {
-	InstrumentID string `json:"instrument_id"`
-	Symbol       string `json:"symbol"`
-	Quantity     string `json:"quantity"`
-	CostBasis    string `json:"cost_basis"`
-	Currency     string `json:"currency"`
-}
-
-type Provenance struct {
-	EventIDs   []string `json:"event_ids"`
-	ReceiptIDs []string `json:"receipt_ids"`
-}
-
-type PortfolioSnapshot struct {
-	PortfolioID     string     `json:"portfolio_id"`
-	LedgerRevision  string     `json:"ledger_revision"`
-	CostBasisPolicy string     `json:"cost_basis_policy"`
-	AsOf            string     `json:"as_of"`
-	RecordedAt      string     `json:"recorded_at"`
-	LiveEnabled     bool       `json:"live_enabled"`
-	ValuationStatus string     `json:"valuation_status"`
-	Cash            []Money    `json:"cash"`
-	Holdings        []Holding  `json:"holdings"`
-	RealizedPnL     []Money    `json:"realized_pnl"`
-	Provenance      Provenance `json:"provenance"`
-}
-
-const fifoCostBasisPolicy = "fifo_utc_nanosecond_exact_else_half_even_residual_8_v2"
 
 type BackupManifest struct {
 	FormatVersion                            string              `json:"format_version"`
@@ -1304,7 +1257,11 @@ func (s *Service) parseCSV(ctx context.Context, q queryer, body []byte) ([]Previ
 	result := make([]PreviewRow, 0, len(records)-1)
 	for i, record := range records[1:] {
 		row := PreviewRow{RowNumber: i + 2}
-		tx, fieldErrors := s.normalize(record, value)
+		get := func(name string) string { return value(record, name) }
+		tx, fieldErrors := ledgerdomain.Normalize(Transaction{
+			EventID: s.id("event"), SourceEventID: get("source_event_id"), AccountID: get("account_id"),
+			Type: get("type"), OccurredAt: get("occurred_at"), Symbol: get("symbol"), Quantity: get("quantity"), Price: get("price"), Fee: get("fee"), Currency: get("currency"), Amount: get("amount"), CounterCurrency: get("counter_currency"), CounterAmount: get("counter_amount"), CorrectsSourceEventID: get("corrects_source_event_id"),
+		})
 		if len(fieldErrors) != 0 {
 			row.Status, row.Errors = "error", fieldErrors
 			result = append(result, row)
@@ -1422,164 +1379,6 @@ func validateCashVoid(ctx context.Context, q queryer, correction *Transaction, r
 
 func invalidCorrection() *APIError {
 	return &APIError{Code: "invalid_correction", Message: "cash void does not exactly reverse one eligible existing cash event", Field: "corrects_source_event_id"}
-}
-
-func (s *Service) normalize(record []string, value func([]string, string) string) (*Transaction, []APIError) {
-	get := func(name string) string { return value(record, name) }
-	tx := &Transaction{
-		EventID: s.id("event"), SourceEventID: get("source_event_id"), AccountID: get("account_id"),
-		Type: get("type"), OccurredAt: get("occurred_at"), Symbol: get("symbol"), Quantity: get("quantity"),
-		Price: get("price"), Fee: get("fee"), Currency: get("currency"), Amount: get("amount"),
-		CounterCurrency: get("counter_currency"), CounterAmount: get("counter_amount"), CorrectsSourceEventID: get("corrects_source_event_id"),
-	}
-	var errs []APIError
-	for _, field := range []struct{ name, value string }{{"source_event_id", tx.SourceEventID}, {"account_id", tx.AccountID}} {
-		if field.value == "" {
-			errs = append(errs, APIError{"required", field.name + " is required", field.name})
-		}
-	}
-	if occurredAt, err := time.Parse(time.RFC3339, tx.OccurredAt); err != nil {
-		errs = append(errs, APIError{"invalid_datetime", "occurred_at must be an RFC 3339 timestamp", "occurred_at"})
-	} else {
-		tx.OccurredAt = occurredAt.UTC().Format(time.RFC3339Nano)
-	}
-	if len(tx.Currency) != 3 || tx.Currency != strings.ToUpper(tx.Currency) || strings.IndexFunc(tx.Currency, func(r rune) bool { return r < 'A' || r > 'Z' }) >= 0 {
-		errs = append(errs, APIError{"invalid_currency", "currency must be a three-letter uppercase code", "currency"})
-	}
-	amount, err := parseDecimal(tx.Amount)
-	if err != nil {
-		errs = append(errs, APIError{"invalid_decimal", "amount must be a canonical decimal", "amount"})
-	}
-	if tx.Type != "CASH_VOID" && tx.CorrectsSourceEventID != "" {
-		errs = append(errs, APIError{"invalid_fields", "corrects_source_event_id is only valid for CASH_VOID", "corrects_source_event_id"})
-	}
-	if tx.Type != "FX_EXCHANGE" && (tx.CounterCurrency != "" || tx.CounterAmount != "") {
-		errs = append(errs, APIError{"invalid_fields", "counter currency and amount are only valid for FX_EXCHANGE", "counter_currency"})
-	}
-	switch tx.Type {
-	case "DEPOSIT", "WITHDRAWAL", "FEE", "TAX":
-		if tx.Symbol != "" || tx.Quantity != "" || tx.Price != "" || tx.Fee != "" {
-			errs = append(errs, APIError{"invalid_fields", tx.Type + " trade fields must be empty", "symbol"})
-		}
-		tx.Symbol, tx.Quantity, tx.Price, tx.Fee = "", "", "", ""
-		if err == nil && ((tx.Type == "DEPOSIT" && amount.Sign() <= 0) || (tx.Type != "DEPOSIT" && amount.Sign() >= 0)) {
-			direction := "negative"
-			if tx.Type == "DEPOSIT" {
-				direction = "positive"
-			}
-			errs = append(errs, APIError{"invalid_amount", tx.Type + " amount must be " + direction, "amount"})
-		}
-	case "DIVIDEND":
-		if tx.Symbol == "" {
-			errs = append(errs, APIError{"required", "symbol is required for DIVIDEND", "symbol"})
-		} else {
-			tx.InstrumentID = instrumentIDForSymbol(tx.Symbol)
-		}
-		if tx.Quantity != "" || tx.Price != "" || tx.Fee != "" {
-			errs = append(errs, APIError{"invalid_fields", "DIVIDEND quantity, price, and fee must be empty", "quantity"})
-		}
-		tx.Quantity, tx.Price, tx.Fee = "", "", ""
-		if err == nil && amount.Sign() <= 0 {
-			errs = append(errs, APIError{"invalid_amount", "DIVIDEND amount must be positive", "amount"})
-		}
-	case "SPLIT":
-		if tx.Symbol == "" {
-			errs = append(errs, APIError{"required", "symbol is required for SPLIT", "symbol"})
-		} else {
-			tx.InstrumentID = instrumentIDForSymbol(tx.Symbol)
-		}
-		positiveDecimal(tx.Quantity, "quantity", &errs)
-		if tx.Price != "" || tx.Fee != "" {
-			errs = append(errs, APIError{"invalid_fields", "SPLIT price and fee must be empty", "price"})
-		}
-		tx.Price, tx.Fee = "", ""
-		if err == nil && amount.Sign() != 0 {
-			errs = append(errs, APIError{"invalid_amount", "SPLIT amount must be zero", "amount"})
-		}
-	case "CASH_VOID":
-		if tx.Symbol != "" || tx.Quantity != "" || tx.Price != "" || tx.Fee != "" {
-			errs = append(errs, APIError{"invalid_fields", "CASH_VOID trade fields must be empty", "symbol"})
-		}
-		tx.Symbol, tx.Quantity, tx.Price, tx.Fee = "", "", "", ""
-		if tx.CorrectsSourceEventID == "" {
-			errs = append(errs, APIError{"required", "corrects_source_event_id is required for CASH_VOID", "corrects_source_event_id"})
-		}
-		if err == nil && amount.Sign() == 0 {
-			errs = append(errs, APIError{"invalid_amount", "CASH_VOID amount must be non-zero", "amount"})
-		}
-	case "FX_EXCHANGE":
-		if tx.Symbol != "" || tx.Quantity != "" || tx.Price != "" || tx.Fee != "" {
-			errs = append(errs, APIError{"invalid_fields", "FX_EXCHANGE trade fields must be empty", "symbol"})
-		}
-		tx.Symbol, tx.Quantity, tx.Price, tx.Fee = "", "", "", ""
-		if err == nil && amount.Sign() >= 0 {
-			errs = append(errs, APIError{"invalid_amount", "FX_EXCHANGE amount must be negative", "amount"})
-		}
-		if tx.CounterCurrency == "" {
-			errs = append(errs, APIError{"required", "counter_currency is required for FX_EXCHANGE", "counter_currency"})
-		} else if len(tx.CounterCurrency) != 3 || tx.CounterCurrency != strings.ToUpper(tx.CounterCurrency) || strings.IndexFunc(tx.CounterCurrency, func(r rune) bool { return r < 'A' || r > 'Z' }) >= 0 {
-			errs = append(errs, APIError{"invalid_currency", "counter_currency must be a three-letter uppercase code", "counter_currency"})
-		} else if tx.CounterCurrency == tx.Currency {
-			errs = append(errs, APIError{"invalid_currency", "FX_EXCHANGE currencies must be different", "counter_currency"})
-		}
-		if tx.CounterAmount == "" {
-			errs = append(errs, APIError{"required", "counter_amount is required for FX_EXCHANGE", "counter_amount"})
-		} else if counterAmount, counterErr := parseDecimal(tx.CounterAmount); counterErr != nil {
-			errs = append(errs, APIError{"invalid_decimal", "counter_amount must be a canonical decimal", "counter_amount"})
-		} else if counterAmount.Sign() <= 0 {
-			errs = append(errs, APIError{"invalid_amount", "FX_EXCHANGE counter_amount must be positive", "counter_amount"})
-		}
-	case "BUY", "SELL":
-		if tx.Symbol == "" {
-			errs = append(errs, APIError{"required", "symbol is required for trades", "symbol"})
-		} else {
-			tx.InstrumentID = instrumentIDForSymbol(tx.Symbol)
-		}
-		quantity, quantityErr := positiveDecimal(tx.Quantity, "quantity", &errs)
-		price, priceErr := positiveDecimal(tx.Price, "price", &errs)
-		fee, feeErr := nonNegativeDecimal(tx.Fee, "fee", &errs)
-		if err == nil && quantityErr == nil && priceErr == nil && feeErr == nil {
-			expected := new(big.Rat).Mul(quantity, price)
-			expected.Add(expected, fee)
-			if tx.Type == "BUY" {
-				expected.Neg(expected)
-			} else {
-				expected.Sub(new(big.Rat).Mul(quantity, price), fee)
-			}
-			if expected.Cmp(amount) != 0 {
-				errs = append(errs, APIError{"amount_mismatch", "amount must equal the signed trade cash impact including fee", "amount"})
-			}
-		}
-	default:
-		errs = append(errs, APIError{"invalid_type", "unsupported transaction type", "type"})
-	}
-	return tx, errs
-}
-
-func instrumentIDForSymbol(symbol string) string {
-	return "instrument_" + strings.ToLower(symbol)
-}
-
-func positiveDecimal(raw, field string, errs *[]APIError) (*big.Rat, error) {
-	v, err := parseDecimal(raw)
-	if err != nil {
-		*errs = append(*errs, APIError{"invalid_decimal", field + " must be a canonical decimal", field})
-	} else if v.Sign() <= 0 {
-		err = errors.New("not positive")
-		*errs = append(*errs, APIError{"invalid_decimal", field + " must be positive", field})
-	}
-	return v, err
-}
-
-func nonNegativeDecimal(raw, field string, errs *[]APIError) (*big.Rat, error) {
-	v, err := parseDecimal(raw)
-	if err != nil {
-		*errs = append(*errs, APIError{"invalid_decimal", field + " must be a canonical decimal", field})
-	} else if v.Sign() < 0 {
-		err = errors.New("negative")
-		*errs = append(*errs, APIError{"invalid_decimal", field + " must be non-negative", field})
-	}
-	return v, err
 }
 
 func parseDecimal(raw string) (*big.Rat, error) {
@@ -1711,16 +1510,6 @@ func (s *Service) apply(ctx context.Context, req ApplyRequest) (*ApplyReceipt, *
 	return receipt, nil
 }
 
-type lot struct {
-	quantity *big.Rat
-	cost     *big.Rat
-}
-
-type position struct {
-	instrument, symbol, currency string
-	lots                         []lot
-}
-
 func snapshotFrom(ctx context.Context, q queryer) (*PortfolioSnapshot, error) {
 	if err := requireCurrentLedgerReplay(ctx, q); err != nil {
 		return nil, err
@@ -1760,146 +1549,18 @@ func snapshotFromPolicy(ctx context.Context, q queryer, policy string, throughRe
 		return nil, err
 	}
 	defer rows.Close()
-	cash := map[string]*big.Rat{}
-	realized := map[string]*big.Rat{}
-	positions := map[string]*position{}
-	eventIDs := []string{}
-	receiptIDs := []string{}
-	seenReceipt := map[string]bool{}
-	asOf := zeroTime
+	events := []ledgerdomain.ReplayEvent{}
 	for rows.Next() {
-		var eventID, typ, occurredAt, instrument, symbol, quantityRaw, priceRaw, feeRaw, currency, amountRaw, counterCurrency, counterAmountRaw, receiptID string
-		if err := rows.Scan(&eventID, &typ, &occurredAt, &instrument, &symbol, &quantityRaw, &priceRaw, &feeRaw, &currency, &amountRaw, &counterCurrency, &counterAmountRaw, &receiptID); err != nil {
+		var e ledgerdomain.ReplayEvent
+		if err := rows.Scan(&e.EventID, &e.Type, &e.OccurredAt, &e.InstrumentID, &e.Symbol, &e.Quantity, &e.Price, &e.Fee, &e.Currency, &e.Amount, &e.CounterCurrency, &e.CounterAmount, &e.ReceiptID); err != nil {
 			return nil, err
 		}
-		amount, err := parseDecimal(amountRaw)
-		if err != nil {
-			return nil, fmt.Errorf("event %s amount: %w", eventID, err)
-		}
-		addRat(cash, currency, amount)
-		eventIDs = append(eventIDs, eventID)
-		if !seenReceipt[receiptID] {
-			seenReceipt[receiptID] = true
-			receiptIDs = append(receiptIDs, receiptID)
-		}
-		if !canonicalUTCString(occurredAt) {
-			return nil, errors.New("ledger occurred_at is not canonical UTC")
-		}
-		if policy == fifoCostBasisPolicy || occurredAt > asOf {
-			asOf = occurredAt
-		}
-		if typ == "FX_EXCHANGE" {
-			counterAmount, err := parseDecimal(counterAmountRaw)
-			if err != nil {
-				return nil, fmt.Errorf("event %s counter amount: %w", eventID, err)
-			}
-			addRat(cash, counterCurrency, counterAmount)
-			continue
-		}
-		switch typ {
-		case "DEPOSIT", "WITHDRAWAL", "DIVIDEND", "FEE", "TAX", "CASH_VOID":
-			continue
-		}
-		quantity, err := parseDecimal(quantityRaw)
-		if err != nil {
-			return nil, err
-		}
-		key := instrument + "\x00" + currency
-		p := positions[key]
-		if typ == "SPLIT" {
-			if p == nil || len(p.lots) == 0 {
-				return nil, fmt.Errorf("SPLIT %s has no open holding", eventID)
-			}
-			for i := range p.lots {
-				p.lots[i].quantity.Mul(p.lots[i].quantity, quantity)
-			}
-			continue
-		}
-		price, err := parseDecimal(priceRaw)
-		if err != nil {
-			return nil, err
-		}
-		fee, err := parseDecimal(feeRaw)
-		if err != nil {
-			return nil, err
-		}
-		if p == nil {
-			p = &position{instrument: instrument, symbol: symbol, currency: currency}
-			positions[key] = p
-		}
-		if typ == "BUY" {
-			cost := new(big.Rat).Add(new(big.Rat).Mul(quantity, price), fee)
-			p.lots = append(p.lots, lot{new(big.Rat).Set(quantity), cost})
-			continue
-		}
-		remaining := new(big.Rat).Set(quantity)
-		allocatedCost := new(big.Rat)
-		for remaining.Sign() > 0 && len(p.lots) > 0 {
-			current := &p.lots[0]
-			take := new(big.Rat).Set(remaining)
-			if take.Cmp(current.quantity) > 0 {
-				take.Set(current.quantity)
-			}
-			allocation, err := fifoCostAllocation(current.cost, take, current.quantity)
-			if err != nil {
-				return nil, fmt.Errorf("SELL %s cost allocation: %w", eventID, err)
-			}
-			allocatedCost.Add(allocatedCost, allocation)
-			current.quantity.Sub(current.quantity, take)
-			current.cost.Sub(current.cost, allocation)
-			remaining.Sub(remaining, take)
-			if current.quantity.Sign() == 0 {
-				p.lots = p.lots[1:]
-			}
-		}
-		if remaining.Sign() != 0 {
-			return nil, fmt.Errorf("SELL %s exceeds available FIFO quantity", eventID)
-		}
-		addRat(realized, currency, new(big.Rat).Sub(amount, allocatedCost))
+		events = append(events, e)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	snapshot := &PortfolioSnapshot{
-		PortfolioID: "portfolio_main", LedgerRevision: revision(rev), CostBasisPolicy: policy, AsOf: asOf, RecordedAt: recorded,
-		LiveEnabled: false, ValuationStatus: "unavailable", Cash: []Money{}, Holdings: []Holding{}, RealizedPnL: []Money{},
-		Provenance: Provenance{EventIDs: eventIDs, ReceiptIDs: receiptIDs},
-	}
-	for _, currency := range sortedKeys(cash) {
-		amount, err := formatDecimal(cash[currency])
-		if err != nil {
-			return nil, err
-		}
-		snapshot.Cash = append(snapshot.Cash, Money{currency, amount})
-	}
-	for _, key := range sortedPositionKeys(positions) {
-		p := positions[key]
-		quantity, cost := new(big.Rat), new(big.Rat)
-		for _, lot := range p.lots {
-			quantity.Add(quantity, lot.quantity)
-			cost.Add(cost, lot.cost)
-		}
-		if quantity.Sign() == 0 {
-			continue
-		}
-		quantityString, err := formatDecimal(quantity)
-		if err != nil {
-			return nil, err
-		}
-		costString, err := formatDecimal(cost)
-		if err != nil {
-			return nil, err
-		}
-		snapshot.Holdings = append(snapshot.Holdings, Holding{p.instrument, p.symbol, quantityString, costString, p.currency})
-	}
-	for _, currency := range sortedKeys(realized) {
-		amount, err := formatDecimal(realized[currency])
-		if err != nil {
-			return nil, err
-		}
-		snapshot.RealizedPnL = append(snapshot.RealizedPnL, Money{currency, amount})
-	}
-	return snapshot, nil
+	return ledgerdomain.Replay(policy, rev, recorded, events)
 }
 
 func fifoCostAllocation(cost, take, quantity *big.Rat) (*big.Rat, error) {
@@ -1910,15 +1571,15 @@ func quantizeHalfEven(value *big.Rat, scale int) *big.Rat {
 	return exact.QuantizeHalfEven(value, scale)
 }
 
+func formatDecimal(value *big.Rat) (string, error) {
+	return exact.FormatDecimal(value)
+}
+
 func addRat(values map[string]*big.Rat, key string, value *big.Rat) {
 	if values[key] == nil {
 		values[key] = new(big.Rat)
 	}
 	values[key].Add(values[key], value)
-}
-
-func formatDecimal(value *big.Rat) (string, error) {
-	return exact.FormatDecimal(value)
 }
 
 func sortedKeys(values map[string]*big.Rat) []string {
@@ -1927,21 +1588,6 @@ func sortedKeys(values map[string]*big.Rat) []string {
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
-	return keys
-}
-
-func sortedPositionKeys(values map[string]*position) []string {
-	keys := make([]string, 0, len(values))
-	for key := range values {
-		keys = append(keys, key)
-	}
-	sort.Slice(keys, func(i, j int) bool {
-		a, b := values[keys[i]], values[keys[j]]
-		if a.instrument == b.instrument {
-			return a.currency < b.currency
-		}
-		return a.instrument < b.instrument
-	})
 	return keys
 }
 

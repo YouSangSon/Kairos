@@ -6,6 +6,7 @@ import (
 	"errors"
 	"math/big"
 	"net/http"
+	"omni-folio/services/core/internal/ledgerdomain"
 	"time"
 )
 
@@ -232,7 +233,7 @@ func latestEligibleHoldingPriceAt(observations []SecurityPriceObservation, times
 			continue
 		}
 		if owner {
-			if instrumentIDForSymbol(holding.Symbol) != observation.InstrumentID {
+			if ledgerdomain.InstrumentIDForSymbol(holding.Symbol) != observation.InstrumentID {
 				continue
 			}
 		} else if observation.Symbol != holding.Symbol {

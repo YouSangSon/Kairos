@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"omni-folio/services/core/internal/ledgerdomain"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -153,7 +154,7 @@ func TestLedgerExportRejectsUnsafeLabelsWithoutChangingLedger(t *testing.T) {
 	for _, symbol := range []string{"=HYPERLINK(1)", "+1", "-1", "@sum(1)", "＝1", "\t=1", " AAPL", "AAPL\r\n=1", `AAPL",=1`, "AAPL;=1"} {
 		t.Run(fmt.Sprintf("%q", symbol), func(t *testing.T) {
 			svc, dbPath := testService(t, nil, nil)
-			if _, err := svc.db.Exec(`INSERT INTO events(event_id,source_event_id,account_id,type,occurred_at,instrument_id,symbol,quantity,price,fee,currency,amount,receipt_id,recorded_at) VALUES('private-event','private-source','private-account','BUY','2026-01-01T00:00:00Z',?,?, '1','1','0','USD','-1','private-receipt','2026-01-10T15:01:00Z')`, instrumentIDForSymbol(symbol), symbol); err != nil {
+			if _, err := svc.db.Exec(`INSERT INTO events(event_id,source_event_id,account_id,type,occurred_at,instrument_id,symbol,quantity,price,fee,currency,amount,receipt_id,recorded_at) VALUES('private-event','private-source','private-account','BUY','2026-01-01T00:00:00Z',?,?, '1','1','0','USD','-1','private-receipt','2026-01-10T15:01:00Z')`, ledgerdomain.InstrumentIDForSymbol(symbol), symbol); err != nil {
 				t.Fatal(err)
 			}
 			if _, err := svc.db.Exec(`UPDATE ledger_meta SET revision=1,recorded_at='2026-01-10T15:01:00Z'`); err != nil {

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"omni-folio/services/core/internal/ledgerdomain"
 	"time"
 )
 
@@ -39,7 +40,7 @@ func admittedOwnerPriceIdentities(ctx context.Context, q queryer) (map[string]st
 		if err := rows.Scan(&id, &symbol, &currency); err != nil {
 			return nil, errors.New("owner price ledger identity is invalid")
 		}
-		if instrumentIDForSymbol(symbol) != id {
+		if ledgerdomain.InstrumentIDForSymbol(symbol) != id {
 			return nil, errors.New("owner price ledger identity is not canonical")
 		}
 		admitted[ownerPriceKey(id, currency)] = struct{}{}

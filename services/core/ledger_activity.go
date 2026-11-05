@@ -13,6 +13,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"omni-folio/services/core/internal/ledgerdomain"
 	"strconv"
 )
 
@@ -321,21 +322,13 @@ func (s *Service) validateStoredLedgerEvent(ctx context.Context, tx queryer, sto
 	if stored.eventID == "" || stored.receiptID == "" || !canonicalUTCString(stored.recordedAt) {
 		return errors.New("stored ledger event metadata is invalid")
 	}
-	values := map[string]string{
-		"source_event_id": stored.sourceEventID, "account_id": stored.accountID, "type": stored.typ,
-		"occurred_at": stored.occurredAt, "symbol": stored.symbol, "quantity": stored.quantity,
-		"price": stored.price, "fee": stored.fee, "currency": stored.currency, "amount": stored.amount,
-		"counter_currency": stored.counterCurrency, "counter_amount": stored.counterAmount,
-		"corrects_source_event_id": stored.correctsSourceEventID,
-	}
-	validator := &Service{id: func(string) string { return stored.eventID }}
-	normalized, fieldErrors := validator.normalize(nil, func(_ []string, name string) string { return values[name] })
 	want := &Transaction{
 		EventID: stored.eventID, SourceEventID: stored.sourceEventID, AccountID: stored.accountID,
 		Type: stored.typ, OccurredAt: stored.occurredAt, InstrumentID: stored.instrumentID, Symbol: stored.symbol,
 		Quantity: stored.quantity, Price: stored.price, Fee: stored.fee, Currency: stored.currency, Amount: stored.amount,
 		CounterCurrency: stored.counterCurrency, CounterAmount: stored.counterAmount, CorrectsSourceEventID: stored.correctsSourceEventID,
 	}
+	normalized, fieldErrors := ledgerdomain.Normalize(*want)
 	if len(fieldErrors) != 0 || !sameTransaction(normalized, want) {
 		return errors.New("stored ledger event is not canonical")
 	}
