@@ -34,3 +34,5 @@
 현재 exact·orderdomain·paperdomain·riskdomain·researchdomain·strategydomain은 분리돼 있다. `internal/architecture/dependencies_test.go`는 이 여섯 패키지의 운영 소스를 재귀 검사해 승인된 순수 라이브러리와 도메인 의존성만 허용한다. 기존 `go test ./...`와 CI에서 실행한다. 표준 라이브러리도 SQL·HTTP·파일 시스템 접근이면 허용하지 않는다.
 
 대부분의 저장소·사용 사례·HTTP 조합은 아직 `package main`에 있다. 다음 구현은 하나의 사용 사례씩 입력·출력·트랜잭션 계약을 고정하고 application과 어댑터를 함께 분리한다. 원장·주문·복구는 기존 특성 테스트와 백업 호환성 검증을 통과한 뒤 이동한다. 이 ADR과 의존성 검사만으로 전체 클린 아키텍처 전환 완료를 주장하지 않는다.
+
+전체 프로젝트의 구현 전 상세 계약은 [전체 리팩토링 설계](../architecture/whole-project-refactoring.md)가 소유한다. 이 ADR은 책임 경계와 선택 이유를 유지하며 상세 파일 배치·전환 순서·실패 검증을 중복 정의하지 않는다.

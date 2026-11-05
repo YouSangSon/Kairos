@@ -167,6 +167,8 @@ Later roles from the same Go codebase
 
 ### 클라우드 준비 계약
 
+상세 프로필과 확장 조건은 [플랫폼 확장 설계](architecture/scalability-and-platform.md)의 P2a(단일 SQLite 서버)·P2b(PostgreSQL 다중 프로세스)를 따른다. 아래 단일 replica 계약은 P2a에 해당한다.
+
 - local과 cloud는 같은 저장소와 pinned non-root Go OCI image를 사용한다. Flutter native/web은 별도 서명·배포 산출물이다. 첫 lake는 `api`와 `migrate`만 사용하고, 해당 단계가 시작될 때 `worker`, `runner`, `execution-gateway` command를 같은 Go image에 추가한다.
 - local 프로필은 loopback + SQLite + OS keychain이다. 첫 cloud 프로필은 TLS + owner 인증 + secret manager + 단일 API replica + single-writer provider-managed block volume(RWO)의 SQLite다. 이는 stateful single-node 프로필이며 무중단 교체·scale-out·자동 failover를 보장하지 않는다.
 - container filesystem은 임시 파일만 허용한다. SQLite를 ephemeral disk, NFS형 공유 volume, 다중 writer에 두지 않는다. backup은 SQLite online backup API 또는 동등한 일관된 snapshot으로 off-volume에 암호화 저장하고 restore 후 `integrity_check`, ledger golden test와 schema/order-log hash·replay 증명을 통과한다.
