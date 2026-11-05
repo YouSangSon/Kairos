@@ -5,6 +5,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"omni-folio/services/core/internal/portfoliodomain"
 )
 
 func TestPortfolioBenchmarksIndependentReferenceCases(t *testing.T) {
@@ -61,7 +63,7 @@ func TestPortfolioBenchmarksIndependentReferenceCases(t *testing.T) {
 		})
 	}
 	for _, test := range cases.Differences {
-		got, err := benchmarkDifference(test.PortfolioRate, test.BenchmarkRate)
+		got, err := portfoliodomain.BenchmarkDifference(test.PortfolioRate, test.BenchmarkRate)
 		if err != nil || got == nil || *got != test.Expected {
 			t.Fatalf("percentage-point bounds: %v %v", got, err)
 		}

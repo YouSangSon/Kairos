@@ -7,6 +7,9 @@ import (
 	"math/big"
 	"net/http"
 	"time"
+
+	"omni-folio/services/core/internal/exact"
+	"omni-folio/services/core/internal/portfoliodomain"
 )
 
 const portfolioXIRRPolicy = "restated_external_cash_utc_date_actual_365_v1"
@@ -59,7 +62,7 @@ func (s *Service) portfolioXIRR(ctx context.Context) (*PortfolioXIRR, *appError)
 	if appErr != nil {
 		return nil, appErr
 	}
-	result := &PortfolioXIRR{PolicyVersion: portfolioXIRRPolicy, SolverPolicy: xirrSolverPolicy, Scope: "whole_portfolio_since_inception", Valuation: valuation, Status: "unavailable", Sample: valuation.Sample, PeriodEnd: asOf.Format("2006-01-02"), Uniqueness: "not_applicable", Issues: []APIError{}}
+	result := &PortfolioXIRR{PolicyVersion: portfolioXIRRPolicy, SolverPolicy: portfoliodomain.XIRRSolverPolicy, Scope: "whole_portfolio_since_inception", Valuation: valuation, Status: "unavailable", Sample: valuation.Sample, PeriodEnd: asOf.Format("2006-01-02"), Uniqueness: "not_applicable", Issues: []APIError{}}
 	usedOwnerFX := usesOwnerFX(valuation.Issues)
 	finish := func() (*PortfolioXIRR, *appError) {
 		if result.Sample {
@@ -124,13 +127,13 @@ func (s *Service) portfolioXIRR(ctx context.Context) (*PortfolioXIRR, *appError)
 	eventCount := len(external)
 	result.ExternalEventCount = &eventCount
 	observations, fxTimes := inputs.observations, inputs.times
-	flows := make([]xirrCashFlow, 0, len(external)+1)
+	flows := make([]portfoliodomain.XIRRCashFlow, 0, len(external)+1)
 	contributions := new(big.Rat)
 	for _, flow := range external {
 		if err := ctx.Err(); err != nil {
 			return nil, internalError(err)
 		}
-		amount, err := parseDecimal(flow.amount)
+		amount, err := exact.ParseDecimal(flow.amount)
 		if err != nil {
 			return nil, internalError(err)
 		}
@@ -150,55 +153,50 @@ func (s *Service) portfolioXIRR(ctx context.Context) (*PortfolioXIRR, *appError)
 				result.Issues = appendCurrentValuationIssue(result.Issues, APIError{Code: "stale_historical_fx", Message: "historical FX exceeds the event-time age policy", Field: flow.currency})
 				continue
 			}
-			rate, err := parseDecimal(fx.Rate)
+			rate, err := exact.ParseDecimal(fx.Rate)
 			if err != nil {
 				return nil, internalError(err)
 			}
 			amount.Mul(amount, rate)
 		}
 		contributions.Add(contributions, amount)
-		flows = append(flows, xirrCashFlow{xirrUTCDay(flow.at), new(big.Rat).Neg(amount)})
+		flows = append(flows, portfoliodomain.XIRRCashFlow{Day: portfoliodomain.UTCDay(flow.at), Amount: new(big.Rat).Neg(amount)})
 	}
 	if len(result.Issues) > 0 {
 		return finish()
 	}
-	text, err := formatDecimal(contributions)
+	text, err := exact.FormatDecimal(contributions)
 	if err != nil {
 		return nil, internalError(err)
 	}
 	result.NetContributions = &Money{Currency: "KRW", Amount: text}
-	terminal, err := parseDecimal(valuation.TotalValue.Amount)
+	terminal, err := exact.ParseDecimal(valuation.TotalValue.Amount)
 	if err != nil {
 		return nil, internalError(err)
 	}
-	flows = append(flows, xirrCashFlow{xirrUTCDay(asOf), terminal})
-	solution, err := solvePortfolioXIRR(ctx, flows)
+	flows = append(flows, portfoliodomain.XIRRCashFlow{Day: portfoliodomain.UTCDay(asOf), Amount: terminal})
+	solution, err := portfoliodomain.SolveXIRR(ctx, flows)
 	if err != nil {
 		return nil, internalError(err)
 	}
-	if solution.reason != "cash_flow_limit" {
-		changes := solution.signChanges
+	if solution.Reason != "cash_flow_limit" {
+		changes := solution.SignChanges
 		result.SignChanges = &changes
 	}
-	result.AnnualRate = solution.rate
-	result.CandidateRate = solution.candidate
-	if solution.rate != nil {
+	result.AnnualRate = solution.Rate
+	result.CandidateRate = solution.Candidate
+	if solution.Rate != nil {
 		result.Status = "calculated"
 		result.Uniqueness = "unique"
 	}
-	if solution.candidate != nil {
+	if solution.Candidate != nil {
 		result.Status = "candidate"
 		result.Uniqueness = "not_proven"
 	}
-	if solution.reason != "" {
-		result.Issues = append(result.Issues, APIError{Code: solution.reason, Message: "the numerical result is limited by the declared XIRR policy"})
+	if solution.Reason != "" {
+		result.Issues = append(result.Issues, APIError{Code: solution.Reason, Message: "the numerical result is limited by the declared XIRR policy"})
 	}
 	return finish()
-}
-
-func xirrUTCDay(at time.Time) int64 {
-	at = at.UTC()
-	return time.Date(at.Year(), at.Month(), at.Day(), 0, 0, 0, 0, time.UTC).Unix() / 86400
 }
 
 func historicalXIRRFX(observations []FXObservation, times map[string][3]time.Time, currency string, occurredAt, knownAt time.Time) *FXObservation {

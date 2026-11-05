@@ -5,6 +5,8 @@ import (
 	"errors"
 	"math/big"
 	"time"
+
+	"omni-folio/services/core/internal/exact"
 )
 
 type twrHolding struct {
@@ -23,13 +25,13 @@ func newTWRBalances() *twrBalances {
 }
 
 func (b *twrBalances) apply(e Transaction) error {
-	amount, err := parseDecimal(e.Amount)
+	amount, err := exact.ParseDecimal(e.Amount)
 	if err != nil {
 		return err
 	}
 	addRat(b.cash, e.Currency, amount)
 	if e.Type == "FX_EXCHANGE" {
-		counter, err := parseDecimal(e.CounterAmount)
+		counter, err := exact.ParseDecimal(e.CounterAmount)
 		if err != nil {
 			return err
 		}
@@ -44,7 +46,7 @@ func (b *twrBalances) apply(e Transaction) error {
 		h = &twrHolding{holding: Holding{InstrumentID: e.InstrumentID, Symbol: e.Symbol, Currency: e.Currency}, quantity: new(big.Rat)}
 		b.holdings[key] = h
 	}
-	quantity, err := parseDecimal(e.Quantity)
+	quantity, err := exact.ParseDecimal(e.Quantity)
 	if err != nil {
 		return err
 	}
@@ -83,7 +85,7 @@ func (b *twrBalances) zero() bool {
 func (b *twrBalances) matches(snapshot *PortfolioSnapshot) bool {
 	cash := map[string]*big.Rat{}
 	for _, m := range snapshot.Cash {
-		v, err := parseDecimal(m.Amount)
+		v, err := exact.ParseDecimal(m.Amount)
 		if err != nil {
 			return false
 		}
@@ -100,7 +102,7 @@ func (b *twrBalances) matches(snapshot *PortfolioSnapshot) bool {
 	quantities := map[string]*big.Rat{}
 	for _, h := range snapshot.Holdings {
 		key := h.InstrumentID + "\x00" + h.Currency
-		v, err := parseDecimal(h.Quantity)
+		v, err := exact.ParseDecimal(h.Quantity)
 		if err != nil {
 			return false
 		}
@@ -142,7 +144,7 @@ func (m *twrMarks) convert(amount *big.Rat, currency string, at, knownAt time.Ti
 	if at.Sub(m.fxTimes[fxTimeKey(*fx)][0]) > cashFXMaxAge {
 		return nil, fxIsSample(fx), "stale_historical_fx"
 	}
-	rate, err := parseDecimal(fx.Rate)
+	rate, err := exact.ParseDecimal(fx.Rate)
 	if err != nil {
 		return nil, fxIsSample(fx), "numerical_limit"
 	}
@@ -189,7 +191,7 @@ func (m *twrMarks) value(ctx context.Context, b *twrBalances, at, knownAt time.T
 		if at.Sub(observed) > holdingPriceMaxAge {
 			return nil, sample, "stale_security_price"
 		}
-		p, err := parseDecimal(price.Price)
+		p, err := exact.ParseDecimal(price.Price)
 		if err != nil {
 			return nil, sample, "numerical_limit"
 		}
@@ -201,17 +203,4 @@ func (m *twrMarks) value(ctx context.Context, b *twrBalances, at, knownAt time.T
 		total.Add(total, v)
 	}
 	return total, sample, ""
-}
-
-// Check the unreduced product before allocating it, then preserve exact ratios.
-func twrChain(factor, value, capital *big.Rat) *big.Rat {
-	if factor.Sign() < 0 || value.Sign() < 0 || capital.Sign() <= 0 {
-		return nil
-	}
-	const maxBits = 8192
-	if factor.Num().BitLen()+value.Num().BitLen()+capital.Denom().BitLen() > maxBits ||
-		factor.Denom().BitLen()+value.Denom().BitLen()+capital.Num().BitLen() > maxBits {
-		return nil
-	}
-	return new(big.Rat).Mul(factor, new(big.Rat).Quo(value, capital))
 }

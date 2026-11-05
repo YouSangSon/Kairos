@@ -1,4 +1,4 @@
-package main
+package portfoliodomain
 
 import (
 	"context"
@@ -7,10 +7,12 @@ import (
 	"os"
 	"testing"
 	"time"
+
+	"omni-folio/services/core/internal/exact"
 )
 
 func TestPortfolioXIRRIndependentGoldenCashFlows(t *testing.T) {
-	raw, err := os.ReadFile("../../contracts/fixtures/portfolio-xirr-cases.json")
+	raw, err := os.ReadFile("../../../../contracts/fixtures/portfolio-xirr-cases.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -29,36 +31,36 @@ func TestPortfolioXIRRIndependentGoldenCashFlows(t *testing.T) {
 	}
 	for _, entry := range fixture.Cases {
 		t.Run(entry.Name, func(t *testing.T) {
-			var flows []xirrCashFlow
+			var flows []XIRRCashFlow
 			for _, flow := range entry.Flows {
 				at, err := time.Parse("2006-01-02", flow.Date)
 				if err != nil {
 					t.Fatal(err)
 				}
-				amount, err := parseDecimal(flow.Amount)
+				amount, err := exact.ParseDecimal(flow.Amount)
 				if err != nil {
 					t.Fatal(err)
 				}
-				flows = append(flows, xirrCashFlow{xirrUTCDay(at), amount})
+				flows = append(flows, XIRRCashFlow{UTCDay(at), amount})
 			}
-			result, err := solvePortfolioXIRR(context.Background(), flows)
+			result, err := SolveXIRR(context.Background(), flows)
 			if err != nil {
 				t.Fatal(err)
 			}
 			var got *string
 			switch entry.Status {
 			case "calculated":
-				got = result.rate
-				if result.candidate != nil || result.signChanges != 1 {
+				got = result.Rate
+				if result.Candidate != nil || result.SignChanges != 1 {
 					t.Fatalf("unique result contract: %+v", result)
 				}
 			case "candidate":
-				got = result.candidate
-				if result.rate != nil || result.signChanges <= 1 {
+				got = result.Candidate
+				if result.Rate != nil || result.SignChanges <= 1 {
 					t.Fatalf("candidate promoted to unique: %+v", result)
 				}
 			case "unavailable":
-				if result.rate != nil || result.candidate != nil || result.reason == "" {
+				if result.Rate != nil || result.Candidate != nil || result.Reason == "" {
 					t.Fatalf("undefined XIRR became a number: %+v", result)
 				}
 				return
@@ -68,8 +70,8 @@ func TestPortfolioXIRRIndependentGoldenCashFlows(t *testing.T) {
 			if got == nil || entry.ExpectedRate == nil {
 				t.Fatalf("missing rate: %+v", result)
 			}
-			actual, _ := parseDecimal(*got)
-			expected, _ := parseDecimal(*entry.ExpectedRate)
+			actual, _ := exact.ParseDecimal(*got)
+			expected, _ := exact.ParseDecimal(*entry.ExpectedRate)
 			tolerance := new(big.Rat).Abs(expected)
 			if tolerance.Cmp(big.NewRat(1, 1)) < 0 {
 				tolerance.SetInt64(1)
@@ -85,23 +87,23 @@ func TestPortfolioXIRRIndependentGoldenCashFlows(t *testing.T) {
 func TestPortfolioXIRRDateBudgetAndCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := solvePortfolioXIRR(ctx, []xirrCashFlow{{0, big.NewRat(-100, 1)}, {365, big.NewRat(110, 1)}}); err != context.Canceled {
+	if _, err := SolveXIRR(ctx, []XIRRCashFlow{{0, big.NewRat(-100, 1)}, {365, big.NewRat(110, 1)}}); err != context.Canceled {
 		t.Fatalf("cancellation lost: %v", err)
 	}
-	flows := make([]xirrCashFlow, xirrMaxDates+1)
+	flows := make([]XIRRCashFlow, xirrMaxDates+1)
 	for i := range flows {
-		flows[i] = xirrCashFlow{int64(i), big.NewRat(-1, 1)}
+		flows[i] = XIRRCashFlow{int64(i), big.NewRat(-1, 1)}
 	}
-	result, err := solvePortfolioXIRR(context.Background(), flows)
-	if err != nil || result.reason != "cash_flow_limit" || result.rate != nil {
+	result, err := SolveXIRR(context.Background(), flows)
+	if err != nil || result.Reason != "cash_flow_limit" || result.Rate != nil {
 		t.Fatalf("date budget ignored: %+v %v", result, err)
 	}
 	for i := range flows {
-		flows[i].day = 0
+		flows[i].Day = 0
 	}
-	flows = append(flows, xirrCashFlow{365, big.NewRat(11001, 1)})
-	result, err = solvePortfolioXIRR(context.Background(), flows)
-	if err != nil || result.rate == nil {
+	flows = append(flows, XIRRCashFlow{365, big.NewRat(11001, 1)})
+	result, err = SolveXIRR(context.Background(), flows)
+	if err != nil || result.Rate == nil {
 		t.Fatalf("same-day flows incorrectly consume date budget: %+v %v", result, err)
 	}
 }

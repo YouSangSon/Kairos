@@ -7,6 +7,9 @@ import (
 	"math/big"
 	"net/http"
 	"time"
+
+	"omni-folio/services/core/internal/exact"
+	"omni-folio/services/core/internal/portfoliodomain"
 )
 
 const portfolioTWRPolicy = "restated_external_first_exact_timestamp_twr_v1"
@@ -190,7 +193,7 @@ func (s *Service) portfolioTWRWithCheckpointsTx(ctx context.Context, tx *sql.Tx,
 				if before.Sign() <= 0 {
 					return finish("capital_path_unavailable")
 				}
-				factor = twrChain(factor, before, capital)
+				factor = portfoliodomain.TWRChain(factor, before, capital)
 				if factor == nil {
 					return finish("numerical_limit")
 				}
@@ -200,7 +203,7 @@ func (s *Service) portfolioTWRWithCheckpointsTx(ctx context.Context, tx *sql.Tx,
 				if e.Type != "DEPOSIT" && e.Type != "WITHDRAWAL" {
 					continue
 				}
-				amount, err := parseDecimal(e.Amount)
+				amount, err := exact.ParseDecimal(e.Amount)
 				if err != nil {
 					return nil, internalError(err)
 				}
@@ -250,22 +253,22 @@ func (s *Service) portfolioTWRWithCheckpointsTx(ctx context.Context, tx *sql.Tx,
 	if issue != "" {
 		return finish(issue)
 	}
-	current, err := parseDecimal(valuation.TotalValue.Amount)
+	current, err := exact.ParseDecimal(valuation.TotalValue.Amount)
 	if err != nil || terminal.Cmp(current) != 0 {
 		return nil, internalError(errors.New("TWR terminal valuation mismatch"))
 	}
 	if terminal.Sign() < 0 {
 		return finish("capital_path_unavailable")
 	}
-	factor = twrChain(factor, terminal, capital)
+	factor = portfoliodomain.TWRChain(factor, terminal, capital)
 	if factor == nil {
 		return finish("numerical_limit")
 	}
-	rate, err := formatDecimal(quantizeHalfEven(new(big.Rat).Sub(factor, big.NewRat(1, 1)), 12))
+	rate, err := exact.FormatDecimal(exact.QuantizeHalfEven(new(big.Rat).Sub(factor, big.NewRat(1, 1)), 12))
 	if err != nil || len(rate) > 128 {
 		return finish("numerical_limit")
 	}
-	netText, err := formatDecimal(net)
+	netText, err := exact.FormatDecimal(net)
 	if err != nil {
 		return nil, internalError(err)
 	}

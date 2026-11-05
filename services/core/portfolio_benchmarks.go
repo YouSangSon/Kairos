@@ -9,6 +9,9 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"omni-folio/services/core/internal/exact"
+	"omni-folio/services/core/internal/portfoliodomain"
 )
 
 const portfolioBenchmarksPolicy = "retrospective_latest_index_24h_native_and_krw_v1"
@@ -17,11 +20,7 @@ const portfolioBenchmarksOwnerFXPolicy = "retrospective_latest_index_24h_native_
 // shortcut: compare up to32 latest IDs; add explicit selection or paging when owners need more.
 const maxPortfolioBenchmarks = 32
 
-type BenchmarkRateResult struct {
-	Status string  `json:"status"`
-	Rate   *string `json:"rate"`
-	Issue  *string `json:"issue"`
-}
+type BenchmarkRateResult = portfoliodomain.BenchmarkRateResult
 
 type BenchmarkFXMark struct {
 	ObservedAt    string `json:"observed_at"`
@@ -59,35 +58,6 @@ type PortfolioBenchmarks struct {
 	Issues                   []APIError           `json:"issues"`
 }
 
-func unavailableBenchmarkRate(issue string) BenchmarkRateResult {
-	return BenchmarkRateResult{Status: "unavailable", Issue: &issue}
-}
-
-func benchmarkRate(growth *big.Rat) BenchmarkRateResult {
-	rate, err := formatDecimal(quantizeHalfEven(new(big.Rat).Sub(growth, big.NewRat(1, 1)), 12))
-	if err != nil || len(rate) > 128 {
-		return unavailableBenchmarkRate("numerical_limit")
-	}
-	return BenchmarkRateResult{Status: "calculated", Rate: &rate}
-}
-
-func benchmarkDifference(portfolio, benchmark string) (*string, error) {
-	p, err := parseDecimal(portfolio)
-	if err != nil {
-		return nil, err
-	}
-	b, err := parseDecimal(benchmark)
-	if err != nil {
-		return nil, err
-	}
-	// Difference of published rates, in percentage points; no second rounding.
-	text, err := formatDecimal(new(big.Rat).Mul(new(big.Rat).Sub(p, b), big.NewRat(100, 1)))
-	if err != nil || len(text) > 132 {
-		return nil, errors.New("benchmark difference exceeds its declared bounds")
-	}
-	return &text, nil
-}
-
 func latestBenchmarkPoint(points []BenchmarkIndexPoint, at time.Time) *BenchmarkIndexPoint {
 	key := strings.TrimSuffix(at.UTC().Format(time.RFC3339Nano), "Z")
 	index := sort.Search(len(points), func(i int) bool {
@@ -101,7 +71,7 @@ func latestBenchmarkPoint(points []BenchmarkIndexPoint, at time.Time) *Benchmark
 }
 
 func comparePortfolioBenchmark(record benchmarkSeriesRecord, portfolio *PortfolioTWR, marks twrMarks, asOf time.Time) (PortfolioBenchmark, error) {
-	row := PortfolioBenchmark{Series: benchmarkReceipt(&record), Sample: record.Input.Sample, Native: unavailableBenchmarkRate("portfolio_unavailable"), KRW: unavailableBenchmarkRate("portfolio_unavailable")}
+	row := PortfolioBenchmark{Series: benchmarkReceipt(&record), Sample: record.Input.Sample, Native: portfoliodomain.UnavailableBenchmarkRate("portfolio_unavailable"), KRW: portfoliodomain.UnavailableBenchmarkRate("portfolio_unavailable")}
 	if portfolio.Status != "calculated" {
 		return row, nil
 	}
@@ -127,18 +97,18 @@ func comparePortfolioBenchmark(record benchmarkSeriesRecord, portfolio *Portfoli
 		}
 	}
 	if issue != "" {
-		row.Native, row.KRW = unavailableBenchmarkRate(issue), unavailableBenchmarkRate(issue)
+		row.Native, row.KRW = portfoliodomain.UnavailableBenchmarkRate(issue), portfoliodomain.UnavailableBenchmarkRate(issue)
 		return row, nil
 	}
-	startLevel, err := parseDecimal(row.Start.Level)
+	startLevel, err := exact.ParseDecimal(row.Start.Level)
 	if err != nil {
 		return row, err
 	}
-	endLevel, err := parseDecimal(row.End.Level)
+	endLevel, err := exact.ParseDecimal(row.End.Level)
 	if err != nil {
 		return row, err
 	}
-	row.Native = benchmarkRate(new(big.Rat).Quo(endLevel, startLevel))
+	row.Native = portfoliodomain.BenchmarkRate(new(big.Rat).Quo(endLevel, startLevel))
 	if record.Input.Currency == "KRW" {
 		row.KRW = row.Native
 	} else {
@@ -153,24 +123,24 @@ func comparePortfolioBenchmark(record benchmarkSeriesRecord, portfolio *Portfoli
 			row.Sample = row.Sample || fxIsSample(endFX)
 		}
 		if startFX == nil || endFX == nil {
-			row.KRW = unavailableBenchmarkRate("missing_historical_fx")
+			row.KRW = portfoliodomain.UnavailableBenchmarkRate("missing_historical_fx")
 		} else if start.Sub(marks.fxTimes[fxTimeKey(*startFX)][0]) > cashFXMaxAge || asOf.Sub(marks.fxTimes[fxTimeKey(*endFX)][0]) > cashFXMaxAge {
-			row.KRW = unavailableBenchmarkRate("stale_historical_fx")
+			row.KRW = portfoliodomain.UnavailableBenchmarkRate("stale_historical_fx")
 		} else {
-			startRate, err := parseDecimal(startFX.Rate)
+			startRate, err := exact.ParseDecimal(startFX.Rate)
 			if err != nil {
 				return row, err
 			}
-			endRate, err := parseDecimal(endFX.Rate)
+			endRate, err := exact.ParseDecimal(endFX.Rate)
 			if err != nil {
 				return row, err
 			}
 			// Convert each endpoint before taking the ratio; never convert a rounded native rate.
-			row.KRW = benchmarkRate(new(big.Rat).Quo(new(big.Rat).Mul(endLevel, endRate), new(big.Rat).Mul(startLevel, startRate)))
+			row.KRW = portfoliodomain.BenchmarkRate(new(big.Rat).Quo(new(big.Rat).Mul(endLevel, endRate), new(big.Rat).Mul(startLevel, startRate)))
 		}
 	}
 	if row.KRW.Rate != nil {
-		row.DifferencePercentagePoints, err = benchmarkDifference(*portfolio.CumulativeRate, *row.KRW.Rate)
+		row.DifferencePercentagePoints, err = portfoliodomain.BenchmarkDifference(*portfolio.CumulativeRate, *row.KRW.Rate)
 		if err != nil {
 			return row, err
 		}
