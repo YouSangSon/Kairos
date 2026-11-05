@@ -2,7 +2,7 @@
 
 - 설계 기준일: 2026-11-05. 코드 기준: `add8787eaa5f348daeea97df2df5cd06de3b90a8`.
 - 범위: Go core, Flutter client, Python research, 계약·테스트·빌드·운영 도구의 연결부.
-- 상태: 구현 전 설계. 아래 경로·인터페이스는 목표 구조이며 현재 구현됐다는 뜻이 아니다.
+- 상태: 사용자 요청으로 구현을 중단했다. 아래 경로·인터페이스는 목표 구조다. 적용 범위와 재개 지점은 문서 끝의 중단 기록을 따른다.
 - 상위 결정: [ADR-0002](../adr/0002-domain-module-boundaries.md). 제품 기능과 승격 권한은 [CONTEXT](../../CONTEXT.md), [GATES](../../GATES.md)가 소유한다.
 
 ## 1. 목표와 설계의 한계
@@ -360,7 +360,7 @@ R2의 Go/Flutter/Python은 계약이 고정된 부분만 독립 작업할 수 �
 | 외부 계약·금액·원자성·권한 변경 | 단순 refactor에서 제외하고 별도 명시 결정 |
 | 내부 명칭·파일 분할 변경 | 책임·의존성·검증 계약이 같으면 구현 리뷰에서 수용 가능 |
 | 현재 알려진 build_manifest 이중 읽기 | 별도 버그로 분리; snapshot 보장 주장 금지 |
-| 구현 조정 이력 | 아직 없음. 현재 문서는 구현 전 설계다. |
+| 구현 조정 이력 | 아직 승인된 조정 없음. 실제 적용과 검증은 단계별 결과로 확인한다. |
 
 첫 구현 단위는 R0 근거를 현재 checkout과 대조한 뒤 R1의 실행 진입점·재귀 의존성 검사를 연결하는 것이다. 설계 검토 완료는 구현·CI·실제 키움 연결 검증 완료를 뜻하지 않는다.
 
@@ -385,3 +385,48 @@ R2의 Go/Flutter/Python은 계약이 고정된 부분만 독립 작업할 수 �
 문서 상대 링크와 fence, 기존 JSON 계약 파싱, 추적 중인 계약·migration hash를 검사한다. Postman CLI 1.75.0에는 skill의 `status` 명령이 없어 해당 setup 검사는 불가했다. 새 Postman workspace를 만들거나 기존 OpenAPI를 복제하지 않았다. 현재 설계의 근거는 저장소 계약과 원본 코드다.
 
 전체 runtime suite, Flutter 실기기, DB/MQ/IdP/Redis 연동, 부하·복구 drill은 설계 단계에서 실행하지 않았다. 실제 지원 프로필은 해당 구현과 acceptance를 통과한 뒤에만 확정한다.
+
+
+## 14. 중단 기록과 재개 지점 — 2026-11-05
+
+사용자가 진행 중인 단위를 정리한 뒤 중단하고, 구현된 부분을 `main`에 통합하도록 요청했다. **전체 리팩토링 완료가 아니다. 명시적인 재개 요청 전에는 후속 구현을 시작하지 않는다.** 원격 push·배포·실제 키움 연결은 수행하지 않았다.
+
+### main에 통합한 범위
+
+| 범위 | main 커밋 | 검증된 내용 |
+| --- | --- | --- |
+| Python 기존 산출물 특성화 | `80ebc4a` | 기존 CLI 6종 byte hash와 이중 읽기 동작 고정 |
+| Python domain/application/adapters | `2e8dc6b` | 66개 검사, 45개 소스 구문 검사, 6개 CLI byte hash 일치 |
+| Go 원장 normalization/FIFO replay | `c2fedda` | import·FIFO·replay·golden backup·chronology 집중 검사 |
+| Go 포트폴리오 계산 | `0b13a7a` | XIRR·TWR·benchmark 계산 및 기존 assertion 보존 |
+| Go 원장 use case/SQLite scope | `0e5f0cc` | typed Read/Write scope, callback·commit·cancel·panic rollback, HTTP 오류·golden 집중 검사와 vet |
+
+외부 JSON 계약과 SQL migration 파일은 설계 기준 커밋 `92034c5` 대비 변경하지 않았다. Go 루트의 나머지 업무·HTTP·CLI·bootstrap 분리, Flutter 실제 경계 이전, 최종 독립 구현 리뷰는 아직 남아 있다. 원장 receipt 재사용은 새 Write callback 계약상 쓰기 없이 읽기 transaction을 commit한 뒤 반환한다. 기존 구현은 이 경로를 rollback으로 닫았으며, 응답·멱등성 보존은 기존 검사로 확인했다.
+
+### main에 병합하지 않은 체크포인트
+
+| 브랜치 / 커밋 | 보존 경로 | 남은 문제 |
+| --- | --- | --- |
+| `refactor/client-boundaries` / `8e8177d` | `/tmp/kairos-client-refactor-20261104` | 집중 검사 72 통과·2 실패. 공통 helper의 잘못된 소유/역참조, architecture lexer의 중첩 interpolation 해석, typed summary equality 수정 필요 |
+| `refactor/kiwoom-adapter-owned` / `32f40aa` | `/tmp/kairos-kiwoom-adapter-20261105` | adapter 단위 검사만 통과. root caller/type 연결과 기존 구현 제거 미완료. 그대로 cherry-pick하면 root가 빌드 가능한 상태가 아니다 |
+
+Flutter의 새 `data/` 소스는 전역 ignore 패턴에 걸려 정확한 파일만 force-stage하여 체크포인트에 보존했다. 재개 시 저장소 `.gitignore`에 client source 예외를 추가해야 한다. 기존 프로젝트 데이터 경로의 ignore는 유지한다. Flutter 112개 변경 파일 중 production Dart 78개가 추적됐는지 확인했다.
+
+### 재개 순서
+
+1. 저장소 `/Users/yousang/Desktop/workspaces/toy-projects/Kairos`에서 `git status --short`, `git log -8 --oneline`, `git worktree list`로 이 기록 이후의 변경을 먼저 확인한다. 기존 worktree를 재사용하고 다른 변경을 덮어쓰지 않는다.
+2. Flutter checkpoint에서 `output/client-refactor-pause-20261105/PAUSED.md`의 실패 근거를 읽는다. `decodeObject`를 공통 data codec으로, timestamp 계산을 pure domain helper로 옮기고 lexer·summary 검사와 `.gitignore`를 수정한다. 실패 집중 검사부터 재실행한 뒤 전체 client 검사로 확장한다.
+3. Kiwoom checkpoint는 최신 main의 원장 변경과 비교한 뒤 계속한다. `NewKiwoomClientWithRuntime`, capture batch, realtime/history 호출자를 새 adapter로 연결하고 root 중복 구현을 제거한다. `orderdomain.Intent`의 의존성 gate와 중복 schema 상수의 정본을 정리한다. private token/credential 상태를 공개하는 방식으로 연결하지 않는다.
+4. Go의 남은 application/adapter/bootstrap 경계를 기존 설계의 원자성·순서·금액·권한 계약에 따라 완료한다. root entrypoint thinness 검사는 이 이전 완료 후 적용한다.
+5. 최종 diff에 대해 저장소 필수 검사, 독립 구현 리뷰, smoke, Podman 및 필요한 release 검증을 수행한다. 사용자 중단으로 이 단계까지 완료하지 않았으며, 이후 통과 전에는 전체 구현·운영 준비 완료를 주장하지 않는다.
+
+로컬 상세 근거는 `docs/_internal/skill-outputs/whole-refactor-20261104/`와 `output/client-refactor-pause-20261105/`에 보존한다. 두 경로는 Git 제외 경로다. 작업 소유 캐시는 정리하되 재개를 위한 worktree·체크포인트·검증 근거와 기존 공유 캐시는 보존한다.
+
+
+### 중단 시점의 최종 통합 검증과 정리
+
+`main`의 위 구현과 재귀 의존성 gate/format target에 대해 asdf의 Go 1.24.5, Flutter 3.47.1-stable, Python 3.14.5를 지정한 `make check`가 exit 0으로 완료됐다. 형식 검사·Go vet·Flutter analyze·Python 구문 검사, Go 전체 패키지(root 543.443초), main의 Flutter 483개 검사, Python 66개 검사, JSON 계약 48개 검증이 통과했다. **main에 병합하지 않은 Flutter WIP의 실패 2개가 해결됐다는 뜻은 아니다.** 검증 전문은 로컬 `docs/_internal/skill-outputs/whole-refactor-20261104/main-check.log`에 보존했다.
+
+작업 전용 Go 캐시 197,448 KiB와 Flutter WIP 캐시 60,612 KiB를 삭제했다. 독립 portfolio 작업에서도 전용 캐시 150,356 KiB를 정리했다. Python bytecode 잔여는 없었으며, 임시 추출 스크립트와 복사 완료된 임시 로그를 정리했다. make의 소유 테스트 임시 루트 제거를 확인했다. 기존 main의 Flutter build/.dart_tool과 공유·전역 캐시는 기존 자원이므로 보존했다. 이번 작업은 Podman 컨테이너·이미지·볼륨을 생성하지 않았다.
+
+모든 구현 에이전트는 중단했고 활성 작업 handle은 남기지 않는다. 재개용 소스 worktree와 WIP commit은 의도적으로 보존한다. 최종 독립 구현 리뷰·smoke·Podman/release 검사·CI·실제 키움 연결은 미실행이며, 다음 재개에서 필요한 검증으로 남긴다.
