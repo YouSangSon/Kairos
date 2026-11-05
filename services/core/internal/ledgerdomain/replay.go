@@ -144,7 +144,7 @@ func Replay(policy string, rev int64, recorded string, events []ReplayEvent) (*P
 		if err != nil {
 			return nil, err
 		}
-		snapshot.Cash = append(snapshot.Cash, Money{currency, amount})
+		snapshot.Cash = append(snapshot.Cash, Money{Currency: currency, Amount: amount})
 	}
 	for _, key := range sortedPositionKeys(positions) {
 		p := positions[key]
@@ -164,14 +164,14 @@ func Replay(policy string, rev int64, recorded string, events []ReplayEvent) (*P
 		if err != nil {
 			return nil, err
 		}
-		snapshot.Holdings = append(snapshot.Holdings, Holding{p.instrument, p.symbol, quantityString, costString, p.currency})
+		snapshot.Holdings = append(snapshot.Holdings, Holding{InstrumentID: p.instrument, Symbol: p.symbol, Quantity: quantityString, CostBasis: costString, Currency: p.currency})
 	}
 	for _, currency := range sortedKeys(realized) {
 		amount, err := exact.FormatDecimal(realized[currency])
 		if err != nil {
 			return nil, err
 		}
-		snapshot.RealizedPnL = append(snapshot.RealizedPnL, Money{currency, amount})
+		snapshot.RealizedPnL = append(snapshot.RealizedPnL, Money{Currency: currency, Amount: amount})
 	}
 	return snapshot, nil
 }

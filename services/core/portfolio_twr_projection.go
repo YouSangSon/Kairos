@@ -24,7 +24,7 @@ func newTWRBalances() *twrBalances {
 	return &twrBalances{map[string]*big.Rat{}, map[string]*twrHolding{}}
 }
 
-func (b *twrBalances) apply(e Transaction) error {
+func (b *twrBalances) Apply(e Transaction) error {
 	amount, err := exact.ParseDecimal(e.Amount)
 	if err != nil {
 		return err

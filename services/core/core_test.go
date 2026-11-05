@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"net/http/httptest"
+	"omni-folio/services/core/internal/application/ledger"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -30,7 +31,7 @@ func TestGoldenVerticalSliceAndBackupRestore(t *testing.T) {
 		},
 	)
 	csvBody := fixture(t, "golden-import.csv")
-	preview, appErr := svc.preview(context.Background(), csvBody)
+	preview, appErr := svc.Preview(context.Background(), csvBody)
 	if appErr != nil {
 		t.Fatal(appErr)
 	}
@@ -38,7 +39,7 @@ func TestGoldenVerticalSliceAndBackupRestore(t *testing.T) {
 
 	var req ApplyRequest
 	decodeFixture(t, "golden-apply-request.json", &req)
-	receipt, appErr := svc.apply(context.Background(), req)
+	receipt, appErr := svc.Apply(context.Background(), req)
 	if appErr != nil {
 		t.Fatal(appErr)
 	}
@@ -96,11 +97,11 @@ func TestVerifyRestoreMismatchRedactsPortfolioData(t *testing.T) {
 			"receipt": {"receipt_golden_001"},
 		},
 	)
-	preview, appErr := svc.preview(context.Background(), fixture(t, "golden-import.csv"))
+	preview, appErr := svc.Preview(context.Background(), fixture(t, "golden-import.csv"))
 	if appErr != nil {
 		t.Fatal(appErr)
 	}
-	if _, appErr := svc.apply(context.Background(), ApplyRequest{PreviewID: preview.PreviewID, IdempotencyKey: "restore-redaction"}); appErr != nil {
+	if _, appErr := svc.Apply(context.Background(), ApplyRequest{PreviewID: preview.PreviewID, IdempotencyKey: "restore-redaction"}); appErr != nil {
 		t.Fatal(appErr)
 	}
 
@@ -256,20 +257,20 @@ func TestInvalidAndDuplicatePreviewMatchesFixture(t *testing.T) {
 			"receipt": {"receipt_golden_001"},
 		},
 	)
-	golden, appErr := svc.preview(context.Background(), fixture(t, "golden-import.csv"))
+	golden, appErr := svc.Preview(context.Background(), fixture(t, "golden-import.csv"))
 	if appErr != nil {
 		t.Fatal(appErr)
 	}
-	_, appErr = svc.apply(context.Background(), ApplyRequest{golden.PreviewID, "apply_golden_001"})
+	_, appErr = svc.Apply(context.Background(), ApplyRequest{PreviewID: golden.PreviewID, IdempotencyKey: "apply_golden_001"})
 	if appErr != nil {
 		t.Fatal(appErr)
 	}
-	edge, appErr := svc.preview(context.Background(), fixture(t, "edge-import.csv"))
+	edge, appErr := svc.Preview(context.Background(), fixture(t, "edge-import.csv"))
 	if appErr != nil {
 		t.Fatal(appErr)
 	}
 	assertJSONFixture(t, edge, "edge-preview.json")
-	if _, appErr := svc.apply(context.Background(), ApplyRequest{edge.PreviewID, "edge"}); appErr == nil || appErr.status != http.StatusBadRequest || appErr.body.Code != "preview_has_errors" {
+	if _, appErr := svc.Apply(context.Background(), ApplyRequest{PreviewID: edge.PreviewID, IdempotencyKey: "edge"}); appErr == nil || appErr.Status != http.StatusBadRequest || appErr.Body.Code != "preview_has_errors" {
 		t.Fatalf("expected preview_has_errors, got %#v", appErr)
 	}
 }
@@ -277,39 +278,39 @@ func TestInvalidAndDuplicatePreviewMatchesFixture(t *testing.T) {
 func TestIdempotencyReplayConflictAndStalePreview(t *testing.T) {
 	svc, _ := testService(t, nil, nil)
 	ctx := context.Background()
-	first, appErr := svc.preview(ctx, []byte(testCSV("d1,account-main,DEPOSIT,2026-01-01T00:00:00Z,,,,,USD,10")))
+	first, appErr := svc.Preview(ctx, []byte(testCSV("d1,account-main,DEPOSIT,2026-01-01T00:00:00Z,,,,,USD,10")))
 	if appErr != nil {
 		t.Fatal(appErr)
 	}
-	req := ApplyRequest{first.PreviewID, "same-key"}
-	receipt, appErr := svc.apply(ctx, req)
+	req := ApplyRequest{PreviewID: first.PreviewID, IdempotencyKey: "same-key"}
+	receipt, appErr := svc.Apply(ctx, req)
 	if appErr != nil {
 		t.Fatal(appErr)
 	}
-	replay, appErr := svc.apply(ctx, req)
+	replay, appErr := svc.Apply(ctx, req)
 	if appErr != nil || !reflect.DeepEqual(receipt, replay) {
 		t.Fatalf("replay differs: %#v %#v %v", receipt, replay, appErr)
 	}
-	other, appErr := svc.preview(ctx, []byte(testCSV("d2,account-main,DEPOSIT,2026-01-02T00:00:00Z,,,,,USD,5")))
+	other, appErr := svc.Preview(ctx, []byte(testCSV("d2,account-main,DEPOSIT,2026-01-02T00:00:00Z,,,,,USD,5")))
 	if appErr != nil {
 		t.Fatal(appErr)
 	}
-	if _, appErr := svc.apply(ctx, ApplyRequest{other.PreviewID, "same-key"}); appErr == nil || appErr.status != http.StatusConflict || appErr.body.Code != "idempotency_conflict" {
+	if _, appErr := svc.Apply(ctx, ApplyRequest{PreviewID: other.PreviewID, IdempotencyKey: "same-key"}); appErr == nil || appErr.Status != http.StatusConflict || appErr.Body.Code != "idempotency_conflict" {
 		t.Fatalf("expected idempotency conflict, got %#v", appErr)
 	}
 
-	stale, appErr := svc.preview(ctx, []byte(testCSV("d3,account-main,DEPOSIT,2026-01-03T00:00:00Z,,,,,USD,5")))
+	stale, appErr := svc.Preview(ctx, []byte(testCSV("d3,account-main,DEPOSIT,2026-01-03T00:00:00Z,,,,,USD,5")))
 	if appErr != nil {
 		t.Fatal(appErr)
 	}
-	if _, appErr := svc.apply(ctx, ApplyRequest{other.PreviewID, "other-key"}); appErr != nil {
+	if _, appErr := svc.Apply(ctx, ApplyRequest{PreviewID: other.PreviewID, IdempotencyKey: "other-key"}); appErr != nil {
 		t.Fatal(appErr)
 	}
-	if _, appErr := svc.apply(ctx, ApplyRequest{stale.PreviewID, "stale-key"}); appErr == nil || appErr.status != http.StatusConflict || appErr.body.Code != "stale_preview" {
+	if _, appErr := svc.Apply(ctx, ApplyRequest{PreviewID: stale.PreviewID, IdempotencyKey: "stale-key"}); appErr == nil || appErr.Status != http.StatusConflict || appErr.Body.Code != "stale_preview" {
 		t.Fatalf("expected stale preview, got %#v", appErr)
 	}
 
-	expired, appErr := svc.preview(ctx, []byte(testCSV("d4,account-main,DEPOSIT,2026-01-04T00:00:00Z,,,,,USD,5")))
+	expired, appErr := svc.Preview(ctx, []byte(testCSV("d4,account-main,DEPOSIT,2026-01-04T00:00:00Z,,,,,USD,5")))
 	if appErr != nil {
 		t.Fatal(appErr)
 	}
@@ -317,21 +318,21 @@ func TestIdempotencyReplayConflictAndStalePreview(t *testing.T) {
 	if _, err := svc.db.Exec(`UPDATE previews SET expires_at=? WHERE preview_id=?`, zeroTime, expired.PreviewID); err != nil {
 		t.Fatal(err)
 	}
-	if _, appErr := svc.apply(ctx, ApplyRequest{expired.PreviewID, "expired-key"}); appErr == nil || appErr.status != http.StatusConflict || appErr.body.Code != "stale_preview" {
+	if _, appErr := svc.Apply(ctx, ApplyRequest{PreviewID: expired.PreviewID, IdempotencyKey: "expired-key"}); appErr == nil || appErr.Status != http.StatusConflict || appErr.Body.Code != "stale_preview" {
 		t.Fatalf("expected expired stale preview, got %#v", appErr)
 	}
 }
 
 func TestApplyRollbackHasNoPartialMutation(t *testing.T) {
 	svc, _ := testService(t, nil, nil)
-	preview, appErr := svc.preview(context.Background(), []byte(testCSV(
+	preview, appErr := svc.Preview(context.Background(), []byte(testCSV(
 		"d1,account-main,DEPOSIT,2026-01-01T00:00:00Z,,,,,USD,100",
 		"s1,account-main,SELL,2026-01-02T00:00:00Z,AAPL,1,20,1,USD,19",
 	)))
 	if appErr != nil {
 		t.Fatal(appErr)
 	}
-	if _, appErr := svc.apply(context.Background(), ApplyRequest{preview.PreviewID, "rollback"}); appErr == nil || appErr.body.Code != "invalid_ledger" {
+	if _, appErr := svc.Apply(context.Background(), ApplyRequest{PreviewID: preview.PreviewID, IdempotencyKey: "rollback"}); appErr == nil || appErr.Body.Code != "invalid_ledger" {
 		t.Fatalf("expected invalid_ledger, got %#v", appErr)
 	}
 	var events, revision int
@@ -348,7 +349,7 @@ func TestApplyRollbackHasNoPartialMutation(t *testing.T) {
 
 func TestFIFOAllocatesBuyAndSellFeesExactly(t *testing.T) {
 	svc, _ := testService(t, nil, nil)
-	preview, appErr := svc.preview(context.Background(), []byte(testCSV(
+	preview, appErr := svc.Preview(context.Background(), []byte(testCSV(
 		"d1,account-main,DEPOSIT,2026-01-01T00:00:00Z,,,,,USD,1000",
 		"b1,account-main,BUY,2026-01-02T00:00:00Z,AAPL,3,10,3,USD,-33",
 		"b2,account-main,BUY,2026-01-03T00:00:00Z,AAPL,2,20,2,USD,-42",
@@ -357,16 +358,16 @@ func TestFIFOAllocatesBuyAndSellFeesExactly(t *testing.T) {
 	if appErr != nil {
 		t.Fatal(appErr)
 	}
-	if _, appErr := svc.apply(context.Background(), ApplyRequest{preview.PreviewID, "fifo"}); appErr != nil {
+	if _, appErr := svc.Apply(context.Background(), ApplyRequest{PreviewID: preview.PreviewID, IdempotencyKey: "fifo"}); appErr != nil {
 		t.Fatal(appErr)
 	}
 	snapshot, err := snapshotFrom(context.Background(), svc.db)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(snapshot.Cash, []Money{{"USD", "1041"}}) ||
-		!reflect.DeepEqual(snapshot.Holdings, []Holding{{"instrument_aapl", "AAPL", "1", "21", "USD"}}) ||
-		!reflect.DeepEqual(snapshot.RealizedPnL, []Money{{"USD", "62"}}) {
+	if !reflect.DeepEqual(snapshot.Cash, []Money{{Currency: "USD", Amount: "1041"}}) ||
+		!reflect.DeepEqual(snapshot.Holdings, []Holding{{InstrumentID: "instrument_aapl", Symbol: "AAPL", Quantity: "1", CostBasis: "21", Currency: "USD"}}) ||
+		!reflect.DeepEqual(snapshot.RealizedPnL, []Money{{Currency: "USD", Amount: "62"}}) {
 		t.Fatalf("unexpected FIFO snapshot: %+v", snapshot)
 	}
 }
@@ -377,12 +378,12 @@ func TestRecurringFIFOAllocationUsesVersionedResidualPolicy(t *testing.T) {
 		"b1,account-main,BUY,2026-01-02T00:00:00Z,AAPL,3,0.3,0.1,USD,-1",
 		"s1,account-main,SELL,2026-01-03T00:00:00Z,AAPL,1,1,0,USD,1",
 	))
-	assertRecurringFIFOSnapshot(t, svc, []Holding{{"instrument_aapl", "AAPL", "2", "0.66666667", "USD"}}, "0.66666667")
+	assertRecurringFIFOSnapshot(t, svc, []Holding{{InstrumentID: "instrument_aapl", Symbol: "AAPL", Quantity: "2", CostBasis: "0.66666667", Currency: "USD"}}, "0.66666667")
 
 	applyTestCSV(t, svc, "recurring-fifo-second", testCSV(
 		"s2,account-main,SELL,2026-01-04T00:00:00Z,AAPL,1,1,0,USD,1",
 	))
-	assertRecurringFIFOSnapshot(t, svc, []Holding{{"instrument_aapl", "AAPL", "1", "0.333333335", "USD"}}, "1.333333335")
+	assertRecurringFIFOSnapshot(t, svc, []Holding{{InstrumentID: "instrument_aapl", Symbol: "AAPL", Quantity: "1", CostBasis: "0.333333335", Currency: "USD"}}, "1.333333335")
 
 	applyTestCSV(t, svc, "recurring-fifo-final", testCSV(
 		"s3,account-main,SELL,2026-01-05T00:00:00Z,AAPL,1,1,0,USD,1",
@@ -402,7 +403,7 @@ func assertRecurringFIFOSnapshot(t *testing.T, svc *Service, holdings []Holding,
 	}
 	if !strings.Contains(string(encoded), `"cost_basis_policy":"fifo_utc_nanosecond_exact_else_half_even_residual_8_v2"`) ||
 		!reflect.DeepEqual(snapshot.Holdings, holdings) ||
-		!reflect.DeepEqual(snapshot.RealizedPnL, []Money{{"USD", realized}}) {
+		!reflect.DeepEqual(snapshot.RealizedPnL, []Money{{Currency: "USD", Amount: realized}}) {
 		t.Fatalf("recurring FIFO policy drifted: %s", encoded)
 	}
 }
@@ -456,7 +457,7 @@ func TestFIFOResidualConservesCostAcrossSplitAndMultipleLots(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(snapshot.Holdings) != 0 || !reflect.DeepEqual(snapshot.RealizedPnL, []Money{{"USD", "18"}}) {
+	if len(snapshot.Holdings) != 0 || !reflect.DeepEqual(snapshot.RealizedPnL, []Money{{Currency: "USD", Amount: "18"}}) {
 		t.Fatalf("split/multi-lot cost was not conserved: %+v", snapshot)
 	}
 }
@@ -481,7 +482,7 @@ func TestOpenAPIPinsAnalyticalFIFOAllocationPolicy(t *testing.T) {
 
 func TestCashFlowsAndSplitReplayExactly(t *testing.T) {
 	svc, _ := testService(t, nil, nil)
-	preview, appErr := svc.preview(context.Background(), []byte(testCSV(
+	preview, appErr := svc.Preview(context.Background(), []byte(testCSV(
 		"d1,account-main,DEPOSIT,2026-01-01T00:00:00Z,,,,,USD,1000",
 		"b1,account-main,BUY,2026-01-02T00:00:00Z,AAPL,10,10,2,USD,-102",
 		"v1,account-main,DIVIDEND,2026-01-03T00:00:00Z,AAPL,,,,USD,5",
@@ -494,16 +495,16 @@ func TestCashFlowsAndSplitReplayExactly(t *testing.T) {
 	if appErr != nil {
 		t.Fatal(appErr)
 	}
-	if _, appErr := svc.apply(context.Background(), ApplyRequest{preview.PreviewID, "cash-flow-split"}); appErr != nil {
+	if _, appErr := svc.Apply(context.Background(), ApplyRequest{PreviewID: preview.PreviewID, IdempotencyKey: "cash-flow-split"}); appErr != nil {
 		t.Fatal(appErr)
 	}
 	snapshot, err := snapshotFrom(context.Background(), svc.db)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(snapshot.Cash, []Money{{"USD", "859"}}) ||
-		!reflect.DeepEqual(snapshot.Holdings, []Holding{{"instrument_aapl", "AAPL", "15", "76.5", "USD"}}) ||
-		!reflect.DeepEqual(snapshot.RealizedPnL, []Money{{"USD", "33.5"}}) {
+	if !reflect.DeepEqual(snapshot.Cash, []Money{{Currency: "USD", Amount: "859"}}) ||
+		!reflect.DeepEqual(snapshot.Holdings, []Holding{{InstrumentID: "instrument_aapl", Symbol: "AAPL", Quantity: "15", CostBasis: "76.5", Currency: "USD"}}) ||
+		!reflect.DeepEqual(snapshot.RealizedPnL, []Money{{Currency: "USD", Amount: "33.5"}}) {
 		t.Fatalf("unexpected cash-flow/split snapshot: %+v", snapshot)
 	}
 }
@@ -518,7 +519,7 @@ func TestExtendedLedgerTypesRejectInvalidCashDirection(t *testing.T) {
 	} {
 		t.Run(strings.SplitN(row, ",", 2)[0], func(t *testing.T) {
 			svc, _ := testService(t, nil, nil)
-			preview, appErr := svc.preview(context.Background(), []byte(testCSV(row)))
+			preview, appErr := svc.Preview(context.Background(), []byte(testCSV(row)))
 			if appErr != nil {
 				t.Fatal(appErr)
 			}
@@ -531,13 +532,13 @@ func TestExtendedLedgerTypesRejectInvalidCashDirection(t *testing.T) {
 
 func TestSplitWithoutOpenHoldingRollsBack(t *testing.T) {
 	svc, _ := testService(t, nil, nil)
-	preview, appErr := svc.preview(context.Background(), []byte(testCSV(
+	preview, appErr := svc.Preview(context.Background(), []byte(testCSV(
 		"s1,account-main,SPLIT,2026-01-01T00:00:00Z,AAPL,2,,,USD,0",
 	)))
 	if appErr != nil {
 		t.Fatal(appErr)
 	}
-	if _, appErr := svc.apply(context.Background(), ApplyRequest{preview.PreviewID, "split-without-holding"}); appErr == nil || appErr.body.Code != "invalid_ledger" {
+	if _, appErr := svc.Apply(context.Background(), ApplyRequest{PreviewID: preview.PreviewID, IdempotencyKey: "split-without-holding"}); appErr == nil || appErr.Body.Code != "invalid_ledger" {
 		t.Fatalf("expected invalid_ledger, got %#v", appErr)
 	}
 	var events, revision int
@@ -723,7 +724,7 @@ func TestStatusUnresolvedLimitsAndFingerprintBinding(t *testing.T) {
 		t.Fatalf("unexpected first-launch status: %s", w.Body.String())
 	}
 
-	unresolvedPreview, appErr := svc.preview(context.Background(), []byte(testCSV(
+	unresolvedPreview, appErr := svc.Preview(context.Background(), []byte(testCSV(
 		"u1,unknown-account,BUY,2026-01-01T00:00:00Z,MSFT,1,10,0,USD,-10",
 	)))
 	if appErr != nil {
@@ -737,20 +738,20 @@ func TestStatusUnresolvedLimitsAndFingerprintBinding(t *testing.T) {
 	for i := range tooMany {
 		tooMany[i] = "x,account-main,DEPOSIT,2026-01-01T00:00:00Z,,,,,USD,1"
 	}
-	if _, appErr := svc.preview(context.Background(), []byte(testCSV(tooMany...))); appErr == nil || appErr.body.Code != "too_many_rows" {
+	if _, appErr := svc.Preview(context.Background(), []byte(testCSV(tooMany...))); appErr == nil || appErr.Body.Code != "too_many_rows" {
 		t.Fatalf("expected row cap, got %#v", appErr)
 	}
-	if _, appErr := svc.preview(context.Background(), bytes.Repeat([]byte("x"), maxBodyBytes+1)); appErr == nil || appErr.body.Code != "csv_too_large" {
+	if _, appErr := svc.Preview(context.Background(), bytes.Repeat([]byte("x"), maxBodyBytes+1)); appErr == nil || appErr.Body.Code != "csv_too_large" {
 		t.Fatalf("expected byte cap, got %#v", appErr)
 	}
 
-	valid, appErr := svc.preview(context.Background(), []byte(testCSV(
+	valid, appErr := svc.Preview(context.Background(), []byte(testCSV(
 		"d1,account-main,DEPOSIT,2026-01-01T00:00:00Z,,,,,USD,10",
 	)))
 	if appErr != nil {
 		t.Fatal(appErr)
 	}
-	if valid.PreviewFingerprint != previewFingerprint(valid.FileSHA256, csvSchema, mappingSchema, valid.LedgerRevision) {
+	if valid.PreviewFingerprint != ledger.PreviewFingerprint(valid.FileSHA256, csvSchema, mappingSchema, valid.LedgerRevision) {
 		t.Fatal("preview fingerprint did not bind contract versions")
 	}
 	var stored string
@@ -761,7 +762,7 @@ func TestStatusUnresolvedLimitsAndFingerprintBinding(t *testing.T) {
 	if _, err := svc.db.Exec(`UPDATE previews SET preview_json=? WHERE preview_id=?`, stored, valid.PreviewID); err != nil {
 		t.Fatal(err)
 	}
-	if _, appErr := svc.apply(context.Background(), ApplyRequest{valid.PreviewID, "tampered"}); appErr == nil || appErr.status != http.StatusConflict || appErr.body.Code != "stale_preview" {
+	if _, appErr := svc.Apply(context.Background(), ApplyRequest{PreviewID: valid.PreviewID, IdempotencyKey: "tampered"}); appErr == nil || appErr.Status != http.StatusConflict || appErr.Body.Code != "stale_preview" {
 		t.Fatalf("expected fingerprint conflict, got %#v", appErr)
 	}
 }

@@ -13,6 +13,9 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"omni-folio/services/core/internal/adapters/sqlite"
+	"omni-folio/services/core/internal/application/fault"
+	"omni-folio/services/core/internal/application/ledger"
 	"omni-folio/services/core/internal/ledgerdomain"
 	"strconv"
 )
@@ -73,7 +76,7 @@ func (s *Service) handleLedgerActivities(w http.ResponseWriter, r *http.Request)
 			writeError(w, invalidActivityQuery())
 			return
 		}
-		writeError(w, internalError(err))
+		writeError(w, fault.Internal(err))
 		return
 	}
 	writeJSON(w, http.StatusOK, result)
@@ -115,7 +118,7 @@ func (s *Service) parseLedgerActivityQuery(r *http.Request) (int, *ledgerActivit
 }
 
 func invalidActivityQuery() *appError {
-	return &appError{http.StatusBadRequest, APIError{Code: "invalid_query", Message: "ledger activity query must match the contract"}}
+	return &appError{Status: http.StatusBadRequest, Body: APIError{Code: "invalid_query", Message: "ledger activity query must match the contract"}}
 }
 
 func (s *Service) encodeLedgerActivityCursor(cursor ledgerActivityCursor) string {
@@ -329,11 +332,11 @@ func (s *Service) validateStoredLedgerEvent(ctx context.Context, tx queryer, sto
 		CounterCurrency: stored.counterCurrency, CounterAmount: stored.counterAmount, CorrectsSourceEventID: stored.correctsSourceEventID,
 	}
 	normalized, fieldErrors := ledgerdomain.Normalize(*want)
-	if len(fieldErrors) != 0 || !sameTransaction(normalized, want) {
+	if len(fieldErrors) != 0 || !ledger.SameTransaction(normalized, want) {
 		return errors.New("stored ledger event is not canonical")
 	}
 	if stored.typ == "CASH_VOID" {
-		if _, validationErr, err := validateCashVoid(ctx, tx, want, false); err != nil {
+		if _, validationErr, err := ledger.ValidateCashVoid(ctx, sqlite.NewLedgerReader(tx), want, false); err != nil {
 			return err
 		} else if validationErr != nil {
 			return errors.New("stored cash void failed validation")

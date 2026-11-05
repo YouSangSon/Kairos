@@ -7,6 +7,7 @@ import (
 	"math/big"
 	"net/http"
 	"net/url"
+	"omni-folio/services/core/internal/application/fault"
 	"unicode/utf8"
 
 	"omni-folio/services/core/internal/exact"
@@ -37,7 +38,7 @@ func (s *Service) handleInstrumentLedger(w http.ResponseWriter, r *http.Request)
 	query, err := url.ParseQuery(r.URL.RawQuery)
 	if err != nil || len(query) != 2 || len(query["instrument_id"]) != 1 || len(query["currency"]) != 1 ||
 		query.Get("instrument_id") == "" || !utf8.ValidString(query.Get("instrument_id")) || !currencyCodePattern.MatchString(query.Get("currency")) {
-		writeError(w, &appError{http.StatusBadRequest, APIError{Code: "invalid_query", Message: "instrument ledger query is invalid"}})
+		writeError(w, &appError{Status: http.StatusBadRequest, Body: APIError{Code: "invalid_query", Message: "instrument ledger query is invalid"}})
 		return
 	}
 	result, appErr := s.instrumentLedger(r.Context(), query.Get("instrument_id"), query.Get("currency"))
@@ -51,19 +52,19 @@ func (s *Service) handleInstrumentLedger(w http.ResponseWriter, r *http.Request)
 func (s *Service) instrumentLedger(ctx context.Context, instrumentID, currency string) (*InstrumentLedger, *appError) {
 	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
-		return nil, internalError(err)
+		return nil, fault.Internal(err)
 	}
 	defer tx.Rollback()
 	snapshot, err := snapshotFrom(ctx, tx)
 	if err != nil {
-		return nil, internalError(err)
+		return nil, fault.Internal(err)
 	}
 	ledgerRevision, recordedAt, err := s.proveLedgerEvents(ctx, tx)
 	if err != nil {
-		return nil, internalError(err)
+		return nil, fault.Internal(err)
 	}
 	if revision(ledgerRevision) != snapshot.LedgerRevision {
-		return nil, internalError(errors.New("instrument ledger snapshot proof mismatch"))
+		return nil, fault.Internal(errors.New("instrument ledger snapshot proof mismatch"))
 	}
 	result := &InstrumentLedger{
 		InstrumentID: instrumentID, Currency: currency, Source: "local_ledger", BrokerFreshness: "unverified",
@@ -78,12 +79,12 @@ func (s *Service) instrumentLedger(ctx context.Context, instrumentID, currency s
 		quantity, quantityErr := parseDecimal(holding.Quantity)
 		cost, costErr := parseDecimal(holding.CostBasis)
 		if quantityErr != nil || costErr != nil || quantity.Sign() <= 0 || cost.Sign() < 0 {
-			return nil, internalError(errors.New("instrument ledger holding is invalid"))
+			return nil, fault.Internal(errors.New("instrument ledger holding is invalid"))
 		}
 		// Round only the display ratio; the exact remaining FIFO cost stays unchanged.
 		average, err := formatDecimal(exact.QuantizeHalfEven(new(big.Rat).Quo(cost, quantity), 8))
 		if err != nil {
-			return nil, internalError(err)
+			return nil, fault.Internal(err)
 		}
 		result.Quantity, result.CostBasis, result.AverageCost = holding.Quantity, holding.CostBasis, &average
 		result.Symbol = holding.Symbol
@@ -92,14 +93,14 @@ func (s *Service) instrumentLedger(ctx context.Context, instrumentID, currency s
 		FROM events WHERE instrument_id=? AND currency=? AND type IN ('BUY','SELL') AND sequence<=?
 		ORDER BY rtrim(occurred_at,'Z') DESC,sequence DESC LIMIT ?`, instrumentID, currency, ledgerRevision, defaultActivityLimit+1)
 	if err != nil {
-		return nil, internalError(err)
+		return nil, fault.Internal(err)
 	}
 	for rows.Next() {
 		entry := LedgerActivity{Currency: currency}
 		var symbol, quantity, price, fee string
 		if err := rows.Scan(&entry.Type, &entry.OccurredAt, &entry.RecordedAt, &symbol, &quantity, &price, &fee, &entry.Amount); err != nil {
 			rows.Close()
-			return nil, internalError(err)
+			return nil, fault.Internal(err)
 		}
 		entry.Symbol, entry.Quantity, entry.Price, entry.Fee = &symbol, &quantity, &price, &fee
 		if result.Symbol == "" {
@@ -109,20 +110,20 @@ func (s *Service) instrumentLedger(ctx context.Context, instrumentID, currency s
 	}
 	if err := rows.Err(); err != nil {
 		rows.Close()
-		return nil, internalError(err)
+		return nil, fault.Internal(err)
 	}
 	if err := rows.Close(); err != nil {
-		return nil, internalError(err)
+		return nil, fault.Internal(err)
 	}
 	if len(result.Trades) == 0 {
-		return nil, &appError{http.StatusNotFound, APIError{Code: "instrument_ledger_not_found", Message: "no trades for this instrument and currency"}}
+		return nil, &appError{Status: http.StatusNotFound, Body: APIError{Code: "instrument_ledger_not_found", Message: "no trades for this instrument and currency"}}
 	}
 	result.HasMore = len(result.Trades) > defaultActivityLimit
 	if result.HasMore {
 		result.Trades = result.Trades[:defaultActivityLimit]
 	}
 	if err := tx.Commit(); err != nil {
-		return nil, internalError(err)
+		return nil, fault.Internal(err)
 	}
 	return result, nil
 }

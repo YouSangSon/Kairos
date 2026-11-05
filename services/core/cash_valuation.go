@@ -7,6 +7,7 @@ import (
 	"math/big"
 	"net/http"
 	"net/url"
+	"omni-folio/services/core/internal/application/fault"
 	"time"
 )
 
@@ -57,45 +58,45 @@ type CashValuation struct {
 
 func (s *Service) cashValuation(ctx context.Context, baseCurrency, asOf string) (*CashValuation, *appError) {
 	if !currencyCodePattern.MatchString(baseCurrency) || !canonicalUTCString(asOf) {
-		return nil, &appError{http.StatusBadRequest, APIError{Code: "invalid_query", Message: "cash valuation query values are invalid"}}
+		return nil, &appError{Status: http.StatusBadRequest, Body: APIError{Code: "invalid_query", Message: "cash valuation query values are invalid"}}
 	}
 	valuationTime, _ := time.Parse(time.RFC3339Nano, asOf)
 	if valuationTime.After(s.now().UTC()) {
-		return nil, &appError{http.StatusBadRequest, APIError{Code: "invalid_query", Message: "valuation as_of cannot be in the future", Field: "as_of"}}
+		return nil, &appError{Status: http.StatusBadRequest, Body: APIError{Code: "invalid_query", Message: "valuation as_of cannot be in the future", Field: "as_of"}}
 	}
 
 	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
-		return nil, internalError(err)
+		return nil, fault.Internal(err)
 	}
 	defer tx.Rollback()
 	snapshot, err := snapshotFrom(ctx, tx)
 	if err != nil {
-		return nil, internalError(err)
+		return nil, fault.Internal(err)
 	}
 	ledgerRevision, _, err := s.proveLedgerEvents(ctx, tx)
 	if err != nil {
-		return nil, internalError(err)
+		return nil, fault.Internal(err)
 	}
 	if revision(ledgerRevision) != snapshot.LedgerRevision {
-		return nil, internalError(errors.New("ledger snapshot proof mismatch"))
+		return nil, fault.Internal(errors.New("ledger snapshot proof mismatch"))
 	}
 	inputs, err := readValuationFXInputs(ctx, tx, valuationTime)
 	if err != nil {
-		return nil, internalError(err)
+		return nil, fault.Internal(err)
 	}
 	ledgerAsOf, ledgerAsOfErr := time.Parse(time.RFC3339Nano, snapshot.AsOf)
 	ledgerRecordedAt, ledgerRecordedAtErr := time.Parse(time.RFC3339Nano, snapshot.RecordedAt)
 	if ledgerAsOfErr != nil || ledgerRecordedAtErr != nil || !canonicalUTCString(snapshot.AsOf) || !canonicalUTCString(snapshot.RecordedAt) {
-		return nil, internalError(errors.New("ledger snapshot timestamps are invalid"))
+		return nil, fault.Internal(errors.New("ledger snapshot timestamps are invalid"))
 	}
 	// Import metadata and append order need not follow event recording clocks.
 	var futureRecord bool
 	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM events WHERE sequence<=? AND rtrim(recorded_at,'Z')>rtrim(?,'Z'))`, ledgerRevision, asOf).Scan(&futureRecord); err != nil {
-		return nil, internalError(err)
+		return nil, fault.Internal(err)
 	}
 	if valuationTime.Before(ledgerAsOf) || valuationTime.Before(ledgerRecordedAt) || futureRecord {
-		return nil, &appError{http.StatusConflict, APIError{Code: "valuation_as_of_precedes_ledger_revision", Message: "valuation as_of precedes the current ledger state", Field: "as_of"}}
+		return nil, &appError{Status: http.StatusConflict, Body: APIError{Code: "valuation_as_of_precedes_ledger_revision", Message: "valuation as_of precedes the current ledger state", Field: "as_of"}}
 	}
 	observations, times := inputs.observations, inputs.times
 
@@ -108,7 +109,7 @@ func (s *Service) cashValuation(ctx context.Context, baseCurrency, asOf string) 
 	if len(snapshot.Cash) == 0 {
 		result.Status = "empty"
 		if err := tx.Commit(); err != nil {
-			return nil, internalError(err)
+			return nil, fault.Internal(err)
 		}
 		return result, nil
 	}
@@ -119,7 +120,7 @@ func (s *Service) cashValuation(ctx context.Context, baseCurrency, asOf string) 
 	for _, cash := range snapshot.Cash {
 		amount, err := parseDecimal(cash.Amount)
 		if err != nil {
-			return nil, internalError(err)
+			return nil, fault.Internal(err)
 		}
 		line := CashValuationLine{Currency: cash.Currency, Amount: cash.Amount}
 		switch {
@@ -152,12 +153,12 @@ func (s *Service) cashValuation(ctx context.Context, baseCurrency, asOf string) 
 			}
 			rate, err := parseDecimal(observation.Rate)
 			if err != nil {
-				return nil, internalError(err)
+				return nil, fault.Internal(err)
 			}
 			valued := new(big.Rat).Mul(amount, rate)
 			valuedText, err := formatDecimal(valued)
 			if err != nil {
-				return nil, internalError(err)
+				return nil, fault.Internal(err)
 			}
 			line.Status = "valued"
 			line.ValuedAmount = stringPointer(valuedText)
@@ -175,7 +176,7 @@ func (s *Service) cashValuation(ctx context.Context, baseCurrency, asOf string) 
 	} else {
 		totalText, err := formatDecimal(total)
 		if err != nil {
-			return nil, internalError(err)
+			return nil, fault.Internal(err)
 		}
 		result.Total = &Money{Currency: baseCurrency, Amount: totalText}
 		if usedSample {
@@ -184,7 +185,7 @@ func (s *Service) cashValuation(ctx context.Context, baseCurrency, asOf string) 
 		}
 	}
 	if err := tx.Commit(); err != nil {
-		return nil, internalError(err)
+		return nil, fault.Internal(err)
 	}
 	return result, nil
 }
@@ -227,18 +228,18 @@ func stringPointer(value string) *string { return &value }
 func (s *Service) handleCashValuation(w http.ResponseWriter, r *http.Request) {
 	query, err := url.ParseQuery(r.URL.RawQuery)
 	if err != nil {
-		writeError(w, &appError{http.StatusBadRequest, APIError{Code: "invalid_query", Message: "query parameters are invalid"}})
+		writeError(w, &appError{Status: http.StatusBadRequest, Body: APIError{Code: "invalid_query", Message: "query parameters are invalid"}})
 		return
 	}
 	for key := range query {
 		if key != "base_currency" && key != "as_of" {
-			writeError(w, &appError{http.StatusBadRequest, APIError{Code: "invalid_query", Message: "unknown query parameter " + key, Field: key}})
+			writeError(w, &appError{Status: http.StatusBadRequest, Body: APIError{Code: "invalid_query", Message: "unknown query parameter " + key, Field: key}})
 			return
 		}
 	}
 	for _, key := range []string{"base_currency", "as_of"} {
 		if len(query[key]) != 1 || query[key][0] == "" {
-			writeError(w, &appError{http.StatusBadRequest, APIError{Code: "invalid_query", Message: key + " query parameter must appear exactly once", Field: key}})
+			writeError(w, &appError{Status: http.StatusBadRequest, Body: APIError{Code: "invalid_query", Message: key + " query parameter must appear exactly once", Field: key}})
 			return
 		}
 	}

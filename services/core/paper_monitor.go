@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"net/http"
+	"omni-folio/services/core/internal/application/fault"
 	"time"
 )
 
@@ -35,12 +36,12 @@ type PaperMonitorPolicy struct {
 
 func (s *Service) handlePaperMonitor(w http.ResponseWriter, r *http.Request) {
 	if r.URL.RawQuery != "" {
-		writeError(w, &appError{http.StatusBadRequest, APIError{Code: "invalid_query", Message: "paper monitor accepts no query parameters"}})
+		writeError(w, &appError{Status: http.StatusBadRequest, Body: APIError{Code: "invalid_query", Message: "paper monitor accepts no query parameters"}})
 		return
 	}
 	result, err := s.paperMonitor(r.Context())
 	if err != nil {
-		writeError(w, internalError(err))
+		writeError(w, fault.Internal(err))
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")

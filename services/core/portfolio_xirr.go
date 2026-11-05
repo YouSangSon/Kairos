@@ -6,6 +6,7 @@ import (
 	"errors"
 	"math/big"
 	"net/http"
+	"omni-folio/services/core/internal/application/fault"
 	"time"
 
 	"omni-folio/services/core/internal/exact"
@@ -36,27 +37,27 @@ type PortfolioXIRR struct {
 
 func (s *Service) portfolioXIRR(ctx context.Context) (*PortfolioXIRR, *appError) {
 	if s == nil || s.db == nil || s.now == nil {
-		return nil, internalError(errors.New("XIRR service is unavailable"))
+		return nil, fault.Internal(errors.New("XIRR service is unavailable"))
 	}
 	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
-		return nil, internalError(err)
+		return nil, fault.Internal(err)
 	}
 	defer tx.Rollback()
 	asOf := s.now().UTC()
 	if err := requireSchemaContext(ctx, tx); err != nil {
-		return nil, internalError(err)
+		return nil, fault.Internal(err)
 	}
 	if err := proveLedgerReplayState(ctx, tx, false); err != nil {
-		return nil, internalError(err)
+		return nil, fault.Internal(err)
 	}
 	inputs, err := readValuationFXInputs(ctx, tx, asOf)
 	if err != nil {
-		return nil, internalError(err)
+		return nil, fault.Internal(err)
 	}
 	prices, err := readValuationPriceInputs(ctx, tx, asOf)
 	if err != nil {
-		return nil, internalError(err)
+		return nil, fault.Internal(err)
 	}
 	valuation, appErr := s.currentPortfolioValuationTx(ctx, tx, asOf, inputs, prices)
 	if appErr != nil {
@@ -77,7 +78,7 @@ func (s *Service) portfolioXIRR(ctx context.Context) (*PortfolioXIRR, *appError)
 			result.Issues = appendCurrentValuationIssue(result.Issues, ownerPriceIssue())
 		}
 		if err := tx.Commit(); err != nil {
-			return nil, internalError(err)
+			return nil, fault.Internal(err)
 		}
 		return result, nil
 	}
@@ -97,7 +98,7 @@ func (s *Service) portfolioXIRR(ctx context.Context) (*PortfolioXIRR, *appError)
 		(SELECT 1 FROM events correction WHERE correction.account_id=e.account_id AND correction.corrects_source_event_id=e.source_event_id)
 		ORDER BY rtrim(e.occurred_at,'Z'),e.sequence`)
 	if err != nil {
-		return nil, internalError(err)
+		return nil, fault.Internal(err)
 	}
 	type externalFlow struct {
 		at               time.Time
@@ -108,21 +109,21 @@ func (s *Service) portfolioXIRR(ctx context.Context) (*PortfolioXIRR, *appError)
 		var rawAt, currency, amount string
 		if err := rows.Scan(&rawAt, &currency, &amount); err != nil {
 			rows.Close()
-			return nil, internalError(err)
+			return nil, fault.Internal(err)
 		}
 		at, err := time.Parse(time.RFC3339Nano, rawAt)
 		if err != nil {
 			rows.Close()
-			return nil, internalError(err)
+			return nil, fault.Internal(err)
 		}
 		external = append(external, externalFlow{at, currency, amount})
 	}
 	if err := rows.Err(); err != nil {
 		rows.Close()
-		return nil, internalError(err)
+		return nil, fault.Internal(err)
 	}
 	if err := rows.Close(); err != nil {
-		return nil, internalError(err)
+		return nil, fault.Internal(err)
 	}
 	eventCount := len(external)
 	result.ExternalEventCount = &eventCount
@@ -131,11 +132,11 @@ func (s *Service) portfolioXIRR(ctx context.Context) (*PortfolioXIRR, *appError)
 	contributions := new(big.Rat)
 	for _, flow := range external {
 		if err := ctx.Err(); err != nil {
-			return nil, internalError(err)
+			return nil, fault.Internal(err)
 		}
 		amount, err := exact.ParseDecimal(flow.amount)
 		if err != nil {
-			return nil, internalError(err)
+			return nil, fault.Internal(err)
 		}
 		if result.PeriodStart == nil {
 			day := flow.at.Format("2006-01-02")
@@ -155,7 +156,7 @@ func (s *Service) portfolioXIRR(ctx context.Context) (*PortfolioXIRR, *appError)
 			}
 			rate, err := exact.ParseDecimal(fx.Rate)
 			if err != nil {
-				return nil, internalError(err)
+				return nil, fault.Internal(err)
 			}
 			amount.Mul(amount, rate)
 		}
@@ -167,17 +168,17 @@ func (s *Service) portfolioXIRR(ctx context.Context) (*PortfolioXIRR, *appError)
 	}
 	text, err := exact.FormatDecimal(contributions)
 	if err != nil {
-		return nil, internalError(err)
+		return nil, fault.Internal(err)
 	}
 	result.NetContributions = &Money{Currency: "KRW", Amount: text}
 	terminal, err := exact.ParseDecimal(valuation.TotalValue.Amount)
 	if err != nil {
-		return nil, internalError(err)
+		return nil, fault.Internal(err)
 	}
 	flows = append(flows, portfoliodomain.XIRRCashFlow{Day: portfoliodomain.UTCDay(asOf), Amount: terminal})
 	solution, err := portfoliodomain.SolveXIRR(ctx, flows)
 	if err != nil {
-		return nil, internalError(err)
+		return nil, fault.Internal(err)
 	}
 	if solution.Reason != "cash_flow_limit" {
 		changes := solution.SignChanges
@@ -220,7 +221,7 @@ func historicalXIRRFX(observations []FXObservation, times map[string][3]time.Tim
 
 func (s *Service) handlePortfolioXIRR(w http.ResponseWriter, r *http.Request) {
 	if r.URL.RawQuery != "" {
-		writeError(w, &appError{http.StatusBadRequest, APIError{Code: "invalid_query", Message: "portfolio XIRR does not accept query parameters"}})
+		writeError(w, &appError{Status: http.StatusBadRequest, Body: APIError{Code: "invalid_query", Message: "portfolio XIRR does not accept query parameters"}})
 		return
 	}
 	report, appErr := s.portfolioXIRR(r.Context())

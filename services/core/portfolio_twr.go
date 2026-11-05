@@ -6,6 +6,7 @@ import (
 	"errors"
 	"math/big"
 	"net/http"
+	"omni-folio/services/core/internal/application/fault"
 	"time"
 
 	"omni-folio/services/core/internal/exact"
@@ -37,28 +38,28 @@ func (s *Service) portfolioTWR(ctx context.Context) (*PortfolioTWR, *appError) {
 
 func (s *Service) portfolioTWRRead(ctx context.Context, points *[]PortfolioTWRCheckpoint) (*PortfolioTWR, *appError) {
 	if s == nil || s.db == nil || s.now == nil {
-		return nil, internalError(errors.New("TWR service unavailable"))
+		return nil, fault.Internal(errors.New("TWR service unavailable"))
 	}
 	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
-		return nil, internalError(err)
+		return nil, fault.Internal(err)
 	}
 	defer tx.Rollback()
 	asOf := s.now().UTC()
 	inputs, err := readValuationFXInputs(ctx, tx, asOf)
 	if err != nil {
-		return nil, internalError(err)
+		return nil, fault.Internal(err)
 	}
 	prices, err := readValuationPriceInputs(ctx, tx, asOf)
 	if err != nil {
-		return nil, internalError(err)
+		return nil, fault.Internal(err)
 	}
 	result, appErr := s.portfolioTWRWithCheckpointsTx(ctx, tx, asOf, inputs, prices, points)
 	if appErr != nil {
 		return nil, appErr
 	}
 	if err := tx.Commit(); err != nil {
-		return nil, internalError(err)
+		return nil, fault.Internal(err)
 	}
 	return result, nil
 }
@@ -69,10 +70,10 @@ func (s *Service) portfolioTWRTx(ctx context.Context, tx *sql.Tx, asOf time.Time
 
 func (s *Service) portfolioTWRWithCheckpointsTx(ctx context.Context, tx *sql.Tx, asOf time.Time, inputs valuationFXInputs, prices valuationPriceInputs, points *[]PortfolioTWRCheckpoint) (*PortfolioTWR, *appError) {
 	if err := requireSchemaContext(ctx, tx); err != nil {
-		return nil, internalError(err)
+		return nil, fault.Internal(err)
 	}
 	if err := proveLedgerReplayState(ctx, tx, false); err != nil {
-		return nil, internalError(err)
+		return nil, fault.Internal(err)
 	}
 	valuation, appErr := s.currentPortfolioValuationTx(ctx, tx, asOf, inputs, prices)
 	if appErr != nil {
@@ -82,7 +83,7 @@ func (s *Service) portfolioTWRWithCheckpointsTx(ctx context.Context, tx *sql.Tx,
 	marks := twrMarks{fx: inputs.observations, fxTimes: inputs.times, prices: prices.observations, priceTimes: prices.times}
 	finish := func(issue string) (*PortfolioTWR, *appError) {
 		if err := ctx.Err(); err != nil {
-			return nil, internalError(err)
+			return nil, fault.Internal(err)
 		}
 		if issue != "" {
 			r.Issues = append(r.Issues, APIError{Code: issue, Message: "a required input does not meet the declared TWR policy"})
@@ -114,23 +115,23 @@ func (s *Service) portfolioTWRWithCheckpointsTx(ctx context.Context, tx *sql.Tx,
 		WHERE e.type<>'CASH_VOID' AND NOT EXISTS (SELECT 1 FROM events c WHERE c.type='CASH_VOID' AND c.account_id=e.account_id AND c.corrects_source_event_id=e.source_event_id)
 		ORDER BY rtrim(e.occurred_at,'Z'),e.sequence`)
 	if err != nil {
-		return nil, internalError(err)
+		return nil, fault.Internal(err)
 	}
 	events := []Transaction{}
 	for rows.Next() {
 		var e Transaction
 		if err := rows.Scan(&e.Type, &e.OccurredAt, &e.InstrumentID, &e.Symbol, &e.Quantity, &e.Currency, &e.Amount, &e.CounterCurrency, &e.CounterAmount); err != nil {
 			rows.Close()
-			return nil, internalError(err)
+			return nil, fault.Internal(err)
 		}
 		events = append(events, e)
 	}
 	if err := rows.Err(); err != nil {
 		rows.Close()
-		return nil, internalError(err)
+		return nil, fault.Internal(err)
 	}
 	if err := rows.Close(); err != nil {
-		return nil, internalError(err)
+		return nil, fault.Internal(err)
 	}
 	count, boundaries := 0, 0
 	last := ""
@@ -161,7 +162,7 @@ func (s *Service) portfolioTWRWithCheckpointsTx(ctx context.Context, tx *sql.Tx,
 	net := new(big.Rat)
 	for i := 0; i < len(events); {
 		if err := ctx.Err(); err != nil {
-			return nil, internalError(err)
+			return nil, fault.Internal(err)
 		}
 		j := i + 1
 		for j < len(events) && events[j].OccurredAt == events[i].OccurredAt {
@@ -169,7 +170,7 @@ func (s *Service) portfolioTWRWithCheckpointsTx(ctx context.Context, tx *sql.Tx,
 		}
 		at, err := time.Parse(time.RFC3339Nano, events[i].OccurredAt)
 		if err != nil {
-			return nil, internalError(err)
+			return nil, fault.Internal(err)
 		}
 		hasFlow, hasSplit := false, false
 		for _, e := range events[i:j] {
@@ -205,7 +206,7 @@ func (s *Service) portfolioTWRWithCheckpointsTx(ctx context.Context, tx *sql.Tx,
 				}
 				amount, err := exact.ParseDecimal(e.Amount)
 				if err != nil {
-					return nil, internalError(err)
+					return nil, fault.Internal(err)
 				}
 				v, used, issue := marks.convert(amount, e.Currency, at, asOf)
 				r.Sample = r.Sample || used
@@ -213,8 +214,8 @@ func (s *Service) portfolioTWRWithCheckpointsTx(ctx context.Context, tx *sql.Tx,
 					return finish(issue)
 				}
 				flow.Add(flow, v)
-				if err := b.apply(e); err != nil {
-					return nil, internalError(err)
+				if err := b.Apply(e); err != nil {
+					return nil, fault.Internal(err)
 				}
 			}
 			net.Add(net, flow)
@@ -225,7 +226,7 @@ func (s *Service) portfolioTWRWithCheckpointsTx(ctx context.Context, tx *sql.Tx,
 			if points != nil {
 				rate, err := twrCheckpointRate(factor)
 				if err != nil {
-					return nil, internalError(err)
+					return nil, fault.Internal(err)
 				}
 				*points = append(*points, PortfolioTWRCheckpoint{At: events[i].OccurredAt, Kind: "external_flow", CumulativeRate: rate})
 			}
@@ -235,18 +236,18 @@ func (s *Service) portfolioTWRWithCheckpointsTx(ctx context.Context, tx *sql.Tx,
 			if e.Type == "DEPOSIT" || e.Type == "WITHDRAWAL" {
 				continue
 			}
-			if err := b.apply(e); err != nil {
-				return nil, internalError(err)
+			if err := b.Apply(e); err != nil {
+				return nil, fault.Internal(err)
 			}
 		}
 		i = j
 	}
 	snapshot, err := snapshotFrom(ctx, tx)
 	if err != nil {
-		return nil, internalError(err)
+		return nil, fault.Internal(err)
 	}
 	if !b.matches(snapshot) {
-		return nil, internalError(errors.New("TWR projection differs from proved ledger balances"))
+		return nil, fault.Internal(errors.New("TWR projection differs from proved ledger balances"))
 	}
 	terminal, used, issue := marks.value(ctx, b, asOf, asOf)
 	r.Sample = r.Sample || used
@@ -255,7 +256,7 @@ func (s *Service) portfolioTWRWithCheckpointsTx(ctx context.Context, tx *sql.Tx,
 	}
 	current, err := exact.ParseDecimal(valuation.TotalValue.Amount)
 	if err != nil || terminal.Cmp(current) != 0 {
-		return nil, internalError(errors.New("TWR terminal valuation mismatch"))
+		return nil, fault.Internal(errors.New("TWR terminal valuation mismatch"))
 	}
 	if terminal.Sign() < 0 {
 		return finish("capital_path_unavailable")
@@ -270,7 +271,7 @@ func (s *Service) portfolioTWRWithCheckpointsTx(ctx context.Context, tx *sql.Tx,
 	}
 	netText, err := exact.FormatDecimal(net)
 	if err != nil {
-		return nil, internalError(err)
+		return nil, fault.Internal(err)
 	}
 	r.Status = "calculated"
 	r.CumulativeRate = &rate
@@ -283,7 +284,7 @@ func (s *Service) portfolioTWRWithCheckpointsTx(ctx context.Context, tx *sql.Tx,
 
 func (s *Service) handlePortfolioTWR(w http.ResponseWriter, r *http.Request) {
 	if r.URL.RawQuery != "" {
-		writeError(w, &appError{http.StatusBadRequest, APIError{Code: "invalid_query", Message: "portfolio TWR does not accept query parameters"}})
+		writeError(w, &appError{Status: http.StatusBadRequest, Body: APIError{Code: "invalid_query", Message: "portfolio TWR does not accept query parameters"}})
 		return
 	}
 	report, appErr := s.portfolioTWR(r.Context())

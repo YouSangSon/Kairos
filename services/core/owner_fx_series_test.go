@@ -215,7 +215,7 @@ func TestOwnerFXSchemaInventoryAndLaterCorruptionFailClosed(t *testing.T) {
 	if _, err := svc.db.Exec(guard); err != nil {
 		t.Fatal(err)
 	}
-	if r, appErr := svc.currentPortfolioValuation(context.Background()); appErr == nil || appErr.body.Message != "internal server error" || r != nil {
+	if r, appErr := svc.currentPortfolioValuation(context.Background()); appErr == nil || appErr.Body.Message != "internal server error" || r != nil {
 		t.Fatal("empty portfolio bypassed later journal proof")
 	}
 }

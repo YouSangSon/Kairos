@@ -6,6 +6,7 @@ import (
 	"errors"
 	"math/big"
 	"net/http"
+	"omni-folio/services/core/internal/application/fault"
 	"omni-folio/services/core/internal/ledgerdomain"
 	"time"
 )
@@ -68,46 +69,46 @@ type HoldingValuation struct {
 
 func (s *Service) holdingValuation(ctx context.Context, asOf string) (*HoldingValuation, *appError) {
 	if !canonicalUTCString(asOf) {
-		return nil, &appError{http.StatusBadRequest, APIError{Code: "invalid_query", Message: "holding valuation as_of is invalid", Field: "as_of"}}
+		return nil, &appError{Status: http.StatusBadRequest, Body: APIError{Code: "invalid_query", Message: "holding valuation as_of is invalid", Field: "as_of"}}
 	}
 	valuationTime, _ := time.Parse(time.RFC3339Nano, asOf)
 	if valuationTime.After(s.now().UTC()) {
-		return nil, &appError{http.StatusBadRequest, APIError{Code: "invalid_query", Message: "valuation as_of cannot be in the future", Field: "as_of"}}
+		return nil, &appError{Status: http.StatusBadRequest, Body: APIError{Code: "invalid_query", Message: "valuation as_of cannot be in the future", Field: "as_of"}}
 	}
 
 	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
-		return nil, internalError(err)
+		return nil, fault.Internal(err)
 	}
 	defer tx.Rollback()
 	snapshot, err := snapshotFrom(ctx, tx)
 	if err != nil {
-		return nil, internalError(err)
+		return nil, fault.Internal(err)
 	}
 	ledgerRevision, _, err := s.proveLedgerEvents(ctx, tx)
 	if err != nil {
-		return nil, internalError(err)
+		return nil, fault.Internal(err)
 	}
 	if revision(ledgerRevision) != snapshot.LedgerRevision {
-		return nil, internalError(errors.New("ledger snapshot proof mismatch"))
+		return nil, fault.Internal(errors.New("ledger snapshot proof mismatch"))
 	}
 	ledgerAsOf, ledgerAsOfErr := time.Parse(time.RFC3339Nano, snapshot.AsOf)
 	ledgerRecordedAt, ledgerRecordedAtErr := time.Parse(time.RFC3339Nano, snapshot.RecordedAt)
 	if ledgerAsOfErr != nil || ledgerRecordedAtErr != nil || !canonicalUTCString(snapshot.AsOf) || !canonicalUTCString(snapshot.RecordedAt) {
-		return nil, internalError(errors.New("ledger snapshot timestamps are invalid"))
+		return nil, fault.Internal(errors.New("ledger snapshot timestamps are invalid"))
 	}
 	// Import metadata and append order need not follow event recording clocks.
 	var futureRecord bool
 	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM events WHERE sequence<=? AND rtrim(recorded_at,'Z')>rtrim(?,'Z'))`, ledgerRevision, asOf).Scan(&futureRecord); err != nil {
-		return nil, internalError(err)
+		return nil, fault.Internal(err)
 	}
 	if valuationTime.Before(ledgerAsOf) || valuationTime.Before(ledgerRecordedAt) || futureRecord {
-		return nil, &appError{http.StatusConflict, APIError{Code: "valuation_as_of_precedes_ledger_revision", Message: "valuation as_of precedes the current ledger state", Field: "as_of"}}
+		return nil, &appError{Status: http.StatusConflict, Body: APIError{Code: "valuation_as_of_precedes_ledger_revision", Message: "valuation as_of precedes the current ledger state", Field: "as_of"}}
 	}
 
 	inputs, err := readValuationPriceInputs(ctx, tx, valuationTime)
 	if err != nil {
-		return nil, internalError(err)
+		return nil, fault.Internal(err)
 	}
 	observations, times := inputs.observations, inputs.times
 
@@ -120,7 +121,7 @@ func (s *Service) holdingValuation(ctx context.Context, asOf string) (*HoldingVa
 	if len(snapshot.Holdings) == 0 {
 		result.Status = "empty"
 		if err := tx.Commit(); err != nil {
-			return nil, internalError(err)
+			return nil, fault.Internal(err)
 		}
 		return result, nil
 	}
@@ -172,14 +173,14 @@ func (s *Service) holdingValuation(ctx context.Context, asOf string) (*HoldingVa
 		cost, costErr := parseDecimal(holding.CostBasis)
 		price, priceErr := parseDecimal(observation.Price)
 		if quantityErr != nil || costErr != nil || priceErr != nil {
-			return nil, internalError(errors.New("holding valuation decimal is invalid"))
+			return nil, fault.Internal(errors.New("holding valuation decimal is invalid"))
 		}
 		market := new(big.Rat).Mul(quantity, price)
 		pnl := new(big.Rat).Sub(new(big.Rat).Set(market), cost)
 		marketText, marketErr := formatDecimal(market)
 		pnlText, pnlErr := formatDecimal(pnl)
 		if marketErr != nil || pnlErr != nil {
-			return nil, internalError(errors.New("holding valuation is not an exact finite decimal"))
+			return nil, fault.Internal(errors.New("holding valuation is not an exact finite decimal"))
 		}
 		line.Status = "valued"
 		line.MarketValue = stringPointer(marketText)
@@ -202,7 +203,7 @@ func (s *Service) holdingValuation(ctx context.Context, asOf string) (*HoldingVa
 			market, marketErr := formatDecimal(marketTotals[currency])
 			pnl, pnlErr := formatDecimal(pnlTotals[currency])
 			if costErr != nil || marketErr != nil || pnlErr != nil {
-				return nil, internalError(errors.New("holding valuation total is not an exact finite decimal"))
+				return nil, fault.Internal(errors.New("holding valuation total is not an exact finite decimal"))
 			}
 			result.Totals = append(result.Totals, HoldingValuationTotal{currency, cost, market, pnl})
 		}
@@ -212,7 +213,7 @@ func (s *Service) holdingValuation(ctx context.Context, asOf string) (*HoldingVa
 		}
 	}
 	if err := tx.Commit(); err != nil {
-		return nil, internalError(err)
+		return nil, fault.Internal(err)
 	}
 	return result, nil
 }

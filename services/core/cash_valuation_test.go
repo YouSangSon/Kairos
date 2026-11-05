@@ -37,7 +37,7 @@ func TestCashValuationExactDirectAndNoInverseCross(t *testing.T) {
 		t.Fatal(appErr)
 	}
 	if valuation.Scope != "cash_only" || valuation.PolicyVersion != "direct_fx_cash_v1" || valuation.Status != "stale_sample" ||
-		!valuation.Sample || valuation.Total == nil || *valuation.Total != (Money{"KRW", "2830.5"}) {
+		!valuation.Sample || valuation.Total == nil || *valuation.Total != (Money{Currency: "KRW", Amount: "2830.5"}) {
 		t.Fatalf("unexpected exact cash valuation: %+v", valuation)
 	}
 	wantStatuses := []string{"zero", "valued", "identity", "valued"}
@@ -149,11 +149,11 @@ func TestCashValuationRejectsCutoffAndFailsClosed(t *testing.T) {
 	applyTestCSV(t, svc, "cutoff-seed", testCSV("usd,account-main,DEPOSIT,2026-01-10T10:00:00Z,,,,,USD,1"))
 	svc.now = func() time.Time { return mustTime("2026-01-11T14:00:00Z") }
 	for _, asOf := range []string{"bad", "2026-01-11T23:00:00+09:00", "2026-01-11T14:00:01Z"} {
-		if _, appErr := svc.cashValuation(context.Background(), "KRW", asOf); appErr == nil || appErr.status != http.StatusBadRequest {
+		if _, appErr := svc.cashValuation(context.Background(), "KRW", asOf); appErr == nil || appErr.Status != http.StatusBadRequest {
 			t.Fatalf("invalid/future cutoff was accepted: as_of=%s err=%v", asOf, appErr)
 		}
 	}
-	if _, appErr := svc.cashValuation(context.Background(), "KRW", "2026-01-10T09:59:59Z"); appErr == nil || appErr.status != http.StatusConflict {
+	if _, appErr := svc.cashValuation(context.Background(), "KRW", "2026-01-10T09:59:59Z"); appErr == nil || appErr.Status != http.StatusConflict {
 		t.Fatalf("cutoff before ledger state was accepted: %v", appErr)
 	}
 
@@ -169,7 +169,7 @@ func TestCashValuationRejectsCutoffAndFailsClosed(t *testing.T) {
 	if _, err := svc.db.Exec(`UPDATE fx_observations SET rate='1371'`); err != nil {
 		t.Fatal(err)
 	}
-	if _, appErr := svc.cashValuation(context.Background(), "KRW", "2026-01-11T14:00:00Z"); appErr == nil || appErr.status != http.StatusInternalServerError || appErr.body.Message != "internal server error" {
+	if _, appErr := svc.cashValuation(context.Background(), "KRW", "2026-01-11T14:00:00Z"); appErr == nil || appErr.Status != http.StatusInternalServerError || appErr.Body.Message != "internal server error" {
 		t.Fatalf("corrupt FX state did not fail closed: %v", appErr)
 	}
 }
@@ -182,7 +182,7 @@ func TestCashValuationFailsClosedWhenLedgerRevisionIsCorrupt(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if valuation, appErr := svc.cashValuation(context.Background(), "KRW", "2026-01-11T14:00:00Z"); appErr == nil || appErr.status != http.StatusInternalServerError || appErr.body.Message != "internal server error" || valuation != nil {
+	if valuation, appErr := svc.cashValuation(context.Background(), "KRW", "2026-01-11T14:00:00Z"); appErr == nil || appErr.Status != http.StatusInternalServerError || appErr.Body.Message != "internal server error" || valuation != nil {
 		t.Fatalf("corrupt ledger revision was certified: valuation=%+v err=%v", valuation, appErr)
 	}
 }
@@ -197,7 +197,7 @@ func TestFXObservationTemporalOrderFailsCashValuationClosed(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, appErr := svc.cashValuation(context.Background(), "KRW", "2026-01-11T14:00:00Z"); appErr == nil || appErr.status != http.StatusInternalServerError || appErr.body.Message != "internal server error" {
+	if _, appErr := svc.cashValuation(context.Background(), "KRW", "2026-01-11T14:00:00Z"); appErr == nil || appErr.Status != http.StatusInternalServerError || appErr.Body.Message != "internal server error" {
 		t.Fatalf("impossible FX timestamp order was certified: %v", appErr)
 	}
 }

@@ -139,13 +139,13 @@ func TestInstrumentLedgerQueryAndProofBoundary(t *testing.T) {
 	}
 	for _, pair := range [][2]string{{"instrument_unknown", "USD"}, {"instrument_aapl", "KRW"}, {"instrument_msft", "USD"}} {
 		_, appErr := svc.instrumentLedger(context.Background(), pair[0], pair[1])
-		if appErr == nil || appErr.status != 404 {
+		if appErr == nil || appErr.Status != 404 {
 			t.Fatalf("missing trade accepted: %v", appErr)
 		}
 	}
 	dividendOnly, _ := testService(t, nil, nil)
 	applyTestCSV(t, dividendOnly, "dividend", testCSV("div,account-main,DIVIDEND,2026-01-11T00:00:00Z,AAPL,,,,USD,1"))
-	if _, appErr := dividendOnly.instrumentLedger(context.Background(), "instrument_aapl", "USD"); appErr == nil || appErr.status != 404 {
+	if _, appErr := dividendOnly.instrumentLedger(context.Background(), "instrument_aapl", "USD"); appErr == nil || appErr.Status != 404 {
 		t.Fatalf("dividend-only instrument accepted: %v", appErr)
 	}
 	if _, err := svc.db.Exec(`UPDATE ledger_meta SET revision=0 WHERE singleton=1`); err != nil {

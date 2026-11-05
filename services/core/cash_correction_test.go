@@ -17,7 +17,7 @@ func TestCashVoidPreservesOriginalAndReplaysExactly(t *testing.T) {
 		"f1,account-main,FEE,2026-01-02T00:00:00Z,,,,,USD,-5",
 	))
 
-	preview, appErr := svc.preview(context.Background(), []byte(cashVoidCSV(
+	preview, appErr := svc.Preview(context.Background(), []byte(cashVoidCSV(
 		"c1,account-main,CASH_VOID,2026-01-03T00:00:00Z,,,,,USD,5,f1",
 		"f2,account-main,FEE,2026-01-03T00:01:00Z,,,,,USD,-2,",
 	)))
@@ -40,7 +40,7 @@ func TestCashVoidPreservesOriginalAndReplaysExactly(t *testing.T) {
 		t.Fatalf("preview omitted the safe correction target: %s", encoded)
 	}
 
-	receipt, appErr := svc.apply(context.Background(), ApplyRequest{PreviewID: preview.PreviewID, IdempotencyKey: "cash-void-apply"})
+	receipt, appErr := svc.Apply(context.Background(), ApplyRequest{PreviewID: preview.PreviewID, IdempotencyKey: "cash-void-apply"})
 	if appErr != nil {
 		t.Fatal(appErr)
 	}
@@ -65,7 +65,7 @@ func TestCashVoidPreservesOriginalAndReplaysExactly(t *testing.T) {
 	if err := svc.db.QueryRow(`SELECT amount FROM events WHERE account_id='account-main' AND source_event_id='f1'`).Scan(&originalAmount); err != nil || originalAmount != "-5" {
 		t.Fatalf("original event was mutated: amount=%s err=%v", originalAmount, err)
 	}
-	replay, appErr := svc.preview(context.Background(), []byte(cashVoidCSV(
+	replay, appErr := svc.Preview(context.Background(), []byte(cashVoidCSV(
 		"c1,account-main,CASH_VOID,2026-01-03T00:00:00Z,,,,,USD,5,f1",
 	)))
 	if appErr != nil {
@@ -119,7 +119,7 @@ func TestCashVoidPreviewRejectsUnsafeTargets(t *testing.T) {
 			if len(tt.seed) != 0 {
 				applyTestCSV(t, svc, "seed-"+strings.ReplaceAll(tt.name, " ", "-"), testCSV(tt.seed...))
 			}
-			preview, appErr := svc.preview(context.Background(), []byte(cashVoidCSV(tt.correction...)))
+			preview, appErr := svc.Preview(context.Background(), []byte(cashVoidCSV(tt.correction...)))
 			if appErr != nil {
 				t.Fatal(appErr)
 			}
@@ -141,7 +141,7 @@ func TestCashVoidPreviewRejectsUnsafeTargets(t *testing.T) {
 			"c2,account-main,CASH_VOID,2026-01-03T00:00:00Z,,,,,USD,5,f1",
 			"c3,account-main,CASH_VOID,2026-01-03T00:00:00Z,,,,,USD,-5,c1",
 		} {
-			preview, appErr := svc.preview(context.Background(), []byte(cashVoidCSV(row)))
+			preview, appErr := svc.Preview(context.Background(), []byte(cashVoidCSV(row)))
 			if appErr != nil {
 				t.Fatal(appErr)
 			}
@@ -156,7 +156,7 @@ func TestImportSourceEventConflictIsNotSilentlyDuplicate(t *testing.T) {
 	svc, _ := testService(t, nil, nil)
 	applyTestCSV(t, svc, "source-conflict-base", testCSV("d1,account-main,DEPOSIT,2026-01-01T00:00:00Z,,,,,USD,10"))
 
-	exact, appErr := svc.preview(context.Background(), []byte(testCSV("d1,account-main,DEPOSIT,2026-01-01T00:00:00Z,,,,,USD,10")))
+	exact, appErr := svc.Preview(context.Background(), []byte(testCSV("d1,account-main,DEPOSIT,2026-01-01T00:00:00Z,,,,,USD,10")))
 	if appErr != nil {
 		t.Fatal(appErr)
 	}
@@ -164,7 +164,7 @@ func TestImportSourceEventConflictIsNotSilentlyDuplicate(t *testing.T) {
 		t.Fatalf("exact replay was not idempotent: %+v", exact)
 	}
 
-	conflict, appErr := svc.preview(context.Background(), []byte(testCSV("d1,account-main,DEPOSIT,2026-01-01T00:00:00Z,,,,,USD,11")))
+	conflict, appErr := svc.Preview(context.Background(), []byte(testCSV("d1,account-main,DEPOSIT,2026-01-01T00:00:00Z,,,,,USD,11")))
 	if appErr != nil {
 		t.Fatal(appErr)
 	}
@@ -172,7 +172,7 @@ func TestImportSourceEventConflictIsNotSilentlyDuplicate(t *testing.T) {
 		t.Fatalf("conflicting source_event_id was silently accepted: %+v", conflict)
 	}
 
-	mixed, appErr := svc.preview(context.Background(), []byte(testCSV(
+	mixed, appErr := svc.Preview(context.Background(), []byte(testCSV(
 		"d1,account-main,DEPOSIT,2026-01-01T00:00:00Z,,,,,USD,11",
 		"d1,account-main,DEPOSIT,2026-01-01T00:00:00Z,,,,,USD,10",
 	)))
@@ -253,14 +253,14 @@ func TestOpenAPIExposesClosedCashVoidContract(t *testing.T) {
 
 func applyTestCSV(t *testing.T, svc *Service, key, body string) {
 	t.Helper()
-	preview, appErr := svc.preview(context.Background(), []byte(body))
+	preview, appErr := svc.Preview(context.Background(), []byte(body))
 	if appErr != nil {
 		t.Fatal(appErr)
 	}
 	if !preview.CanApply {
 		t.Fatalf("test setup preview was rejected: %+v", preview)
 	}
-	if _, appErr := svc.apply(context.Background(), ApplyRequest{PreviewID: preview.PreviewID, IdempotencyKey: key}); appErr != nil {
+	if _, appErr := svc.Apply(context.Background(), ApplyRequest{PreviewID: preview.PreviewID, IdempotencyKey: key}); appErr != nil {
 		t.Fatal(appErr)
 	}
 }

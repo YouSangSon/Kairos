@@ -6,6 +6,7 @@ import (
 	"errors"
 	"math/big"
 	"net/http"
+	"omni-folio/services/core/internal/application/fault"
 	"sort"
 	"strings"
 	"time"
@@ -150,21 +151,21 @@ func comparePortfolioBenchmark(record benchmarkSeriesRecord, portfolio *Portfoli
 
 func (s *Service) portfolioBenchmarks(ctx context.Context) (*PortfolioBenchmarks, *appError) {
 	if s == nil || s.db == nil || s.now == nil {
-		return nil, internalError(errors.New("benchmark comparison service unavailable"))
+		return nil, fault.Internal(errors.New("benchmark comparison service unavailable"))
 	}
 	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
-		return nil, internalError(err)
+		return nil, fault.Internal(err)
 	}
 	defer tx.Rollback()
 	asOf := s.now().UTC()
 	inputs, err := readValuationFXInputs(ctx, tx, asOf)
 	if err != nil {
-		return nil, internalError(err)
+		return nil, fault.Internal(err)
 	}
 	prices, err := readValuationPriceInputs(ctx, tx, asOf)
 	if err != nil {
-		return nil, internalError(err)
+		return nil, fault.Internal(err)
 	}
 	portfolio, appErr := s.portfolioTWRTx(ctx, tx, asOf, inputs, prices)
 	if appErr != nil {
@@ -173,7 +174,7 @@ func (s *Service) portfolioBenchmarks(ctx context.Context) (*PortfolioBenchmarks
 	// Integrity proof covers the full journal even when TWR or a calculation is unavailable.
 	proof, err := proveBenchmarkSeriesRecovery(ctx, tx)
 	if err != nil {
-		return nil, internalError(err)
+		return nil, fault.Internal(err)
 	}
 	marks := twrMarks{fx: inputs.observations, fxTimes: inputs.times}
 	r := &PortfolioBenchmarks{PolicyVersion: portfolioBenchmarksPolicy, MaxObservationAgeSeconds: int64(cashFXMaxAge / time.Second), Portfolio: portfolio, Benchmarks: []PortfolioBenchmark{}, Issues: []APIError{}}
@@ -185,7 +186,7 @@ func (s *Service) portfolioBenchmarks(ctx context.Context) (*PortfolioBenchmarks
         ) latest ON latest.sequence=b.sequence
         ORDER BY b.benchmark_id LIMIT ?`, cutoff, maxPortfolioBenchmarks+1)
 	if err != nil {
-		return nil, internalError(err)
+		return nil, fault.Internal(err)
 	}
 	defer rows.Close()
 	for rows.Next() {
@@ -197,25 +198,25 @@ func (s *Service) portfolioBenchmarks(ctx context.Context) (*PortfolioBenchmarks
 		var record benchmarkSeriesRecord
 		var payload string
 		if err := rows.Scan(&record.Sequence, &payload, &record.DataSHA256, &record.RecordedAt); err != nil {
-			return nil, internalError(err)
+			return nil, fault.Internal(err)
 		}
 		// The whole journal was proved in this transaction; decode only the selected versions again.
 		input, _, _, err := decodeBenchmarkSeries(ctx, []byte(payload))
 		if err != nil {
-			return nil, internalError(err)
+			return nil, fault.Internal(err)
 		}
 		record.Input = *input
 		row, err := comparePortfolioBenchmark(record, portfolio, marks, asOf)
 		if err != nil {
-			return nil, internalError(err)
+			return nil, fault.Internal(err)
 		}
 		r.Benchmarks = append(r.Benchmarks, row)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, internalError(err)
+		return nil, fault.Internal(err)
 	}
 	if err := rows.Close(); err != nil {
-		return nil, internalError(err)
+		return nil, fault.Internal(err)
 	}
 	if len(r.Benchmarks) == 0 && len(r.Issues) == 0 {
 		code := "no_benchmarks"
@@ -236,17 +237,17 @@ func (s *Service) portfolioBenchmarks(ctx context.Context) (*PortfolioBenchmarks
 		r.PolicyVersion = "retrospective_latest_index_24h_native_and_krw_v3"
 	}
 	if err := ctx.Err(); err != nil {
-		return nil, internalError(err)
+		return nil, fault.Internal(err)
 	}
 	if err := tx.Commit(); err != nil {
-		return nil, internalError(err)
+		return nil, fault.Internal(err)
 	}
 	return r, nil
 }
 
 func (s *Service) handlePortfolioBenchmarks(w http.ResponseWriter, r *http.Request) {
 	if r.URL.RawQuery != "" || r.URL.ForceQuery {
-		writeError(w, &appError{http.StatusBadRequest, APIError{Code: "invalid_query", Message: "portfolio benchmark comparison does not accept query parameters"}})
+		writeError(w, &appError{Status: http.StatusBadRequest, Body: APIError{Code: "invalid_query", Message: "portfolio benchmark comparison does not accept query parameters"}})
 		return
 	}
 	report, appErr := s.portfolioBenchmarks(r.Context())
