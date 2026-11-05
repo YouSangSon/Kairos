@@ -1,33 +1,31 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:omni_folio_client/app.dart';
-import 'package:omni_folio_client/models.dart';
-import 'package:omni_folio_client/portfolio_benchmarks_page.dart';
-import 'package:omni_folio_client/portfolio_twr_page.dart';
-import 'package:omni_folio_client/portfolio_xirr_page.dart';
-
-import 'vertical_slice_test.dart'
-    show FakeApi, fixture, goldenApi, pumpUi, currentPortfolioValuation;
+import 'package:omni_folio_client/core/data/json_codec.dart';
+import 'package:omni_folio_client/features/portfolio/data/codecs.dart';
+import 'package:omni_folio_client/features/portfolio/presentation/portfolio_benchmarks_page.dart';
+import 'package:omni_folio_client/features/portfolio/presentation/portfolio_pages.dart';
+import 'package:omni_folio_client/features/portfolio/presentation/portfolio_twr_page.dart';
+import 'package:omni_folio_client/features/portfolio/presentation/portfolio_xirr_page.dart';
+import 'support/fixtures.dart';
+import 'support/repositories.dart';
 
 const _notice = '직접 입력 환율 사용 · 시세 제공자가 검증한 값이 아닙니다.';
 Json _report(String name) =>
     (fixture('golden-owner-fx-reports.json')['reports'] as Json)[name] as Json;
 Json _row(Json report) => (report['benchmarks'] as List).single as Json;
 FakeApi _api() => goldenApi()
-  ..currentValuationValue = CurrentPortfolioValuation.fromJson(
-    _report('current'),
-  )
-  ..twrValue = PortfolioTwr.fromJson(_report('twr'))
-  ..xirrValue = PortfolioXirr.fromJson(_report('xirr'))
-  ..benchmarksValue = PortfolioBenchmarks.fromJson(_report('benchmarks'));
+  ..currentValuationValue = decodeCurrentPortfolioValuation(_report('current'))
+  ..twrValue = decodePortfolioTwr(_report('twr'))
+  ..xirrValue = decodePortfolioXirr(_report('xirr'))
+  ..benchmarksValue = decodePortfolioBenchmarks(_report('benchmarks'));
 
 void main() {
   test(
     'shared producer responses preserve owner authority apart from sample',
     () {
-      final value = CurrentPortfolioValuation.fromJson(_report('current'));
-      final twr = PortfolioTwr.fromJson(_report('twr'));
-      final xirr = PortfolioXirr.fromJson(_report('xirr'));
+      final value = decodeCurrentPortfolioValuation(_report('current'));
+      final twr = decodePortfolioTwr(_report('twr'));
+      final xirr = decodePortfolioXirr(_report('xirr'));
       expect(value.ownerDeclaredFx, isTrue);
       expect(value.sample, isFalse);
       expect(value.status, 'complete');
@@ -41,26 +39,26 @@ void main() {
         'partial_marks',
         'stale_marks',
       ]) {
-        final report = PortfolioBenchmarks.fromJson(_report(name));
+        final report = decodePortfolioBenchmarks(_report(name));
         expect(report.ownerDeclaredFx, isTrue);
         expect(report.benchmarks.single.sample, name == 'owner_sample');
         expect(report.benchmarks.single.endFx?.sourceVersion, 'manual-v1');
       }
       expect(currentPortfolioValuation().ownerDeclaredFx, isFalse);
       expect(
-        PortfolioTwr.fromJson(
+        decodePortfolioTwr(
           fixture('golden-portfolio-twr.json'),
         ).ownerDeclaredFx,
         isFalse,
       );
       expect(
-        PortfolioXirr.fromJson(
+        decodePortfolioXirr(
           fixture('golden-portfolio-xirr.json'),
         ).ownerDeclaredFx,
         isFalse,
       );
       expect(
-        PortfolioBenchmarks.fromJson(
+        decodePortfolioBenchmarks(
           fixture('golden-portfolio-benchmarks.json'),
         ).ownerDeclaredFx,
         isFalse,
@@ -70,9 +68,9 @@ void main() {
 
   for (final name in ['current', 'twr', 'xirr']) {
     Object parse(Json json) => switch (name) {
-      'current' => CurrentPortfolioValuation.fromJson(json),
-      'twr' => PortfolioTwr.fromJson(json),
-      _ => PortfolioXirr.fromJson(json),
+      'current' => decodeCurrentPortfolioValuation(json),
+      'twr' => decodePortfolioTwr(json),
+      _ => decodePortfolioXirr(json),
     };
     for (final kind in [
       'missing notice',
@@ -156,7 +154,7 @@ void main() {
         case 'lost nested notice':
           (json['portfolio']['issues'] as List).clear();
       }
-      expect(() => PortfolioBenchmarks.fromJson(json), throwsFormatException);
+      expect(() => decodePortfolioBenchmarks(json), throwsFormatException);
     });
   }
 
@@ -178,10 +176,10 @@ void main() {
             'field': 'AAPL',
           },
         ]);
-        final value = CurrentPortfolioValuation.fromJson(json);
+        final value = decodeCurrentPortfolioValuation(json);
         expect(value.missingInputCount, 1);
         await tester.pumpWidget(
-          OmniFolioApp(api: _api()..currentValuationValue = value),
+          testApp(api: _api()..currentValuationValue = value),
         );
         await pumpUi(tester);
         final title = find.text('전체 평가를 계산할 수 없음');
@@ -252,9 +250,7 @@ void main() {
     'sample owner comparison shows both warnings and the selected input version',
     (tester) async {
       final api = _api()
-        ..benchmarksValue = PortfolioBenchmarks.fromJson(
-          _report('owner_sample'),
-        );
+        ..benchmarksValue = decodePortfolioBenchmarks(_report('owner_sample'));
       await tester.pumpWidget(
         MaterialApp(home: PortfolioBenchmarksPage(api: api)),
       );

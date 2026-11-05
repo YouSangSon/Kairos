@@ -1,16 +1,15 @@
 import 'dart:async';
 import 'dart:convert';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
-import 'package:omni_folio_client/api.dart';
-import 'package:omni_folio_client/models.dart'
-    show PortfolioXirr, PortfolioTwr, PortfolioBenchmarks;
-import 'package:omni_folio_client/app.dart';
-import 'package:omni_folio_client/paper_monitor.dart';
-import 'package:omni_folio_client/paper_monitor_page.dart';
+import 'package:omni_folio_client/core/domain/api_exception.dart';
+import 'package:omni_folio_client/features/paper/data/paper_monitor_codec.dart';
+import 'package:omni_folio_client/features/paper/domain/paper_monitor.dart';
+import 'package:omni_folio_client/features/paper/presentation/paper_monitor_page.dart';
+import 'package:omni_folio_client/features/portfolio/domain/models.dart';
+import 'support/repositories.dart';
 
 Map<String, dynamic> paperMonitorJson({
   bool selected = false,
@@ -43,7 +42,7 @@ Map<String, dynamic> haltPolicy({bool matchesSelection = false}) => {
 
 void main() {
   test('paper monitor parser accepts the closed v1 response', () {
-    final monitor = PaperMonitor.fromJson(
+    final monitor = decodePaperMonitor(
       paperMonitorJson(
         selected: true,
         sessions: 4,
@@ -117,13 +116,13 @@ void main() {
     ];
 
     for (final value in invalid) {
-      expect(() => PaperMonitor.fromJson(value), throwsFormatException);
+      expect(() => decodePaperMonitor(value), throwsFormatException);
     }
   });
 
   test('REST API reads only the fixed paper monitor path', () async {
     Uri? requested;
-    final api = RestOmniApi(
+    final api = RestTestRepositories(
       baseUrl: 'http://example.test/',
       client: MockClient((request) async {
         requested = request.url;
@@ -140,13 +139,13 @@ void main() {
   testWidgets('connections opens the monitor and fetches only on demand', (
     tester,
   ) async {
-    final api = _PaperApi()..next = PaperMonitor.fromJson(paperMonitorJson());
-    final controller = PortfolioController(api);
+    final api = _PaperApi()..next = decodePaperMonitor(paperMonitorJson());
+    final controller = testPortfolioController(api);
     addTearDown(controller.dispose);
     await tester.pumpWidget(
       MaterialApp(
         home: Scaffold(
-          body: DataPage(api: api, controller: controller),
+          body: testDataPage(api: api, controller: controller),
         ),
       ),
     );
@@ -178,7 +177,7 @@ void main() {
 
     api
       ..failure = null
-      ..next = PaperMonitor.fromJson(paperMonitorJson());
+      ..next = decodePaperMonitor(paperMonitorJson());
     await tester.tap(find.text('다시 시도'));
     await tester.pumpAndSettle();
 
@@ -190,7 +189,7 @@ void main() {
     tester,
   ) async {
     final api = _PaperApi()
-      ..next = PaperMonitor.fromJson(
+      ..next = decodePaperMonitor(
         paperMonitorJson(
           selected: true,
           sessions: 8,
@@ -220,7 +219,7 @@ void main() {
     (tester) async {
       final semantics = tester.ensureSemantics();
       final api = _PaperApi()
-        ..next = PaperMonitor.fromJson(
+        ..next = decodePaperMonitor(
           paperMonitorJson(
             selected: true,
             sessions: 8,
@@ -268,7 +267,7 @@ void main() {
   ) async {
     final semantics = tester.ensureSemantics();
     final api = _PaperApi()
-      ..next = PaperMonitor.fromJson(paperMonitorJson(runnerState: 'expired'));
+      ..next = decodePaperMonitor(paperMonitorJson(runnerState: 'expired'));
     try {
       await tester.pumpWidget(MaterialApp(home: PaperMonitorPage(api: api)));
       await tester.pumpAndSettle();
@@ -293,7 +292,7 @@ void main() {
     addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
     final semantics = tester.ensureSemantics();
     final api = _PaperApi()
-      ..next = PaperMonitor.fromJson(
+      ..next = decodePaperMonitor(
         paperMonitorJson(
           selected: true,
           sessions: 8,
@@ -336,14 +335,14 @@ void main() {
     expect(find.byType(CircularProgressIndicator), findsOneWidget);
 
     await tester.pumpWidget(const MaterialApp(home: SizedBox()));
-    pending.complete(PaperMonitor.fromJson(paperMonitorJson()));
+    pending.complete(decodePaperMonitor(paperMonitorJson()));
     await tester.pump();
 
     expect(tester.takeException(), isNull);
   });
 }
 
-class _PaperApi implements OmniApi {
+class _PaperApi implements TestRepositories {
   @override
   Future<PortfolioBenchmarks> portfolioBenchmarks() async =>
       throw UnimplementedError();

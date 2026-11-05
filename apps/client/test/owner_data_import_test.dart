@@ -2,20 +2,21 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
-
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
-import 'package:omni_folio_client/api.dart';
-import 'package:omni_folio_client/app.dart';
-import 'package:omni_folio_client/csv_file.dart';
-import 'package:omni_folio_client/models.dart';
-import 'package:omni_folio_client/owner_data_import.dart';
-import 'package:omni_folio_client/owner_data_import_page.dart';
-
-import 'vertical_slice_test.dart' show goldenApi;
+import 'package:omni_folio_client/core/data/json_codec.dart';
+import 'package:omni_folio_client/core/data/utf8_file.dart';
+import 'package:omni_folio_client/core/domain/api_exception.dart';
+import 'package:omni_folio_client/features/connections/domain/models.dart';
+import 'package:omni_folio_client/features/market_data/data/codecs.dart';
+import 'package:omni_folio_client/features/market_data/domain/models.dart';
+import 'package:omni_folio_client/features/market_data/presentation/owner_data_import_page.dart';
+import 'package:omni_folio_client/features/portfolio/domain/models.dart';
+import 'support/fixtures.dart';
+import 'support/repositories.dart';
 
 List<Json> cases() =>
     (jsonDecode(
@@ -26,12 +27,12 @@ List<Json> cases() =>
             as List)
         .cast<Json>();
 Json copy(Json value) => jsonDecode(jsonEncode(value)) as Json;
-OwnerDataPreview review(Json c) => OwnerDataPreview.fromJson(
+OwnerDataPreview review(Json c) => decodeOwnerDataPreview(
   c['preview'] as Json,
   (c['preview'] as Json)['input'] as String,
 );
 
-class _Api implements OmniApi {
+class _Api implements TestRepositories {
   Future<OwnerDataPreview> Function(String)? previewHandler;
   Future<OwnerDataReceipt> Function(OwnerDataPreview)? applyHandler;
   @override
@@ -44,7 +45,7 @@ class _Api implements OmniApi {
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
-class _RefreshApi implements OmniApi {
+class _RefreshApi implements TestRepositories {
   final base = goldenApi();
   final statusGate = Completer<ServiceStatus>();
   final reconciliationGate = Completer<BrokerReconciliation?>();
@@ -88,7 +89,7 @@ void main() {
       for (final c in cases()) {
         final original = review(c);
         final calls = <String>[];
-        final api = RestOmniApi(
+        final api = RestTestRepositories(
           client: MockClient((request) async {
             expect(request.method, 'POST');
             expect(request.headers['content-type'], 'application/json');
@@ -133,7 +134,7 @@ void main() {
         final altered = copy(c['preview'] as Json);
         change(altered);
         expect(
-          () => OwnerDataPreview.fromJson(altered, original.input),
+          () => decodeOwnerDataPreview(altered, original.input),
           throwsFormatException,
         );
       }
@@ -147,11 +148,16 @@ void main() {
         final altered = copy(c['result'] as Json);
         change(altered);
         expect(
-          () => OwnerDataReceipt.fromJson(altered, original),
+          () => decodeOwnerDataReceipt(altered, original),
           throwsFormatException,
         );
       }
-      expect(() => original.summary['sample'] = true, throwsUnsupportedError);
+      final summary = encodeOwnerDataSummary(original.summary);
+      summary['sample'] = !original.summary.sample;
+      expect(
+        encodeOwnerDataSummary(original.summary)['sample'],
+        isNot(summary['sample']),
+      );
     },
   );
 
@@ -189,7 +195,7 @@ void main() {
       final a = review(cases()[0]), b = review(cases()[1]);
       final latePreview = Completer<OwnerDataPreview>();
       final api = _Api()..previewHandler = (_) => latePreview.future;
-      final ctl = OwnerDataImportController(api, onStored: () {});
+      final ctl = testOwnerDataImportController(api, onStored: () {});
       addTearDown(ctl.dispose);
       await ctl.selectFile(() async => a.input);
       final task = ctl.preview();
@@ -231,9 +237,9 @@ void main() {
             code: 'owner_data_conflict',
           );
         }
-        return OwnerDataReceipt.fromJson(c['result'] as Json, request);
+        return decodeOwnerDataReceipt(c['result'] as Json, request);
       };
-      final ctl = OwnerDataImportController(api, onStored: () => stored++);
+      final ctl = testOwnerDataImportController(api, onStored: () => stored++);
       addTearDown(ctl.dispose);
       await ctl.selectFile(() async => r.input);
       await ctl.preview();
@@ -258,7 +264,7 @@ void main() {
     () async {
       final c = cases().first, r = review(cases().first);
       final api = _Api()..previewHandler = (_) async => r;
-      final ctl = OwnerDataImportController(api, onStored: () {});
+      final ctl = testOwnerDataImportController(api, onStored: () {});
       addTearDown(ctl.dispose);
       await ctl.selectFile(() async => r.input);
       await ctl.preview();
@@ -284,7 +290,7 @@ void main() {
       await first;
       expect(ctl.pending, r);
       api.applyHandler = (request) async =>
-          OwnerDataReceipt.fromJson(c['result'] as Json, request);
+          decodeOwnerDataReceipt(c['result'] as Json, request);
       await ctl.apply();
       expect(ctl.receipt, isNotNull);
     },
@@ -295,7 +301,7 @@ void main() {
     () async {
       final r = review(cases().first);
       for (final body in ['{}', 'x' * (6 * (1 << 20) + 16 * 1024 + 1)]) {
-        final api = RestOmniApi(
+        final api = RestTestRepositories(
           client: MockClient((_) async => http.Response(body, 200)),
         );
         await expectLater(api.applyOwnerData(r), throwsFormatException);
@@ -306,7 +312,7 @@ void main() {
   testWidgets(
     'root connections exposes owner file page without selecting or storing',
     (tester) async {
-      await tester.pumpWidget(OmniFolioApp(api: goldenApi()));
+      await tester.pumpWidget(testApp(api: goldenApi()));
       await tester.pumpAndSettle();
       await tester.tap(find.text('연결').last);
       await tester.pumpAndSettle();
@@ -328,7 +334,7 @@ void main() {
       final api = goldenApi();
       final old = Completer<CurrentPortfolioValuation>();
       api.currentValuationCompleter = old;
-      final ctl = PortfolioController(api);
+      final ctl = testPortfolioController(api);
       addTearDown(ctl.dispose);
       final precommit = ctl.refresh();
       expect(api.currentValuationCalls, 1);
@@ -349,7 +355,7 @@ void main() {
     'post-store refresh does not await unrelated precommit reconciliation',
     () async {
       final api = _RefreshApi();
-      final ctl = PortfolioController(api);
+      final ctl = testPortfolioController(api);
       addTearDown(ctl.dispose);
       final precommit = ctl.refresh();
       await Future<void>.delayed(Duration.zero);
@@ -369,7 +375,7 @@ void main() {
     'owner waiting limit aborts transport but leaves storage uncertain',
     (tester) async {
       final client = _WaitingClient();
-      final api = RestOmniApi(client: client);
+      final api = RestTestRepositories(client: client);
       final call = api.applyOwnerData(review(cases().first));
       final checked = expectLater(call, throwsA(isA<ApiException>()));
       await tester.pump(const Duration(seconds: 41));
@@ -398,9 +404,9 @@ void main() {
           final api = _Api()..previewHandler = (_) async => r;
           api.applyHandler = (request) async {
             calls++;
-            return OwnerDataReceipt.fromJson(c['result'] as Json, request);
+            return decodeOwnerDataReceipt(c['result'] as Json, request);
           };
-          final ctl = OwnerDataImportController(api, onStored: () {});
+          final ctl = testOwnerDataImportController(api, onStored: () {});
           await ctl.selectFile(() async => r.input);
           await ctl.preview();
           await tester.pumpWidget(

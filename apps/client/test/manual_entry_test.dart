@@ -1,20 +1,23 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
-import 'package:omni_folio_client/api.dart';
-import 'package:omni_folio_client/app.dart';
-import 'package:omni_folio_client/import_apply.dart';
-import 'package:omni_folio_client/manual_entry.dart';
-import 'package:omni_folio_client/manual_entry_page.dart';
-import 'package:omni_folio_client/models.dart';
-
-import 'vertical_slice_test.dart' show FakeApi, fixture, goldenApi, pumpUi;
+import 'package:omni_folio_client/core/data/json_codec.dart';
+import 'package:omni_folio_client/core/domain/api_exception.dart';
+import 'package:omni_folio_client/features/ledger/application/import_apply_controller.dart';
+import 'package:omni_folio_client/features/ledger/data/codecs.dart';
+import 'package:omni_folio_client/features/ledger/data/manual_entry_csv.dart';
+import 'package:omni_folio_client/features/ledger/domain/models.dart';
+import 'package:omni_folio_client/features/ledger/domain/trade_cash.dart';
+import 'package:omni_folio_client/features/ledger/presentation/activity_page.dart';
+import 'package:omni_folio_client/features/ledger/presentation/manual_entry_labels.dart';
+import 'package:omni_folio_client/features/ledger/presentation/manual_entry_page.dart';
+import 'support/fixtures.dart';
+import 'support/repositories.dart';
 
 List<Json> _cases() =>
     ((jsonDecode(
@@ -61,8 +64,8 @@ FakeApi _manualApi() {
   return FakeApi(
     statusValue: base.statusValue,
     snapshotValue: base.snapshotValue,
-    previewValue: ImportPreview.fromJson(preview),
-    receiptValue: ApplyReceipt.fromJson(receipt),
+    previewValue: decodeImportPreview(preview),
+    receiptValue: decodeApplyReceipt(receipt),
     candlesValue: base.candlesValue,
     orderLogValue: base.orderLogValue,
     activityValue: base.activityValue,
@@ -102,7 +105,7 @@ class _ControlledApi extends FakeApi {
 }
 
 Future<void> _history(WidgetTester tester, FakeApi api) async {
-  await tester.pumpWidget(OmniFolioApp(api: api));
+  await tester.pumpWidget(testApp(api: api));
   await pumpUi(tester);
   await tester.tap(find.text('내역'));
   await pumpUi(tester);
@@ -184,7 +187,7 @@ void main() {
         entry['expected_csv'],
       );
       final expected = entry['expected_transaction'] as Json;
-      final event = LedgerActivity.fromJson({
+      final event = decodeLedgerActivity({
         'type': expected['type'],
         'occurred_at': expected['occurred_at'],
         'recorded_at': '2026-01-10T15:01:00Z',
@@ -280,7 +283,7 @@ void main() {
     tester,
   ) async {
     final api = goldenApi();
-    await tester.pumpWidget(OmniFolioApp(api: api));
+    await tester.pumpWidget(testApp(api: api));
     await pumpUi(tester);
     await tester.tap(find.text('내역'));
     await pumpUi(tester);
@@ -460,7 +463,7 @@ void main() {
       final captured = session.pending!;
       final changed = fixture('golden-preview.json')
         ..['preview_id'] = 'preview_different';
-      final preview = ImportPreview.fromJson(changed);
+      final preview = decodeImportPreview(changed);
       await session.apply(preview, 'different');
       expect(api.applyKeys, hasLength(1));
       expect(session.pending, captured);
@@ -477,7 +480,7 @@ void main() {
   ) async {
     final gate = Completer<ApplyReceipt>();
     final api = goldenApi()..applyCompleter = gate;
-    await tester.pumpWidget(OmniFolioApp(api: api));
+    await tester.pumpWidget(testApp(api: api));
     await pumpUi(tester);
     await tester.tap(find.text('내역'));
     await pumpUi(tester);
@@ -654,7 +657,9 @@ void main() {
         ),
       );
       addTearDown(client.close);
-      final session = ImportApplyController(RestOmniApi(client: client));
+      final session = ImportApplyController(
+        RestTestRepositories(client: client),
+      );
       addTearDown(session.dispose);
       await session.apply(_manualApi().previewValue, 'captured');
       expect(session.pending == null, scenario.rejected);
@@ -677,7 +682,9 @@ void main() {
           if (!malformed) throw http.ClientException('private-network-error');
           return http.Response('{}', 200);
         });
-        final session = ImportApplyController(RestOmniApi(client: client));
+        final session = ImportApplyController(
+          RestTestRepositories(client: client),
+        );
         try {
           await session.apply(_manualApi().previewValue, 'captured');
           expect(session.pending!.csv, 'captured');
