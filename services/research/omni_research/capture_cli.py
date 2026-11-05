@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import sys
 from pathlib import Path
 from typing import Sequence
 
-from .capture_research import _decode, _read_input, run_capture_experiment
+from .application.artifacts import canonical_json
+
+from .adapters.files.experiments import run_capture_experiment
+from .adapters.files.inputs import read_capture_input
+from .adapters.inputs.json_values import _decode
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -18,8 +21,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--config", required=True, type=Path)
     args = parser.parse_args(argv)
     try:
-        report = run_capture_experiment(args.capture, _decode(_read_input(args.config)))
-        rendered = json.dumps(report, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
+        report = run_capture_experiment(args.capture, _decode(read_capture_input(args.config)))
+        rendered = canonical_json(report, allow_nan=False)
     except (OSError, ValueError, TypeError, KeyError, ArithmeticError, RecursionError):
         print("Capture research input or report is invalid; no report was emitted.", file=sys.stderr)
         return 1

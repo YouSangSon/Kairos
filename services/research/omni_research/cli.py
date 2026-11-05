@@ -7,7 +7,9 @@ import json
 from pathlib import Path
 from typing import Sequence
 
-from .engine import build_manifest
+from .application.artifacts import canonical_json
+
+from .adapters.files.experiments import build_manifest
 
 ALLOWED_ARGUMENTS = frozenset({"bars", "request", "run_id", "dataset_id", "started_at", "finished_at", "output"})
 
@@ -37,7 +39,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         started_at=args.started_at,
         finished_at=args.finished_at,
     )
-    rendered = json.dumps(manifest, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    rendered = canonical_json(manifest)
     if args.output:
         args.output.write_text(rendered + "\n", encoding="utf-8")
     else:

@@ -277,6 +277,7 @@ class CaptureResearchTest(unittest.TestCase):
 
     def test_opened_descriptor_single_snapshot_and_nonregular_inputs(self) -> None:
         from omni_research import capture_research
+        from omni_research.adapters.files import inputs
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "capture.json"
             raw = json.dumps(synthetic_capture()).encode()
@@ -296,7 +297,7 @@ class CaptureResearchTest(unittest.TestCase):
                 observed = ObservedFile()
                 observed.source = original_open(*args, **kwargs)
                 return observed
-            with patch.object(capture_research, "open", side_effect=observed_open):
+            with patch.object(inputs, "open", side_effect=observed_open):
                 report = capture_research.run_capture_experiment(path, self.config())
             self.assertEqual(reads, [1_048_577])
             self.assertEqual(report["source"]["sha256"], hashlib.sha256(raw).hexdigest())

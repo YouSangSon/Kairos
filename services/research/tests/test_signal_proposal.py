@@ -202,7 +202,7 @@ class SignalProposalTest(unittest.TestCase):
             artifact_path = directory / 'artifact.json'
             artifact_path.write_text(json.dumps(artifact))
             captured_bars, captured_research = bars.read_bytes(), research.read_bytes()
-            original_read = __import__('omni_research.signal_cli', fromlist=['read_signal_input']).read_signal_input
+            original_read = __import__('omni_research.adapters.signal_stream.producer', fromlist=['read_signal_input']).read_signal_input
 
             def read_then_mutate(path: Path) -> bytes:
                 raw = original_read(path)
@@ -213,7 +213,7 @@ class SignalProposalTest(unittest.TestCase):
 
             stdout, stderr = io.StringIO(), io.StringIO()
             args = ['--bars', str(bars), '--research-bars', str(research), '--artifact', str(artifact_path), '--bundle']
-            with patch('omni_research.signal_cli.read_signal_input', side_effect=read_then_mutate), contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+            with patch('omni_research.adapters.signal_stream.producer.read_signal_input', side_effect=read_then_mutate), contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
                 self.assertEqual(main(args), 0)
             proposal = generate_proposal_from_bytes(captured_bars, captured_research, artifact)
             self.assertEqual(json.loads(stdout.getvalue()), generate_paper_input_bundle(proposal, captured_bars, captured_research))
@@ -366,7 +366,7 @@ class SignalProposalTest(unittest.TestCase):
                     sync(fd)
 
                 stdout, stderr = io.StringIO(), io.StringIO()
-                with patch('omni_research.signal_cli.os.fsync', side_effect=fail_sync), contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                with patch('omni_research.adapters.files.capture.os.fsync', side_effect=fail_sync), contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
                     self.assertEqual(main(args), 1)
                 self.assertEqual(stdout.getvalue(), '')
                 self.assertEqual(stderr.getvalue(), 'Paper input capture failed; no bundle was emitted.\n')

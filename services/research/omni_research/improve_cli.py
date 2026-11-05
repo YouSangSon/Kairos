@@ -7,7 +7,9 @@ import json
 from pathlib import Path
 from typing import Sequence
 
-from .improve import run_experiment
+from .application.artifacts import canonical_json
+
+from .adapters.files.experiments import run_experiment
 
 ALLOWED_ARGUMENTS = frozenset({"bars", "config", "output"})
 
@@ -23,7 +25,7 @@ def parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     args = parser().parse_args(argv)
     result = run_experiment(args.bars, json.loads(args.config.read_text(encoding="utf-8")))
-    rendered = json.dumps(result, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    rendered = canonical_json(result)
     if args.output:
         args.output.write_text(rendered + "\n", encoding="utf-8")
     else:
