@@ -61,7 +61,7 @@ func SnapshotAt(ctx context.Context, q Reader, policy string, throughRevision in
 	return snapshotDTO(result), nil
 }
 
-func (s *UseCases) CurrentSnapshot(ctx context.Context) (*PortfolioSnapshot, error) {
+func (s *UseCases) Snapshot(ctx context.Context) (*PortfolioSnapshot, error) {
 	var result *PortfolioSnapshot
 	err := s.store.Read(ctx, func(scope Reader) error { var err error; result, err = Snapshot(ctx, scope); return err })
 	if err != nil {

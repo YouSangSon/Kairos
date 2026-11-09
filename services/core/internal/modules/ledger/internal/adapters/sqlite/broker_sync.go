@@ -98,7 +98,7 @@ func requireKiwoomMockBinding(ctx context.Context, q orderQuerier, expectedAccou
 	return rows.Err()
 }
 
-func (s *Service) recordKiwoomMockSnapshot(ctx context.Context, ledgerAccount, expectedAccount string, snapshot *KiwoomSnapshot) (*BrokerKnownGoodSnapshot, error) {
+func (s *Service) RecordMockBrokerSnapshot(ctx context.Context, ledgerAccount, expectedAccount string, snapshot *KiwoomSnapshot) (*BrokerKnownGoodSnapshot, error) {
 	if ledgerAccount != "account-main" || !orderAlias(expectedAccount, "account") || snapshot == nil ||
 		snapshot.Environment != KiwoomMock || snapshot.AccountRef != expectedAccount {
 		return nil, errors.New("invalid Kiwoom mock account binding")

@@ -11,6 +11,8 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"omni-folio/services/core/internal/codec"
+	"omni-folio/services/core/internal/modules/ledger/contracts"
 
 	"omni-folio/services/core/internal/modules/ledger/internal/application"
 	"omni-folio/services/core/internal/modules/ledger/internal/domain"
@@ -18,7 +20,7 @@ import (
 
 const defaultActivityLimit = 50
 
-var errInvalidLedgerActivityCursor = errors.New("invalid ledger activity cursor")
+var errInvalidLedgerActivityCursor = contracts.ErrInvalidActivityCursor
 
 type storedLedgerEvent struct {
 	sequence                                           int64
@@ -73,13 +75,13 @@ func (s *Service) decodeLedgerActivityCursor(raw string) (*ledgerActivityCursor,
 		return nil, errors.New("cursor must contain one object")
 	}
 	if cursor.Version != 1 || cursor.LedgerRevision < 1 || cursor.Sequence < 1 ||
-		cursor.Sequence > cursor.LedgerRevision || !canonicalUTCString(cursor.LedgerRecordedAt) || !canonicalUTCString(cursor.OccurredAt) {
+		cursor.Sequence > cursor.LedgerRevision || !codec.CanonicalUTC(cursor.LedgerRecordedAt) || !codec.CanonicalUTC(cursor.OccurredAt) {
 		return nil, errors.New("invalid cursor fields")
 	}
 	return &cursor, nil
 }
 
-func (s *Service) ledgerActivities(ctx context.Context, limit int, cursor *ledgerActivityCursor) (*LedgerActivityPage, error) {
+func (s *Service) Activity(ctx context.Context, limit int, cursor *ledgerActivityCursor) (*LedgerActivityPage, error) {
 	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return nil, err
@@ -181,7 +183,7 @@ func (s *Service) proveLedgerEvents(ctx context.Context, tx queryer) (int64, str
 	if err := tx.QueryRowContext(ctx, `SELECT revision,recorded_at FROM ledger_meta WHERE singleton=1`).Scan(&revisionValue, &ledgerRecordedAt); err != nil {
 		return 0, "", err
 	}
-	if !canonicalUTCString(ledgerRecordedAt) {
+	if !codec.CanonicalUTC(ledgerRecordedAt) {
 		return 0, "", errors.New("ledger recorded_at is not canonical UTC")
 	}
 	rows, err := tx.QueryContext(ctx, `SELECT sequence,event_id,source_event_id,account_id,type,occurred_at,COALESCE(instrument_id,''),COALESCE(symbol,''),COALESCE(quantity,''),COALESCE(price,''),COALESCE(fee,''),currency,amount,COALESCE(counter_currency,''),COALESCE(counter_amount,''),COALESCE(corrects_source_event_id,''),receipt_id,recorded_at FROM events ORDER BY sequence`)
@@ -224,7 +226,7 @@ func (s *Service) proveLedgerEvents(ctx context.Context, tx queryer) (int64, str
 }
 
 func (s *Service) validateStoredLedgerEvent(ctx context.Context, tx queryer, stored *storedLedgerEvent) error {
-	if stored.eventID == "" || stored.receiptID == "" || !canonicalUTCString(stored.recordedAt) {
+	if stored.eventID == "" || stored.receiptID == "" || !codec.CanonicalUTC(stored.recordedAt) {
 		return errors.New("stored ledger event metadata is invalid")
 	}
 	want := &Transaction{

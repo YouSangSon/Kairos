@@ -19,7 +19,6 @@ func ReadStatements() []observation.Statement {
  ORDER BY rtrim(e.occurred_at,'Z'),e.sequence`, Arguments: 0},
 		{SQL: `SELECT instrument_id,currency,occurred_at FROM events WHERE type='SPLIT' ORDER BY rtrim(occurred_at,'Z'),sequence`, Arguments: 0},
 		{SQL: `SELECT instrument_id,symbol,currency FROM events WHERE instrument_id IS NOT NULL AND instrument_id<>''`, Arguments: 0},
-		{SQL: `SELECT policy FROM ledger_replay_state WHERE singleton=1`, Arguments: 0},
 		{SQL: `SELECT COALESCE(MIN(sequence),0),COALESCE(MAX(sequence),0),COUNT(*) FROM events`, Arguments: 0},
 		{SQL: `SELECT COALESCE(MIN(version), 0), COALESCE(MAX(version), 0), COUNT(*) FROM schema_migrations`, Arguments: 0},
 		{SQL: `SELECT COUNT(*) FROM events WHERE account_id=? AND corrects_source_event_id=?`, Arguments: 2},

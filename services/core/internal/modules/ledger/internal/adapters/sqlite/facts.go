@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"omni-folio/services/core/internal/codec"
 	"omni-folio/services/core/internal/modules/ledger/contracts"
 	ledgerdomain "omni-folio/services/core/internal/modules/ledger/internal/domain"
 	storage "omni-folio/services/core/internal/storage/contracts"
@@ -40,11 +41,11 @@ func (s *Service) ValuationFacts(ctx context.Context, ref storage.ObservationRef
 		return contracts.ValuationFacts{}, err
 	}
 	asof, err := time.Parse(time.RFC3339Nano, rawAsOf)
-	if err != nil || !canonicalUTCString(rawAsOf) {
+	if err != nil || !codec.CanonicalUTC(rawAsOf) {
 		return contracts.ValuationFacts{}, errors.New("ledger as_of is not canonical UTC")
 	}
 	recorded, err := time.Parse(time.RFC3339Nano, snapshot.RecordedAt)
-	if err != nil || !canonicalUTCString(snapshot.RecordedAt) {
+	if err != nil || !codec.CanonicalUTC(snapshot.RecordedAt) {
 		return contracts.ValuationFacts{}, errors.New("ledger recorded_at is not canonical UTC")
 	}
 	result := contracts.ValuationFacts{RestatedEvents: []contracts.ValuationEvent{}, ExternalFlows: []contracts.ValuationEvent{}, Snapshot: *snapshot, Revision: rev, ActivityRecordedAt: activity, AsOf: asof, RecordedAt: recorded, LastSplits: []contracts.SplitFact{}}
@@ -190,9 +191,7 @@ func (s *Service) VerifyBackup(ctx context.Context, ref storage.ObservationRef, 
 	}
 	policy := fifoCostBasisPolicy
 	if archival {
-		if err := q.QueryRowContext(ctx, `SELECT policy FROM ledger_replay_state WHERE singleton=1`).Scan(&policy); err != nil {
-			return contracts.BackupProof{}, err
-		}
+		policy = legacyFIFOCostBasisPolicy
 	}
 	snapshot, err := snapshotFromPolicy(ctx, q, policy, -1)
 	if err != nil {

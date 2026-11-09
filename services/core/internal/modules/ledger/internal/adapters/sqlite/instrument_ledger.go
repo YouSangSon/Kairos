@@ -12,7 +12,7 @@ import (
 
 const instrumentAverageCostPolicy = "remaining_fifo_cost_per_unit_half_even_8_v1"
 
-func (s *Service) instrumentLedger(ctx context.Context, instrumentID, currency string) (*InstrumentLedger, *appError) {
+func (s *Service) InstrumentActivity(ctx context.Context, instrumentID, currency string) (*InstrumentLedger, *appError) {
 	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return nil, contracts.InternalError(err)

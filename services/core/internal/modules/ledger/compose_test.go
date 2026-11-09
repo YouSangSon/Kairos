@@ -237,3 +237,44 @@ func TestPublicLedgerPreservesGoldenWireAndFingerprint(t *testing.T) {
 	}
 	assertFixture(snapshot, "golden-snapshot.json")
 }
+
+func TestComposeRejectsForeignDatabaseRegistry(t *testing.T) {
+	_, first, firstRegistry := testLedger(t)
+	_, second, _ := testLedger(t)
+	for _, config := range []ledger.Config{{DB: first}, {DB: second, Observations: firstRegistry}} {
+		if _, err := ledger.Compose(config); err == nil {
+			t.Fatal("unbound observation database accepted")
+		}
+	}
+}
+
+func TestBackupArchivalUsesLegacyFIFOWithCurrentReplayState(t *testing.T) {
+	api, _, registry := testLedger(t)
+	raw := []byte("source_event_id,account_id,type,occurred_at,symbol,quantity,price,fee,currency,amount\nwhole,account-main,BUY,2026-01-01T00:00:00Z,AAPL,1,10,0,USD,-10\nfractional,account-main,BUY,2026-01-01T00:00:00.1Z,AAPL,1,20,0,USD,-20\nsell,account-main,SELL,2026-01-02T00:00:00Z,AAPL,1,30,0,USD,30\n")
+	preview, issue := api.PreviewImport(context.Background(), raw)
+	if issue != nil {
+		t.Fatal(issue)
+	}
+	if _, issue := api.ApplyImport(context.Background(), contracts.ApplyRequest{PreviewID: preview.PreviewID, IdempotencyKey: "archival"}); issue != nil {
+		t.Fatal(issue)
+	}
+	if err := registry.VerifyBackup(context.Background(), func(ref storage.ObservationRef, _ time.Time) error {
+		current, err := api.VerifyBackup(context.Background(), ref, false)
+		if err != nil {
+			return err
+		}
+		archival, err := api.VerifyBackup(context.Background(), ref, true)
+		if err != nil {
+			return err
+		}
+		if len(current.Snapshot.Holdings) != 1 || current.Snapshot.Holdings[0].CostBasis != "20" {
+			t.Fatalf("current FIFO changed: %+v", current.Snapshot)
+		}
+		if len(archival.Snapshot.Holdings) != 1 || archival.Snapshot.Holdings[0].CostBasis != "10" || archival.Snapshot.CostBasisPolicy != "fifo_exact_else_half_even_residual_8_v1" {
+			t.Fatalf("archival replay adopted current FIFO: %+v", archival.Snapshot)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}

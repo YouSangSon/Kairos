@@ -2,10 +2,7 @@ package sqlite
 
 import (
 	"context"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"math/big"
 	"omni-folio/services/core/internal/exact"
@@ -63,27 +60,8 @@ var orderAliasPattern = regexp.MustCompile(`^kiwoom_(account|order|execution)_[A
 func parseDecimal(v string) (*big.Rat, error)  { return exact.ParseDecimal(v) }
 func formatDecimal(v *big.Rat) (string, error) { return exact.FormatDecimal(v) }
 func revision(v int64) string                  { return fmt.Sprintf("rev_%010d", v) }
-func orderJSONHash(value any) ([]byte, string, error) {
-	raw, err := json.Marshal(value)
-	if err != nil {
-		return nil, "", err
-	}
-	sum := sha256.Sum256(raw)
-	return raw, hex.EncodeToString(sum[:]), nil
-}
 func orderAlias(raw, kind string) bool {
 	return orderAliasPattern.MatchString(raw) && strings.HasPrefix(raw, "kiwoom_"+kind+"_")
-}
-func safeOrderID(raw string) bool {
-	if raw == "" || len(raw) > 128 || !utf8.ValidString(raw) {
-		return false
-	}
-	for _, r := range raw {
-		if unicode.IsControl(r) || unicode.IsSpace(r) {
-			return false
-		}
-	}
-	return true
 }
 func kiwoomValidTime(raw string) bool {
 	if !kiwoomStockPattern.MatchString(raw) {

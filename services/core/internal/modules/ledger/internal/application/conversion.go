@@ -27,3 +27,7 @@ func snapshotDTO(input *ledgerdomain.PortfolioSnapshot) *contracts.PortfolioSnap
 	}
 	return result
 }
+
+func (s *UseCases) CanonicalInstrumentID(symbol string) string {
+	return ledgerdomain.InstrumentIDForSymbol(symbol)
+}

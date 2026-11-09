@@ -20,6 +20,7 @@ type Error struct {
 func (e *Error) Error() string { return e.Body.Message }
 
 var ErrNotFound = errors.New("record not found")
+var ErrInvalidActivityCursor = errors.New("invalid ledger activity cursor")
 
 func (e *Error) Unwrap() error { return e.cause }
 func InternalError(cause error) *Error {

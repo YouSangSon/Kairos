@@ -9,6 +9,8 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"omni-folio/services/core/internal/codec"
+	"omni-folio/services/core/internal/modules/ledger/contracts"
 	"reflect"
 	"regexp"
 	"sort"
@@ -36,7 +38,7 @@ type brokerRecoveryProof struct {
 	Reconciliations int
 }
 
-func (s *Service) recordKiwoomSnapshot(ctx context.Context, ledgerAccountID string, snapshot *KiwoomSnapshot) (*BrokerKnownGoodSnapshot, error) {
+func (s *Service) RecordBrokerSnapshot(ctx context.Context, ledgerAccountID string, snapshot *KiwoomSnapshot) (*BrokerKnownGoodSnapshot, error) {
 	if ledgerAccountID != "account-main" {
 		return nil, errors.New("ledger account is outside the current account-main boundary")
 	}
@@ -60,7 +62,7 @@ func (s *Service) recordKiwoomSnapshot(ctx context.Context, ledgerAccountID stri
 }
 
 func (s *Service) appendKiwoomSnapshot(ctx context.Context, tx *sql.Tx, ledgerAccountID string, snapshot *KiwoomSnapshot) (*BrokerKnownGoodSnapshot, error) {
-	snapshotJSON, snapshotSHA, err := orderJSONHash(snapshot)
+	snapshotJSON, snapshotSHA, err := codec.JSONHash(snapshot)
 	if err != nil {
 		return nil, err
 	}
@@ -105,7 +107,7 @@ func (s *Service) appendKiwoomSnapshot(ctx context.Context, tx *sql.Tx, ledgerAc
 	if err := validateBrokerReconciliation(record, storedSnapshot); err != nil {
 		return nil, err
 	}
-	recordBytes, recordSHA, err := orderJSONHash(record)
+	recordBytes, recordSHA, err := codec.JSONHash(record)
 	if err != nil {
 		return nil, err
 	}
@@ -148,7 +150,7 @@ func (s *Service) ensureBrokerSnapshot(ctx context.Context, tx *sql.Tx, snapshot
 		if err != nil {
 			return "", nil, err
 		}
-		if !safeOrderID(snapshotID) || !sameKiwoomSnapshotIdentity(stored, snapshot) {
+		if !codec.SafeID(snapshotID) || !sameKiwoomSnapshotIdentity(stored, snapshot) {
 			return "", nil, errors.New("stored broker snapshot metadata mismatch")
 		}
 		return snapshotID, stored, nil
@@ -158,11 +160,11 @@ func (s *Service) ensureBrokerSnapshot(ctx context.Context, tx *sql.Tx, snapshot
 	}
 
 	snapshotID = s.id("broker_snapshot")
-	if !safeOrderID(snapshotID) {
+	if !codec.SafeID(snapshotID) {
 		return "", nil, errors.New("broker snapshot identifier is invalid")
 	}
 	recordedAt := s.now().UTC().Format(time.RFC3339Nano)
-	if !canonicalUTCString(recordedAt) {
+	if !codec.CanonicalUTC(recordedAt) {
 		return "", nil, errors.New("broker snapshot recorded_at is invalid")
 	}
 	result, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO broker_snapshots(
@@ -189,13 +191,13 @@ func (s *Service) ensureBrokerSnapshot(ctx context.Context, tx *sql.Tx, snapshot
 		return "", nil, errors.New("fetched_at was already used with a different broker snapshot")
 	}
 	stored, err := decodeStoredBrokerSnapshot(priorJSON, priorSHA)
-	if err == nil && (!safeOrderID(snapshotID) || !sameKiwoomSnapshotIdentity(stored, snapshot)) {
+	if err == nil && (!codec.SafeID(snapshotID) || !sameKiwoomSnapshotIdentity(stored, snapshot)) {
 		return "", nil, errors.New("stored broker snapshot metadata mismatch")
 	}
 	return snapshotID, stored, err
 }
 
-func (s *Service) latestKiwoomSnapshot(ctx context.Context, environment KiwoomEnvironment, exchange KiwoomExchange, accountRef string) (*BrokerKnownGoodSnapshot, error) {
+func (s *Service) LatestBrokerSnapshot(ctx context.Context, environment KiwoomEnvironment, exchange KiwoomExchange, accountRef string) (*BrokerKnownGoodSnapshot, error) {
 	if (environment != KiwoomProduction && environment != KiwoomMock) || exchange != KiwoomKRX || !orderAlias(accountRef, "account") {
 		return nil, errors.New("invalid Kiwoom snapshot identity")
 	}
@@ -207,6 +209,9 @@ func (s *Service) latestKiwoomSnapshot(ctx context.Context, environment KiwoomEn
 		WHERE s.provider='kiwoom' AND s.environment=? AND s.exchange=? AND s.account_ref=?
 		ORDER BY s.fetched_at DESC,s.sequence DESC,r.ledger_revision DESC,r.sequence DESC LIMIT 1`,
 		environment, exchange, accountRef).Scan(&snapshotID, &ledgerAccountID, &ledgerRevision, &fetchedAt, &snapshotSHA, &snapshotJSON, &recordSHA, &recordJSON, &recordRecordedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, contracts.ErrNotFound
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -218,7 +223,7 @@ func (s *Service) latestKiwoomSnapshot(ctx context.Context, environment KiwoomEn
 	if err != nil {
 		return nil, err
 	}
-	if !safeOrderID(snapshotID) || snapshot.Environment != environment || snapshot.Exchange != exchange || snapshot.AccountRef != accountRef || snapshot.FetchedAt != fetchedAt {
+	if !codec.SafeID(snapshotID) || snapshot.Environment != environment || snapshot.Exchange != exchange || snapshot.AccountRef != accountRef || snapshot.FetchedAt != fetchedAt {
 		return nil, errors.New("stored broker snapshot metadata mismatch")
 	}
 	if err := requireReconciliationIdentity(record, snapshotID, ledgerAccountID, ledgerRevision, recordRecordedAt); err != nil {
@@ -227,7 +232,7 @@ func (s *Service) latestKiwoomSnapshot(ctx context.Context, environment KiwoomEn
 	return knownGoodSnapshot(record, snapshot, snapshotSHA), nil
 }
 
-func (s *Service) latestBrokerReconciliation(ctx context.Context) (*BrokerReconciliationView, error) {
+func (s *Service) Reconciliation(ctx context.Context) (*BrokerReconciliationView, error) {
 	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return nil, err
@@ -241,13 +246,16 @@ func (s *Service) latestBrokerReconciliation(ctx context.Context) (*BrokerReconc
 		ORDER BY fetched_at DESC,sequence DESC LIMIT 1`).Scan(
 		&snapshotID, &environment, &exchange, &accountRef, &fetchedAt, &snapshotSHA, &snapshotJSON,
 	); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, contracts.ErrNotFound
+		}
 		return nil, err
 	}
 	snapshot, err := decodeStoredBrokerSnapshot(snapshotJSON, snapshotSHA)
 	if err != nil {
 		return nil, err
 	}
-	if !safeOrderID(snapshotID) || snapshot.Environment != environment || snapshot.Exchange != exchange ||
+	if !codec.SafeID(snapshotID) || snapshot.Environment != environment || snapshot.Exchange != exchange ||
 		snapshot.AccountRef != accountRef || snapshot.FetchedAt != fetchedAt {
 		return nil, errors.New("stored broker snapshot metadata mismatch")
 	}
@@ -312,7 +320,7 @@ func ledgerKRXQuantities(ctx context.Context, q orderQuerier, accountID string) 
 		if err := rows.Scan(&typ, &symbol, &raw, &occurredAt); err != nil {
 			return 0, nil, err
 		}
-		if !canonicalUTCString(occurredAt) {
+		if !codec.CanonicalUTC(occurredAt) {
 			return 0, nil, errors.New("broker ledger occurred_at is not canonical UTC")
 		}
 		if !kiwoomStockPattern.MatchString(symbol) {
@@ -398,16 +406,16 @@ func validateKiwoomSnapshot(snapshot *KiwoomSnapshot) error {
 		snapshot.Currency != "KRW" || snapshot.Positions == nil || snapshot.OpenOrders == nil {
 		return errors.New("broker snapshot identity or completeness is invalid")
 	}
-	if !canonicalUTCString(snapshot.FetchedAt) {
+	if !codec.CanonicalUTC(snapshot.FetchedAt) {
 		return errors.New("broker snapshot fetched_at must be canonical UTC")
 	}
 	for _, value := range []string{snapshot.Totals.UnrealizedPnL, snapshot.Totals.ReturnRatePercent, snapshot.Totals.EstimatedAssets} {
-		if !canonicalDecimal(value, false) {
+		if !codec.CanonicalDecimal(value, false) {
 			return errors.New("broker snapshot totals contain an invalid decimal")
 		}
 	}
 	for _, value := range []string{snapshot.Totals.PurchaseAmount, snapshot.Totals.EvaluationAmount, snapshot.Totals.LoanAmount, snapshot.Totals.CreditLoanAmount, snapshot.Totals.CreditLendingAmount} {
-		if !canonicalDecimal(value, true) {
+		if !codec.CanonicalDecimal(value, true) {
 			return errors.New("broker snapshot totals contain an invalid non-negative decimal")
 		}
 	}
@@ -420,12 +428,12 @@ func validateKiwoomSnapshot(snapshot *KiwoomSnapshot) error {
 			return errors.New("broker position name is invalid")
 		}
 		for _, value := range []string{position.Quantity, position.TradableQuantity, position.AveragePurchasePrice, position.CurrentPrice, position.PurchaseAmount, position.EvaluationAmount, position.WeightPercent} {
-			if !canonicalDecimal(value, true) {
+			if !codec.CanonicalDecimal(value, true) {
 				return errors.New("broker position contains an invalid non-negative decimal")
 			}
 		}
 		for _, value := range []string{position.UnrealizedPnL, position.ReturnRatePercent} {
-			if !canonicalDecimal(value, false) {
+			if !codec.CanonicalDecimal(value, false) {
 				return errors.New("broker position contains an invalid signed decimal")
 			}
 		}
@@ -449,7 +457,7 @@ func validateKiwoomSnapshot(snapshot *KiwoomSnapshot) error {
 			return errors.New("broker open order name is invalid")
 		}
 		for _, value := range []string{order.Quantity, order.Price, order.RemainingQuantity} {
-			if !canonicalDecimal(value, true) {
+			if !codec.CanonicalDecimal(value, true) {
 				return errors.New("broker open order contains an invalid decimal")
 			}
 		}
@@ -463,29 +471,12 @@ func validateKiwoomSnapshot(snapshot *KiwoomSnapshot) error {
 	return nil
 }
 
-func canonicalDecimal(raw string, nonNegative bool) bool {
-	if len(raw) == 0 || len(raw) > 64 {
-		return false
-	}
-	value, err := parseDecimal(raw)
-	if err != nil || (nonNegative && value.Sign() < 0) {
-		return false
-	}
-	canonical, err := formatDecimal(value)
-	return err == nil && canonical == raw
-}
-
-func canonicalUTCString(raw string) bool {
-	parsed, err := time.Parse(time.RFC3339Nano, raw)
-	return err == nil && parsed.UTC().Format(time.RFC3339Nano) == raw
-}
-
 func decodeStoredBrokerSnapshot(raw, expectedSHA string) (*KiwoomSnapshot, error) {
 	var snapshot KiwoomSnapshot
 	if err := json.Unmarshal([]byte(raw), &snapshot); err != nil {
 		return nil, err
 	}
-	canonical, actualSHA, err := orderJSONHash(&snapshot)
+	canonical, actualSHA, err := codec.JSONHash(&snapshot)
 	if err != nil || string(canonical) != raw {
 		return nil, errors.New("stored broker snapshot is not canonical")
 	}
@@ -503,7 +494,7 @@ func decodeBrokerReconciliation(raw, expectedSHA string, snapshot *KiwoomSnapsho
 	if err := json.Unmarshal([]byte(raw), &record); err != nil {
 		return nil, err
 	}
-	canonical, actualSHA, err := orderJSONHash(&record)
+	canonical, actualSHA, err := codec.JSONHash(&record)
 	if err != nil || string(canonical) != raw {
 		return nil, errors.New("stored broker reconciliation is not canonical")
 	}
@@ -517,8 +508,8 @@ func decodeBrokerReconciliation(raw, expectedSHA string, snapshot *KiwoomSnapsho
 }
 
 func validateBrokerReconciliation(record *brokerReconciliationRecord, snapshot *KiwoomSnapshot) error {
-	if record == nil || snapshot == nil || !safeOrderID(record.ReconciliationID) || !safeOrderID(record.SnapshotID) ||
-		record.LedgerAccountID != "account-main" || !ledgerRevisionPattern.MatchString(record.LedgerRevision) || !canonicalUTCString(record.RecordedAt) {
+	if record == nil || snapshot == nil || !codec.SafeID(record.ReconciliationID) || !codec.SafeID(record.SnapshotID) ||
+		record.LedgerAccountID != "account-main" || !ledgerRevisionPattern.MatchString(record.LedgerRevision) || !codec.CanonicalUTC(record.RecordedAt) {
 		return errors.New("broker reconciliation metadata is invalid")
 	}
 	if len(record.PositionDifferences) == 0 && len(snapshot.Positions) != 0 {
@@ -531,7 +522,7 @@ func validateBrokerReconciliation(record *brokerReconciliationRecord, snapshot *
 	}
 	for _, difference := range record.PositionDifferences {
 		if !kiwoomStockPattern.MatchString(difference.Symbol) || difference.Symbol <= previous ||
-			!canonicalDecimal(difference.BrokerQuantity, true) || !canonicalDecimal(difference.LedgerQuantity, true) || !canonicalDecimal(difference.Difference, false) {
+			!codec.CanonicalDecimal(difference.BrokerQuantity, true) || !codec.CanonicalDecimal(difference.LedgerQuantity, true) || !codec.CanonicalDecimal(difference.Difference, false) {
 			return errors.New("broker reconciliation row is invalid")
 		}
 		brokerQuantity, _ := parseDecimal(difference.BrokerQuantity)
@@ -591,8 +582,8 @@ func proveBrokerRecovery(ctx context.Context, q orderQuerier) (brokerRecoveryPro
 			rows.Close()
 			return brokerRecoveryProof{}, fmt.Errorf("decode broker snapshot %q: %w", snapshotID, err)
 		}
-		if !safeOrderID(snapshotID) || provider != "kiwoom" || string(snapshot.Environment) != environment || string(snapshot.Exchange) != exchange ||
-			snapshot.AccountRef != accountRef || snapshot.FetchedAt != fetchedAt || !canonicalUTCString(recordedAt) {
+		if !codec.SafeID(snapshotID) || provider != "kiwoom" || string(snapshot.Environment) != environment || string(snapshot.Exchange) != exchange ||
+			snapshot.AccountRef != accountRef || snapshot.FetchedAt != fetchedAt || !codec.CanonicalUTC(recordedAt) {
 			rows.Close()
 			return brokerRecoveryProof{}, fmt.Errorf("broker snapshot %q metadata mismatch", snapshotID)
 		}

@@ -2,6 +2,7 @@ package ledger
 
 import (
 	"database/sql"
+	"errors"
 	"omni-folio/services/core/internal/modules/ledger/contracts"
 	"omni-folio/services/core/internal/modules/ledger/internal/adapters/sqlite"
 	"omni-folio/services/core/internal/storage/observation"
@@ -18,6 +19,9 @@ type Config struct {
 }
 
 func Compose(config Config) (contracts.Service, error) {
+	if !config.Observations.MatchesDB(config.DB) {
+		return nil, errors.New("ledger observation registry does not match database")
+	}
 	reader, err := config.Observations.LedgerReader(sqlite.ReadStatements())
 	if err != nil {
 		return nil, err
