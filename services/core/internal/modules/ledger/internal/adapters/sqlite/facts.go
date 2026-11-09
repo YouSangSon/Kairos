@@ -219,3 +219,11 @@ func (s *Service) VerifyBrokerBackup(ctx context.Context, ref storage.Observatio
 	}
 	return contracts.BrokerRecovery{SHA256: broker.SHA256, Snapshots: broker.Snapshots, Reconciliations: broker.Reconciliations, LedgerRevision: revision}, nil
 }
+
+func (s *Service) VerifyStartup(ctx context.Context, ref storage.ObservationRef) error {
+	q, err := s.observed(ref)
+	if err != nil {
+		return err
+	}
+	return proveLedgerReplayState(ctx, q, false)
+}

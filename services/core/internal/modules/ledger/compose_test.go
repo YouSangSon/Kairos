@@ -307,3 +307,21 @@ func TestLegacyV11BrokerProofDoesNotRequireLedgerReplayTables(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestStartupReplayAuthorityDoesNotAddSnapshotValidation(t *testing.T) {
+	api, db, registry := testLedger(t)
+	if _, err := db.Exec(`UPDATE ledger_meta SET recorded_at='invalid' WHERE singleton=1`); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.VerifyBackup(context.Background(), func(ref storage.ObservationRef, _ time.Time) error {
+		if err := api.VerifyStartup(context.Background(), ref); err != nil {
+			return err
+		}
+		if _, err := api.VerifyBackup(context.Background(), ref, false); err == nil {
+			t.Fatal("snapshot timestamp fixture was accepted")
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}

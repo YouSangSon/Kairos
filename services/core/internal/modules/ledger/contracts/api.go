@@ -27,6 +27,7 @@ type Broker interface {
 	Reconciliation(context.Context) (*BrokerReconciliationView, error)
 }
 type Maintenance interface {
+	VerifyStartup(context.Context, storage.ObservationRef) error
 	VerifyBrokerBackup(context.Context, storage.ObservationRef) (BrokerRecovery, error)
 	PreviewReplay(context.Context) (*ReplayPreview, error)
 	ActivateReplay(context.Context, int64, string, string) (*ReplayPreview, error)
