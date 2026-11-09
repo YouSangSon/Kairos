@@ -2,7 +2,7 @@
 
 - 설계 기준일: 2026-11-05. 코드 기준: `add8787eaa5f348daeea97df2df5cd06de3b90a8`.
 - 범위: Go core, Flutter client, Python research, 계약·테스트·빌드·운영 도구의 연결부.
-- 상태: 사용자 요청으로 구현을 중단했다. 아래 경로·인터페이스는 목표 구조다. 적용 범위와 재개 지점은 문서 끝의 중단 기록을 따른다.
+- 상태: 구현은 중단 상태이며, 2026-11-09 요청으로 15절의 모듈·소유권 보완 설계를 작성했다. 아래 경로·인터페이스는 목표 구조다. 실제 적용 범위는 14절, 후속 설계 제안은 15절을 따른다.
 - 상위 결정: [ADR-0002](../adr/0002-domain-module-boundaries.md). 제품 기능과 승격 권한은 [CONTEXT](../../CONTEXT.md), [GATES](../../GATES.md)가 소유한다.
 
 ## 1. 목표와 설계의 한계
@@ -430,3 +430,156 @@ Flutter의 새 `data/` 소스는 전역 ignore 패턴에 걸려 정확한 파일
 작업 전용 Go 캐시 197,448 KiB와 Flutter WIP 캐시 60,612 KiB를 삭제했다. 독립 portfolio 작업에서도 전용 캐시 150,356 KiB를 정리했다. Python bytecode 잔여는 없었으며, 임시 추출 스크립트와 복사 완료된 임시 로그를 정리했다. make의 소유 테스트 임시 루트 제거를 확인했다. 기존 main의 Flutter build/.dart_tool과 공유·전역 캐시는 기존 자원이므로 보존했다. 이번 작업은 Podman 컨테이너·이미지·볼륨을 생성하지 않았다.
 
 모든 구현 에이전트는 중단했고 활성 작업 handle은 남기지 않는다. 재개용 소스 worktree와 WIP commit은 의도적으로 보존한다. 최종 독립 구현 리뷰·smoke·Podman/release 검사·CI·실제 키움 연결은 미실행이며, 다음 재개에서 필요한 검증으로 남긴다.
+
+## 15. 업무 모듈과 데이터 소유권 보완 설계 — 2026-11-09
+
+### 15.1 범위와 적용 우선순위
+
+이번 요청은 **설계만** 수행한다. 확인한 checkout은 `main@f6a6075`이며 작업 트리는 깨끗했다. 14절의 구현 중단 기록은 과거 사실로 보존한다. 이 절은 사용자의 여섯 가지 요구를 기존 설계에 연결한 후속 제안이다. 아직 구현·배포됐거나 사용자가 세부안을 승인한 것으로 기록하지 않는다.
+
+1–13절의 금액·wire·트랜잭션·수명·복구 계약과 플랫폼 확장 설계는 유지한다. 이 절은 **후속 구현의 물리적 모듈 배치와 접근 제한**을 구체화한다. 3절의 책임 영역은 모두 독립 모듈이라는 뜻이 아니다. 5절의 전역 application/adapter 배치는 아래 모듈별 소유 배치로 옮기는 제안이며, 전역 SQLite adapter에 모든 테이블 접근을 계속 모으는 안을 대체한다. 3절의 읽기 SQL join 허용은 같은 owner 내부 join으로 제한하며 다른 owner 데이터는 공개 조회 계약으로 받는다. 6절의 Flutter 7 feature는 화면 경계다. 서버의 데이터 소유 모듈과 일대일 대응시키지 않는다.
+
+기존 임시 worktree들은 Git 목록에 `prunable`로 남고 실제 경로는 사라졌다. `8e8177d`, `32f40aa` 커밋 객체는 확인했다. 구현 재개 시 해당 커밋에서 경로를 복원한 뒤 최신 main과 비교한다. 기존 경로가 있다고 가정하거나 worktree 목록을 먼저 prune하지 않는다.
+
+### 15.2 관측한 구조와 보존할 이유
+
+- `internal/application/ledger/{service,ports,snapshot}.go`와 `internal/adapters/sqlite/ledger.go`는 실제 이식됐다. 다만 application이 CSV를 파싱하고 HTTP status를 가진 `fault.Error`를 반환한다. 레이어 이름만으로 최종 구조를 충족하지 않는다. CSV decoder와 HTTP 오류 매핑을 각 adapter로 옮겨야 한다.
+- `paper_local.go`는 strategy evidence를 SQL로 읽고 runner·authority·order·paper 회계를 조합한다. `paper_performance_policy.go`는 policy 기록, armed account halt, selection rollback을 묶는다. `paper_promotion.go`는 claim과 selection의 오래됨을 검사한다. 이 상태를 각각 독립 모듈로 잘라 transaction을 나누면 안 된다.
+- `internal/architecture/dependencies_test.go`는 재귀 domain import와 일부 application/dispatch 제약을 검사한다. 모듈별 공개 API·모든 테이블 접근·전체 순환 의존 검사는 아직 보장하지 않는다.
+- Flutter는 main의 `app.dart/api.dart/models.dart`에 넓은 결합이 남아 있다. Python은 domain/application/adapters 이식이 반영됐지만 파일 snapshot 이중 읽기 문제는 별도 보류다.
+- 제품의 핵심은 정보→연구→추천/허용된 실행→성과·복기다. 임의 코드를 설치·실행하는 플러그인 제품이라는 근거는 없다. 이번에 plugin loader나 범용 실행 호스트를 추가하지 않는다.
+
+### 15.3 두 구조의 비교와 선택 이유
+
+| 후보 | 동작 방식 | 장점 | 비용·실패 조건 |
+| --- | --- | --- | --- |
+| A: 거래를 하나의 모듈로 묶고 내부 업무 영역 분리 | 주문·권한·예약·선택·paper를 한 owner의 transaction으로 처리 | 현재 원자성 보존, 외부 API가 transaction 조립을 숨김 | 거래 모듈이 상대적으로 크다. 내부 영역의 SQL·공개 타입을 계속 제한해야 함 |
+| B: 주문·위험·선택·paper를 독립 모듈로 분리 | 각 owner가 쓰고 공개 프로토콜로 협력 | 개별 변경·서비스 분리 경계가 작음 | 현재 atomic halt/rollback/admission을 유지하려면 분산 프로토콜 또는 외부 transaction 주입이 필요. 전자는 업무 의미 변경, 후자는 내부 구현 노출 |
+
+**설계 제안은 A다.** 사용자가 요구한 데이터 소유권과 기존 원자성을 함께 만족하는 작은 완전한 전환이다. 미래 서비스 분리는 거래 모듈 전체부터 가능하다. 거래 내부 영역을 서비스로 분리하려면 현재 원자적 계약 변경과 복구 프로토콜을 별도 승인·검증해야 한다. 지금 이벤트 버스로 이 결합을 감추지 않는다.
+
+### 15.4 모듈, 공개 계약, 테이블의 단일 소유자
+
+아래 공개 연산명은 목표 내부 API다. 기존 HTTP/CLI 경로를 추가·변경하는 선언이 아니다. DTO는 명령·결과에 필요한 값만 담고 SQL row, transaction, ORM 모델, HTTP 객체, provider raw payload를 노출하지 않는다.
+
+| 모듈 | 숨기는 업무 책임 | 공개 명령·조회 예 | 소유 테이블/영속 상태 |
+| --- | --- | --- | --- |
+| ledger | 원장 정규화·중복·정정·revision·FIFO·증권사 잔고 대조 | PreviewImport, ApplyImport, Snapshot, Activity, InstrumentActivity, RecordBrokerSnapshot, Reconciliation | events, ledger_meta, previews, receipts, ledger_replay_state, ledger_replay_transition, broker_snapshots, broker_snapshot_reconciliations |
+| marketdata | 상장·가격·환율·입력 버전·출처·시간 | ResolveListing, CapturePrice, ImportOwnerSeries, PriceSnapshot, FXSnapshot, BenchmarkSnapshot | fx_observations, security_price_observations, instrument_listing_events, owner_fx_series_versions, owner_price_series_versions, benchmark_series_versions |
+| watchlist | 관심 종목 설정과 revision CAS | Read, Replace(expectedRevision, items) | watchlist_state |
+| trading | 주문·authority·예약·runner·전략 채택·paper 회계·성과·승격 | RegisterEvidence, SelectStrategy, AdmitPaperSignal, RecordPaperFill, SubmitSyntheticLimit, ReconcileKnownOrder, ApplyPerformancePolicy, PromotePaperCandidate, Halt, Monitor | order_idempotency, order_events, execution_authority_events, risk_reservations, strategy_research_evidence, strategy_selection_events, paper_evaluation_events, paper_accounting_sessions, paper_market_bar_observations, paper_signal_events, paper_execution_authorizations, paper_performance_events, paper_strategy_performance_events, paper_performance_policy_events, paper_runner_leases, paper_promotion_claims, paper_promotion_decisions |
+| portfolio | 평가 가능성·현금/보유 평가·XIRR/TWR·비교 | CurrentValuation, XIRR, TWR, CompareBenchmarks | 권위 테이블 없음. 입력 revision이 포함된 계산 결과만 소유 |
+| research | 재현 가능한 계산·후보 비교·proposal 생성·공개 정보 입력 | BuildManifest, RunExperiment, BuildProposal, EvaluateCapture | hash가 붙은 연구 artifact와 입력 reference. trading 테이블은 소유하지 않음 |
+| maintenance | schema·정합성 검사·백업/복원 | Verify, ExportBackup, RestoreBackup, Migrate | schema_migrations의 유일한 writer와 backup manifest. 일반 업무 테이블의 새 writer가 아님 |
+
+
+001–027의 CREATE TABLE을 조사했다. `events_v5/v8/v9`, `order_idempotency_v7`, `*_new`는 migration 중 사용하는 교체 이름이며 최종 테이블과 같은 owner에 속한다. 새 table/view/trigger의 owner가 미정이면 검사를 실패시킨다. maintenance는 migration/restore 순서를 조율하고 각 module owner는 schema와 proof의 의미를 정의한다.
+
+watchlist는 시장 관측 사실과 변경 이유가 다르고 독립 CAS로 갱신할 수 있어 분리한다. trading의 시장 bar는 외부 시세의 정본이 아니라 해당 paper 실행에서 채택한 immutable evidence다. 등록한 research artifact도 trading이 수락하고 hash를 검증한 증거다. 변경 가능한 연구 파일을 공유 상태로 참조하지 않는다.
+
+### 15.5 배치와 의존 방향
+
+목표 Go 구조는 `internal/modules/<owner>/api.go`, `internal/modules/<owner>/internal/domain/`, `internal/modules/<owner>/internal/application/`, `internal/modules/<owner>/internal/adapters/{sqlite,http,cli,provider,files}/`다. 공개 DTO와 작은 업무 capability 계약은 `internal/modules/<owner>/contracts/`에 둔다. private application은 자신의 contracts만 import하고 domain은 contracts/transport에 의존하지 않는다. module root의 `api.go`/`compose.go`는 구성 진입점을 제공하고 private application이 구현한 contracts의 업무 capability를 반환한다. contracts는 DB/HTTP/private 타입을 import하지 않으며 root를 역으로 import하지 않는다. 모든 함수를 감싸는 facade는 만들지 않는다. `internal/composition/`이 설정·생성·주입·기동·close를 조율하고 main은 인자와 종료 결과를 처리한다.
+
+Go의 nested `internal` 규칙으로 다른 module의 `<owner>/internal/...` import를 컴파일 단계에서 차단한다. composition도 비공개 구현을 직접 import하지 않는다. 각 module의 공개 `Compose` 진입점이 비공개 adapter를 생성하고 composition에서 받은 설정·의존 포트를 연결한다. Compose는 배선만 담당하며 업무 규칙을 갖지 않는다. application/domain에서 Compose 또는 module root로 역방향 import하는 것은 금지한다.
+
+아래 화살표의 실제 업무 import 대상은 상대 owner의 `contracts` package이며 root Compose는 composition에서만 사용한다. 공개 계약의 import 방향은 `portfolio → ledger, marketdata`, `trading → marketdata`, `watchlist → marketdata`다. 마지막 연결은 기존 동작에 listing 검증이 필요한 경우에만 사용하며 새로운 검증 정책을 추가하지 않는다. ledger/marketdata는 다른 업무 module을 import하지 않는다. research와 trading은 기존 version이 붙은 artifact로 연결하고 연구 측은 trading 내부를 import하지 않는다. maintenance는 각 owner의 공개 정합성/backup 계약을 호출한다. owner에서 maintenance로의 의존은 금지한다. shared에는 exact 계산과 작은 계약값만 두며 공통 Service/범용 Repository는 두지 않는다.
+
+composition은 DB pool의 수명을 소유하고 각 module의 Compose에 같은 pool을 주입할 수 있다. pool 공유가 테이블 접근권 공유를 뜻하지는 않는다. DB handle은 module의 비공개 adapter 안에 두고 application에 노출하지 않는다. SQLite 단일 writer/접속 설정을 유지한다. trading transaction 안에서 다른 module의 Repository나 DB 호출을 하지 않는다.
+
+portfolio는 ledger의 공개 snapshot을 한 번 받아 revision으로 고정한 뒤 marketdata에서 필요한 가격/FX의 immutable 버전을 받는다. 모든 module에 걸친 동일 시점 snapshot을 새로 약속하지 않는다. 결과에는 ledger revision, 각 입력 ID/as_of, 계산 version과 부족 사유를 남긴다. 최신 가격 조회 실패 시 이전 값과 새로운 revision을 섞어 새 관측처럼 표시하지 않는다. 기존 history/cutoff 요구가 있는 경로는 같은 cutoff를 명시적으로 전달한다.
+
+Flutter는 기존 7 feature 설계를 유지한다. domain/application은 Flutter/HTTP에 의존하지 않고 data가 endpoint codec을 구현하며 app이 navigation/session을 연결한다. 다른 feature의 data/presentation import는 금지한다. Python research는 하나의 module이며 기존 facade/CLI는 호환 진입점으로 제한한다. 언어 사이는 계약 파일과 artifact로 연결하며 내부 모델을 공통 라이브러리에 밀어 넣지 않는다.
+
+### 15.6 실패·권한·트랜잭션 계약
+
+| 작업 | 한 owner 안에서 commit하는 상태 | 중간 실패·재시도 |
+| --- | --- | --- |
+| ledger ApplyImport | event·revision·receipt | 같은 key/입력은 첫 receipt를 재사용하고 입력이 다르면 기존 충돌 오류. 부분 event를 남기지 않음 |
+| trading admission | signal·intent·authorization·연속 RISK_APPROVED/SUBMIT_DISPATCHED pair·local ACK | 하나라도 실패하면 모두 rollback. signal 재송신으로 authorization을 늘리지 않음 |
+| trading fill | bar proof·capacity·fill·paper 회계·replay revision | 같은 source fill의 중복 효과 없음. 용량 초과/증거 불일치는 모두 rollback |
+| policy | decision·모든 대상 halt·selection rollback·필요한 lease 갱신 | 일부 halt만 성공하지 않음. runner/fence/selection 경합을 같은 transaction에서 다시 검사 |
+| broker submit | preflight 후 권한·예약·dispatch commit → 외부 submit 한 번 → outcome commit | timeout/commit 불명은 unknown. 무조건 재송신 금지. 기존 known-order reconciliation 유지 |
+| promotion | claim commit → immutable 입력으로 DB transaction 밖 비교 → cutoff/selection 재검사 후 finish | crash는 PENDING, 경합은 기존 stale 결과. 제한된 cleanup의 취소/종료 계약 유지 |
+
+조회 snapshot은 업무 실행 권한의 증명이 아니다. 가격/연구 입력을 고정해도 trading은 dispatch 시 자신의 authority·fence·기한·kill switch를 같은 transaction에서 판단한다. IdP/Redis/MQ 도입으로 이 판단을 대체하지 않는다. 시장 외부 조회와 저장 사이에는 listing 재확인을 유지한다. 새 role/tenant/자동매매 허용은 추가하지 않는다.
+
+여러 instance는 composition에서 ID·설정·account scope·client pool을 구분한다. 현재 global selection/runner/policy와 단일 writer를 instance 수만큼 복제하지 않고 같은 authority DB를 참조한다. 여러 DB에 동시에 commit하는 UoW는 공개하지 않는다. DB/cache/MQ/IdP 후보와 이전 조건은 기존 `scalability-and-platform.md`를 따르며 미구현 profile을 설정 선택지에 노출하지 않는다.
+
+### 15.7 확장 계약의 현재와 미래
+
+지금 필요한 확장은 개발자가 추가하는 가격 공급자·broker·입력 형식·연구 전략이다. consumer가 요구하는 작은 port와 composition 등록으로 연결하고 내장 adapter도 같은 contract suite로 검사한다. 범용 등록 기반은 추가하지 않으며 각 port의 실제 입출력·기한·실패/unknown·멱등성 계약을 개별 정의한다.
+
+사용자가 지정한 연구 설정과 artifact는 데이터로 검증하고 실행 코드로 import/eval하지 않는다. 서명이나 설치가 거래 권한을 부여하지 않는다. 사용자 코드 확장이 제품 요구가 되는 경우에만 다음을 도입 전 gate로 적용한다.
+
+- host가 API/schema version, content hash, 허용 action, tenant/account/mode와 실효 여부를 관리한다. 설치·활성화·실행 허가·매매 mandate는 별도 상태다.
+- credentials·DB·임의 network/filesystem을 전달하지 않고 broker 조작을 extension API로 공개하지 않는다. 제안 결과를 host가 다시 검증한 뒤 통상의 trading authority로 전달한다.
+- CPU·메모리·출력 bytes·동시 실행·시간·외부 비용의 상한, cancel→종료 대기→강제 중단과 소유 자원 회수를 host가 강제한다. 기한의 값은 실측과 운영 합의 전에는 정하지 않는다.
+- 제삼자 코드를 in-process Go plugin/Python import로 격리할 수 있다고 보지 않는다. OS sandbox/별도 process 등으로 실제 제한하고 escape·timeout·crash·version 불일치·철회 검사가 통과하기 전에는 허용하지 않는다. 내장 확장도 같은 contract suite를 통과해야 한다.
+
+### 15.8 자동 검사와 TDD 수용 조건
+
+검사 추가 위치는 기존 Go `internal/architecture/dependencies_test.go`, Python `tests/test_boundary.py`, Flutter `test/architecture_test.dart`(checkpoint와 비교 후 신설/통합)다. 존재하지 않는 검사를 실행했다고 기록하지 않는다.
+
+| 검사 | 구현할 판정 | 의도적으로 위반하는 실패 fixture |
+| --- | --- | --- |
+| module import graph | 모든 production package의 import로 module graph를 생성해 cycle 거부. nested internal은 Go compiler도 거부 | A→B→A, 다른 module private import, alias/dot import 우회 |
+| layer graph | domain은 순수 계산, application은 domain/consumer port만 사용. SQL/HTTP/fs/process/환경/clock 생성은 adapter, 생성 배선은 composition에 제한 | application→sqlite, domain→clock.Now, HTTP DTO를 domain에서 반환 |
+| public contract | 업무 공개 함수 인자/결과에서 비공개 row/DB/HTTP/provider 타입 누출 거부. `compose.go`의 construction 설정과 Compose만 DB 주입 예외이며 application/domain에서 호출 금지. scope/iterator가 callback 밖으로 탈출하지 않는 계약 검사 | DB handle을 가진 DTO, 내부 package 타입 alias 재export |
+| table ownership | 단일 owner registry에서 schema inventory와 SQL access 기대값 생성. SQL은 private owner adapter에만 허용. 고정 SQL/승인된 상수를 해석하고 미해결 동적 table 지정은 실패 | 다른 owner SELECT/JOIN/INSERT, 미등록 table/view/trigger, 동적 table 우회 |
+| maintenance 예외 | migration/restore/물리 backup을 path+작업으로 제한하고 일반 command에서 import/실행 금지. 정합성 검사는 owner 계약으로 집계 | maintenance 범용 Query를 application에서 호출, 일반 갱신을 restore로 위장 |
+| Dart/Python | import/export/part/conditional import와 상대/절대 import를 정규화해 production 전체 조사 | feature private 참조, application→file adapter, facade 역방향 import |
+
+SQL 정적 검사만으로 동적 SQL이나 SQLite 공유 pool의 실행 시 접근 통제를 완전히 증명했다고 말하지 않는다. 먼저 SQL 구성 방식을 유한한 literal/const로 제한하고 해석할 수 없으면 거부한다. 금융 계산·선택·복구 증명을 SQL gate로 옮기지 않는다. 이 검사를 위해 공통 SQL broker나 생성 DSL을 도입하지 않는다.
+
+테스트 주도 전환 단위는 기존 업무 작업 하나다. ①현행 입출력/금액/hash/error/순서의 특성화 확인 → ②금지 import/소유권 검사의 RED 확인 → ③모든 호출자와 구현을 함께 이동 → ④집중 계약/통합 검사 → ⑤기존 구현과 임시 alias 삭제. 새 동작은 기대 결과의 RED를 먼저 확인한다. 폴더 이동을 테스트 대신 사용하지 않는다.
+
+| 시나리오 ID | 보존할 결과 | 검증 계층과 기존 근거 |
+| --- | --- | --- |
+| MOD-01 | import 재전송은 receipt를 재사용하고 입력 불일치는 거부 | ledger API/SQLite 통합, `core_test.go`, `internal/adapters/sqlite/ledger_test.go` |
+| MOD-02 | callback/error/commit/cancel/panic에서 부분 쓰기 없음 | 실제 SQLite 통합, 기존 scope 실패 검사 재사용 |
+| MOD-03 | admission/runner heartbeat/policy 경합에서 하나의 유효 authority와 연속 pair 유지 | 실제 DB·독립 접속·barrier 경합, `paper_execution_authority_test.go`, `paper_runner_lease_test.go` 이식 |
+| MOD-04 | dispatch 전 crash는 미송신, dispatch 후 unknown은 재송신하지 않음 | 실제 DB+제어 transport, `kiwoom_order_transport_test.go` 거부/unknown/unauthorized 검사 |
+| MOD-05 | policy 실패로 halt/rollback 중 하나만 남지 않음 | 실제 DB 중간 실패 주입, `paper_performance_policy_test.go` 증명 보존 |
+| MOD-06 | promotion 중 selection이 바뀌면 채택하지 않음 | 실제 DB+비교 중 barrier, `paper_promotion_test.go` cutoff/경합 검사 |
+| MOD-07 | wire/null/배열/필드 순/hash/FIFO 잔여/backup 호환 보존 | contracts fixture+Go/Python 공유 계약+실제 DB restore 검사 |
+| MOD-08 | route를 넘어도 미확정 apply는 처음 포착한 입력/key 유지 | Flutter controller/widget, 기존 import_apply 관련 검사를 이식 |
+| MOD-09 | 공개 정보/capture/research가 자동으로 등록 가능 후보나 실행 권한이 되지 않음 | Python artifact/Go 수락 계약, capture/research/promotion 검사 |
+| MOD-10 | 금지 의존/다른 owner SQL/미지정 table을 CI가 거부 | 위 표의 negative fixture. 일반 build 성공과 별도로 실패 확인 |
+
+이는 기존 규칙에서 도출한 검증 계획이다. 새 매매 정책의 사용자 승인 기록이 아니다. 각 이식 시작 시 시나리오 ID를 실제 test 함수와 연결한다. 미구현 경합 검사나 미실행 검사를 합격으로 처리하지 않는다.
+
+### 15.9 안정 상태를 유지하는 구현 순서와 완료 조건
+
+1. **경계 고정**: owner registry·현행 table inventory·공개 DTO·의존 graph를 고정한다. 기존 root 예외는 path+symbol+이유를 열거하고 증가를 금지한다. migration 이력과 wire bytes는 보존한다.
+2. **원자적으로 완결되는 작은 module부터**: watchlist→marketdata→ledger→portfolio 순으로 비공개 구현·공개 계약·모든 caller·fixture를 함께 옮긴다. 시작 파일은 `watchlist*.go`, `owner_{fx,price}_series*.go`, `fx_observation.go`, `security_price_observation.go`, `instrument_listing*.go`, `market_data.go`, 기존 ledger 분리 파일, `portfolio_*.go`와 대응 HTTP/CLI/test다. 각 단위에서 실재 파일 전체를 열거한 수정 허용 목록을 확정한 뒤 편집한다.
+3. **trading은 하나의 owner로 내부 이식**: order/authority/reservation→paper accounting/fill→strategy registry/selection/policy→promotion/runner 순서다. `order_*.go`, `execution_authority.go`, `paper_*.go`, `strategy_*.go`, `kiwoom_order_{transport,reconciliation}.go`와 caller/test를 추적한다. 이 순서는 trading 내부의 정리 순서이며 각각을 독립 이동 commit으로 강제하지 않는다. 같은 transaction을 호출하는 전체 closure를 한 이동 단위로 옮긴다. root policy/paper가 private journal에 의존한다면 trading transaction kernel과 그 전체 호출 closure를 먼저 함께 옮기고 내부에서 순차 정리한다. 외부 `*sql.Tx`/callback bridge를 임시 공개하지 않는다. 매 단계는 빌드 가능해야 하며 기존 transaction 일부만 다른 module로 옮기지 않는다.
+4. **client/research/maintenance 통합**: Flutter checkpoint의 두 실패와 helper 소유권을 수정하고 7 feature로 이식한다. Python의 기존 public facade/4 CLI/byte 호환을 유지한다. migration/restore/proof를 owner 계약에 연결해 root Service와 공유 DB 직접 의존을 해소한다. 목표 `internal/modules/<owner>/api.go`와 비공개 domain/application/adapter로 옮기면서 기존 경로를 같은 단위에서 삭제한다.
+5. **최종 gate**: 최종 diff에서 `make check` 한 번, 이후 `make smoke`, 필요한 Podman runtime/Flutter release 검사와 독립 리뷰를 수행하고 작업 전용 자원을 청소한다. CI·배포·credential이 필요한 broker 검증은 별도 상태다. 이번 설계에서는 실행하지 않는다.
+
+각 단위의 종료 조건은 모든 caller 이식·기존 경로 삭제·계약/소유권/의존 검사·해당 통합 검사의 통과다. 새 adapter는 실제 구현과 공통 contract suite가 갖춰진 뒤에만 지원 목록에 추가한다. Go/Rust 전환, DB/MQ 도입, auth/live/확장 실행 호스트를 이식의 선행 조건으로 삼지 않는다.
+
+부하·이용 건수·지연 SLO·비용의 현재 실측은 이번에 수집하지 않았다. 처리량을 추측해 cache/queue/DB를 추가하지 않는다. replay와 전수 proof의 비용은 기존 상한을 보존하고 측정 후 별도 projection을 검토한다. 설계 완료는 실제 운영·수익성 검증 완료를 뜻하지 않는다.
+
+
+### 15.10 설계 근거와 구현 착수 조건
+
+작성자는 Git의 `YouSangSon`, 설계 확인 기준은 `f6a6075`다. 이번 요청의 여섯 항목은 각각 15.4(업무·소유권), 15.5(의존·배치), 15.8(자동 검사), 15.6–7(확장·실행 계약), 15.8–9(TDD·단계별 검증), 15.7(조건부 사용자 확장)에 연결했다. 기존 설계와 다른 부분은 15.1에 대체 범위를 표시했다. section별 신규 인터뷰는 기존 목표 합의를 반복하지 말라는 사용자 기준에 따라 생략했다.
+
+이 문서는 아키텍처 설계안이며, 아직 실행 단위별 모든 파일의 이동 목록을 고정한 수정 허용 목록은 아니다. 각 단위에서 root의 실제 호출자·테스트·fixture를 열거하고 공개 DTO 시그니처를 확정하는 일이 구현 시작 gate다. architecture 초안을 구현 준비 완료나 자동 검사 완료로 해석하지 않는다.
+
+
+#### 경계 예외를 좁히는 구체 계약
+
+- `broker_snapshot.go:appendKiwoomSnapshot`은 snapshot 저장과 같은 transaction에서 원장 수량을 읽고 reconciliation을 기록한다. 두 테이블을 ledger의 내부 reconciliation 영역에 귀속시켜 이 원자성을 유지한다. broker 조회는 consumer port로 transaction 밖에서 수행하고, 공개 RecordBrokerSnapshot은 검증된 관측값을 받아 원장 revision과 함께 저장·대조한다. raw Kiwoom wire 타입은 private provider adapter에서 해석한다. trading은 이 테이블을 직접 읽지 않는다.
+- `schema_migrations`는 업무 데이터가 아닌 저장소 제어 metadata다. maintenance만 수정하며 각 owner의 SQLite adapter는 기동·proof에 필요한 version/schema 확인을 읽기 전용으로 수행할 수 있다. owner registry에 이 한 테이블의 읽기 예외와 용도를 기록한다. metadata가 일치한다는 사실만으로 업무 proof를 통과시키지 않는다. maintenance의 public API를 역으로 호출할 필요는 없다.
+- 현행 `createBackup`의 `VACUUM INTO`는 storage 전용 maintenance adapter가 수행한다. 현행 source owner proof → VACUUM INTO → candidate proof → source/candidate 비교의 순서를 보존하며 불일치하면 실패시킨다. 생성된 candidate DB를 변경 불가능한 검증 대상으로 두고, owner별 공개 VerifyBackup이 각자의 상태와 cross-record 증거를 검사한다. 별도 live DB들을 순서대로 읽고 같은 시점 백업이라고 주장하지 않는다. restore는 staging DB에 수행하고 모든 owner proof·기존 manifest/hash 비교가 끝난 뒤 기존 배타적 복구 절차로 전환한다. 업무 테이블을 직접 읽는 범용 maintenance Query API는 노출하지 않는다.
+- 공개 DTO는 owner의 `contracts` package가 소유한다. private application이 contracts를 import해 공개 command/result를 사용하고 domain의 비공개 값으로 변환한다. module root는 private application 생성자를 연결해 contracts의 작은 업무 capability를 반환한다. 다른 module과 inbound adapter는 contracts만 업무 의존성으로 사용한다. 함수마다 interface를 만들거나 root에 같은 메서드의 전달 wrapper를 반복하지 않는다. Serialize/Deserialize나 type alias로 private 타입을 재공개하는 우회는 금지한다. `compose.go`는 설정·pool을 받는 construction 전용 예외이고 업무 API와 별도로 검사한다.
+- composition은 종료 시 신규 요청을 막고 owner별 worker를 취소한 뒤 종료를 기다리며 마지막에 pool/client를 닫는다. worker/child process/stream은 생성 owner가 cancel·join·강제 종료와 남은 자원 회수를 책임진다. 공유 pool을 빌린 module은 pool을 닫지 않는다. scope는 callback 안에서만 유효하며 외부 호출을 transaction 안에 넣지 않는다.
+
+
+### 15.11 이번 설계의 검증 범위
+
+2026-11-09에 새 대화 맥락의 Astra 독립 reviewer가 EGM Design Critic 기준으로 최신 15절과 기존 3·5·14절, ledger port/adapter, broker reconciliation, policy/promotion, backup proof 원본을 대조했다. 지적된 잔고 대조 테이블 누락, construction 타입 예외, schema metadata 읽기, 공개 contracts 위치, transaction 전체 호출 묶음 이식, source/candidate backup 동등 비교를 보완했다. 보완본 재검토에서 남은 Blocker/Major를 발견하지 못했다. 이는 설계 검토 결과이며 실행 검증이 아니다. 대화 맥락 분리는 `fork_turns=none`으로 설정했으며 host 지침 파일까지 제외된다고 주장하지 않는다.
+
+문서 상대 파일 링크·코드 fence·한국어 문체와 `git diff --check`를 검사했다. migration 001–027에서 교체용 이름을 제외한 현재 테이블 이름 33개가 소유권 표/예외 설명에 포함됐는지 기계적으로 대조했다. 이 이름 대조가 SQL 호출 경로 전체의 소유권 검증을 뜻하지는 않는다. 이번 변경은 이 설계 문서 하나뿐이며 production 코드·계약·schema·의존성·설정을 변경하지 않았다. 테스트·빌드·배포와 새 임시 자원 생성은 수행하지 않았다.
