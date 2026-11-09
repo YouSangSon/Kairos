@@ -63,6 +63,11 @@ type Observations interface {
 	DeclareListing(context.Context, InstrumentListingInput) (*InstrumentListingEvent, error)
 	RevokeListing(context.Context, InstrumentListingInput) (*InstrumentListingEvent, error)
 	ResolveListing(context.Context, string, string, string) (*InstrumentListingEvent, error)
+	LatestFX(context.Context, string, string, string, string) (*FXObservation, error)
+}
+
+type CandleSource interface {
+	Candles(context.Context, string, string) (*MarketDataSeries, error)
 }
 
 type RecoveryProof struct {
@@ -88,4 +93,5 @@ type BackupQuery struct{ Schema int }
 
 type Recovery interface {
 	VerifyBackup(context.Context, storage.ObservationRef, BackupQuery) (RecoveryProof, error)
+	VerifyStartup(context.Context, storage.ObservationRef) error
 }

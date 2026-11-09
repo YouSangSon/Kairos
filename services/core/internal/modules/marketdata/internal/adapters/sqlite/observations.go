@@ -123,3 +123,28 @@ func (s *Store) Verify(ctx context.Context, ref storage.ObservationRef, admitted
 	}
 	return result, nil
 }
+
+func (s *Store) ProveBenchmark(ctx context.Context, ref storage.ObservationRef) error {
+	handle, err := s.reader.Resolve(ref)
+	if err != nil {
+		return err
+	}
+	_, err = proveBenchmarkSeriesRecovery(ctx, scopedReader{handle, s.canonical})
+	return err
+}
+func (s *Store) ProveOwnerFX(ctx context.Context, ref storage.ObservationRef) error {
+	handle, err := s.reader.Resolve(ref)
+	if err != nil {
+		return err
+	}
+	_, err = proveOwnerFXSeriesRecovery(ctx, scopedReader{handle, s.canonical})
+	return err
+}
+func (s *Store) ProveOwnerPrice(ctx context.Context, ref storage.ObservationRef, admitted map[string]struct{}) error {
+	handle, err := s.reader.Resolve(ref)
+	if err != nil {
+		return err
+	}
+	_, err = proveOwnerPriceSeriesRecovery(ctx, scopedReader{handle, s.canonical}, admitted)
+	return err
+}

@@ -40,6 +40,7 @@ type Reader interface {
 	Schema(context.Context) error
 	FXBySource(context.Context, string, string) (*c.FXObservation, error)
 	PriceBySource(context.Context, string, string) (*c.SecurityPriceObservation, error)
+	LatestFX(context.Context, string, string, string, string) (*c.FXObservation, error)
 	FXObservations(context.Context) ([]c.FXObservation, ObservationProof, error)
 	PriceObservations(context.Context) ([]c.SecurityPriceObservation, ObservationProof, error)
 	Listings(context.Context) (map[string]c.InstrumentListingEvent, ListingProof, error)
@@ -68,6 +69,9 @@ type Repository interface {
 	ReadInputs(context.Context, storage.ObservationRef, map[string]struct{}, c.ValuationQuery) (c.ValuationInputs, error)
 	HasOwnerPrices(context.Context, storage.ObservationRef) (bool, error)
 	Verify(context.Context, storage.ObservationRef, map[string]struct{}, c.BackupQuery) (c.RecoveryProof, error)
+	ProveBenchmark(context.Context, storage.ObservationRef) error
+	ProveOwnerFX(context.Context, storage.ObservationRef) error
+	ProveOwnerPrice(context.Context, storage.ObservationRef, map[string]struct{}) error
 }
 
 type Decoder interface {

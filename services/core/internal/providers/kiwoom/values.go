@@ -15,7 +15,7 @@ const marketDataAdjustmentUnspecified = "unspecified"
 var canonicalUTCString = codec.CanonicalUTC
 var parseDecimal = exact.ParseDecimal
 var formatDecimal = exact.FormatDecimal
-var errMarketDataNotFound = errors.New("market data not found")
+var errMarketDataNotFound = market.ErrMarketDataNotFound
 
 type MarketDataSeries = market.MarketDataSeries
 type MarketDataBar = market.MarketDataBar

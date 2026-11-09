@@ -31,6 +31,23 @@ func (s *Service) VerifyBackup(ctx context.Context, ref storage.ObservationRef, 
 	return s.store.Verify(ctx, ref, admitted, query)
 }
 
+func (s *Service) VerifyStartup(ctx context.Context, ref storage.ObservationRef) error {
+	if err := s.store.ProveBenchmark(ctx, ref); err != nil {
+		return fmt.Errorf("benchmark series startup recovery: %w", err)
+	}
+	if err := s.store.ProveOwnerFX(ctx, ref); err != nil {
+		return fmt.Errorf("owner FX series startup recovery: %w", err)
+	}
+	admitted, err := s.admitted(ctx, ref, true)
+	if err != nil {
+		return fmt.Errorf("owner price series startup recovery: %w", err)
+	}
+	if err := s.store.ProveOwnerPrice(ctx, ref, admitted); err != nil {
+		return fmt.Errorf("owner price series startup recovery: %w", err)
+	}
+	return nil
+}
+
 func (s *Service) admitted(ctx context.Context, ref storage.ObservationRef, prices bool) (map[string]struct{}, error) {
 	if !prices {
 		return nil, nil
@@ -187,3 +204,16 @@ func (s *Service) recordListing(ctx context.Context, eventType string, input c.I
 
 var ErrNotFound = c.ErrNotFound
 var ErrListingNotFound = c.ErrListingNotFound
+
+func (s *Service) LatestFX(ctx context.Context, source, base, quote, asOf string) (*c.FXObservation, error) {
+	var result *c.FXObservation
+	err := s.store.Read(ctx, func(scope Reader) error {
+		var err error
+		result, err = scope.LatestFX(ctx, source, base, quote, asOf)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
+}

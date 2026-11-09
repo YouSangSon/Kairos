@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	c "omni-folio/services/core/internal/modules/marketdata/contracts"
 	"regexp"
 )
 
@@ -18,7 +19,7 @@ type fxObservationRecoveryProof struct {
 	Observations int
 }
 
-var errFXObservationNotFound = errors.New("FX observation not found")
+var errFXObservationNotFound = c.ErrFXNotFound
 
 func loadFXObservationBySourceID(ctx context.Context, q orderQuerier, source, sourceID string) (*FXObservation, error) {
 	var storedSHA string

@@ -60,7 +60,7 @@ func (s *Service) ImportOwnerFX(ctx context.Context, raw []byte) (*c.OwnerFXSeri
 			if prior.DataSHA256 != sha {
 				return c.ErrConflict
 			}
-			result = ownerFXReceipt(prior)
+			result = OwnerFXReceipt(prior)
 			return nil
 		}
 		for _, mark := range legacy {
@@ -76,7 +76,7 @@ func (s *Service) ImportOwnerFX(ctx context.Context, raw []byte) (*c.OwnerFXSeri
 		if err := scope.InsertOwnerFX(ctx, record, canonical); err != nil {
 			return errors.New("owner FX series could not be stored")
 		}
-		result = ownerFXReceipt(&record)
+		result = OwnerFXReceipt(&record)
 		return nil
 	})
 	if err != nil {
@@ -103,7 +103,7 @@ func (s *Service) ImportBenchmark(ctx context.Context, raw []byte) (*c.Benchmark
 			if prior.DataSHA256 != sha {
 				return c.ErrConflict
 			}
-			result = benchmarkReceipt(prior)
+			result = BenchmarkReceipt(prior)
 			return nil
 		}
 		definition, err := scope.LatestBenchmark(ctx, input.BenchmarkID)
@@ -121,7 +121,7 @@ func (s *Service) ImportBenchmark(ctx context.Context, raw []byte) (*c.Benchmark
 		if err := scope.InsertBenchmark(ctx, record, canonical); err != nil {
 			return errors.New("benchmark series could not be stored")
 		}
-		result = benchmarkReceipt(&record)
+		result = BenchmarkReceipt(&record)
 		return nil
 	})
 	if err != nil {
@@ -146,7 +146,7 @@ func (s *Service) BenchmarkStatus(ctx context.Context, id, version string) (*c.B
 		if record == nil {
 			return errors.New("benchmark index series was not found")
 		}
-		result = benchmarkReceipt(record)
+		result = BenchmarkReceipt(record)
 		return nil
 	})
 	if err != nil {
@@ -178,7 +178,7 @@ func (s *ScopedImporter) ImportOwnerPriceScoped(ctx context.Context, ref storage
 			if prior.DataSHA256 != sha {
 				return c.ErrConflict
 			}
-			result = ownerPriceReceipt(prior)
+			result = OwnerPriceReceipt(prior)
 			return nil
 		}
 		for _, mark := range legacy {
@@ -194,7 +194,7 @@ func (s *ScopedImporter) ImportOwnerPriceScoped(ctx context.Context, ref storage
 		if err := scope.InsertOwnerPrice(ctx, record, canonical); err != nil {
 			return errors.New("owner price series could not be stored")
 		}
-		result = ownerPriceReceipt(&record)
+		result = OwnerPriceReceipt(&record)
 		return nil
 	})
 	if err != nil {

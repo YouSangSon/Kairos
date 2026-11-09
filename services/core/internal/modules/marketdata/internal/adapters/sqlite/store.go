@@ -73,6 +73,10 @@ func (s *scope) PriceBySource(ctx context.Context, source, id string) (*c.Securi
 	}
 	return v, err
 }
+
+func (s *scope) LatestFX(ctx context.Context, source, base, quote, asOf string) (*c.FXObservation, error) {
+	return latestDirectFXObservation(ctx, s.q, source, base, quote, asOf)
+}
 func (s *scope) FXObservations(ctx context.Context) ([]c.FXObservation, application.ObservationProof, error) {
 	values, proof, err := replayFXObservations(ctx, s.q)
 	return values, application.ObservationProof{SHA256: proof.SHA256, Observations: proof.Observations}, err
