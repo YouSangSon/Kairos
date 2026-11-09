@@ -10,6 +10,7 @@ type Imports interface {
 	ApplyImport(context.Context, ApplyRequest) (*ApplyReceipt, *Error)
 }
 type Queries interface {
+	Status(context.Context) (Status, error)
 	CanonicalInstrumentID(string) string
 	Snapshot(context.Context) (*PortfolioSnapshot, error)
 	Activity(context.Context, int, *ActivityCursor) (*LedgerActivityPage, error)
