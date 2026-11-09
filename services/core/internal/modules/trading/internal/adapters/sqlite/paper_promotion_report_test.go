@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"omni-folio/services/core/internal/researchdomain"
+	"omni-folio/services/core/internal/modules/trading/contracts"
 )
 
 func TestPaperPromotionReportEmptyReadOnlyObservation(t *testing.T) {
@@ -203,7 +203,7 @@ func TestPaperPromotionReportCancelledContextAndStorageErrorsAreReadOnly(t *test
 }
 
 func TestPaperPromotionReportPublicMetricBoundsPreserveExactRatios(t *testing.T) {
-	valid := researchdomain.Metrics{AfterCostReturn: "-1.019020000000000001", MaxDrawdown: "1.01902", TradeCount: "3", TradeCountDefinition: "completed_long_only_round_trips", Turnover: "2.000000000000000001"}
+	valid := contracts.PromotionMetrics{AfterCostReturn: "-1.019020000000000001", MaxDrawdown: "1.01902", TradeCount: "3", TradeCountDefinition: "completed_long_only_round_trips", Turnover: "2.000000000000000001"}
 	want := PaperPromotionReportMetrics{AfterCostReturn: valid.AfterCostReturn, MaxDrawdown: valid.MaxDrawdown, RoundTrips: valid.TradeCount, Turnover: valid.Turnover}
 	if got, err := projectPaperPromotionReportMetrics(valid); err != nil || got != want {
 		t.Fatalf("exact ratios were rounded or incorrectly bounded: %+v, %v", got, err)
@@ -213,19 +213,19 @@ func TestPaperPromotionReportPublicMetricBoundsPreserveExactRatios(t *testing.T)
 	if got, err := projectPaperPromotionReportMetrics(boundary); err != nil || got.AfterCostReturn != boundary.AfterCostReturn || got.RoundTrips != boundary.TradeCount {
 		t.Fatalf("public 128-character scalar boundary: %+v, %v", got, err)
 	}
-	for name, mutate := range map[string]func(*researchdomain.Metrics){
-		"return cap":      func(m *researchdomain.Metrics) { m.AfterCostReturn = strings.Repeat("9", 129) },
-		"drawdown cap":    func(m *researchdomain.Metrics) { m.MaxDrawdown = strings.Repeat("9", 129) },
-		"round-trip cap":  func(m *researchdomain.Metrics) { m.TradeCount = strings.Repeat("9", 129) },
-		"turnover cap":    func(m *researchdomain.Metrics) { m.Turnover = strings.Repeat("9", 129) },
-		"private metric":  func(m *researchdomain.Metrics) { m.AfterCostReturn = "private-metric" },
-		"negative zero":   func(m *researchdomain.Metrics) { m.AfterCostReturn = "-0" },
-		"noncanonical":    func(m *researchdomain.Metrics) { m.Turnover = "1.0" },
-		"drawdown sign":   func(m *researchdomain.Metrics) { m.MaxDrawdown = "-0.1" },
-		"turnover sign":   func(m *researchdomain.Metrics) { m.Turnover = "-0.1" },
-		"fractional trip": func(m *researchdomain.Metrics) { m.TradeCount = "0.5" },
-		"negative trip":   func(m *researchdomain.Metrics) { m.TradeCount = "-1" },
-		"count meaning":   func(m *researchdomain.Metrics) { m.TradeCountDefinition = "fills" },
+	for name, mutate := range map[string]func(*contracts.PromotionMetrics){
+		"return cap":      func(m *contracts.PromotionMetrics) { m.AfterCostReturn = strings.Repeat("9", 129) },
+		"drawdown cap":    func(m *contracts.PromotionMetrics) { m.MaxDrawdown = strings.Repeat("9", 129) },
+		"round-trip cap":  func(m *contracts.PromotionMetrics) { m.TradeCount = strings.Repeat("9", 129) },
+		"turnover cap":    func(m *contracts.PromotionMetrics) { m.Turnover = strings.Repeat("9", 129) },
+		"private metric":  func(m *contracts.PromotionMetrics) { m.AfterCostReturn = "private-metric" },
+		"negative zero":   func(m *contracts.PromotionMetrics) { m.AfterCostReturn = "-0" },
+		"noncanonical":    func(m *contracts.PromotionMetrics) { m.Turnover = "1.0" },
+		"drawdown sign":   func(m *contracts.PromotionMetrics) { m.MaxDrawdown = "-0.1" },
+		"turnover sign":   func(m *contracts.PromotionMetrics) { m.Turnover = "-0.1" },
+		"fractional trip": func(m *contracts.PromotionMetrics) { m.TradeCount = "0.5" },
+		"negative trip":   func(m *contracts.PromotionMetrics) { m.TradeCount = "-1" },
+		"count meaning":   func(m *contracts.PromotionMetrics) { m.TradeCountDefinition = "fills" },
 	} {
 		t.Run(name, func(t *testing.T) {
 			invalid := valid

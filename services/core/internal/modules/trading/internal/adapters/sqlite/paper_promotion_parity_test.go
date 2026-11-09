@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"omni-folio/services/core/internal/paperdomain"
-	"omni-folio/services/core/internal/researchdomain"
+	"omni-folio/services/core/internal/modules/trading/internal/domain/paper"
+	"omni-folio/services/core/internal/modules/trading/internal/domain/research"
 )
 
 func TestPaperPromotionFoldMatchesActualPythonV2MetricsAndFills(t *testing.T) {
