@@ -1,6 +1,9 @@
 package ownership
 
-import "sort"
+import (
+	"sort"
+	"strings"
+)
 
 const ControlTable = "schema_migrations"
 
@@ -24,18 +27,45 @@ var owners = map[string]string{
 
 func Canonical(table string) (string, bool) {
 	switch table {
-	case "events_v5", "events_v8", "events_v9": table = "events"
-	case "order_idempotency_v7": table = "order_idempotency"
+	case "events_v5", "events_v8", "events_v9":
+		table = "events"
+	case "order_idempotency_v7":
+		table = "order_idempotency"
 	}
-	if len(table) > 4 && table[len(table)-4:] == "_new" { table = table[:len(table)-4] }
+	if len(table) > 4 && table[len(table)-4:] == "_new" {
+		table = table[:len(table)-4]
+	}
 	_, ok := owners[table]
 	return table, ok
 }
 
 func Owner(table string) (string, bool) {
 	table, ok := Canonical(table)
-	if !ok { return "", false }
+	if !ok {
+		return "", false
+	}
 	return owners[table], true
+}
+
+func ObjectOwner(name string) (string, bool) {
+	if owner, ok := Owner(name); ok {
+		return owner, true
+	}
+	aliases := map[string]string{
+		"execution_authority_latest_idx": "execution_authority_events",
+		"owner_price_series_latest_idx":  "owner_price_series_versions",
+		"owner_fx_series_latest_idx":     "owner_fx_series_versions",
+		"benchmark_series_latest_idx":    "benchmark_series_versions",
+	}
+	if table, ok := aliases[name]; ok {
+		return Owner(table)
+	}
+	for table, owner := range owners {
+		if strings.HasPrefix(name, table+"_") {
+			return owner, true
+		}
+	}
+	return "", false
 }
 
 func Tables(owner string) []string {
