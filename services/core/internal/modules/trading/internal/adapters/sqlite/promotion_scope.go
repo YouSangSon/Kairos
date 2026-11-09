@@ -31,10 +31,14 @@ func (s *Store) LoadPromotion(ctx context.Context, id string) (*application.Prom
 	return loadPaperPromotion(ctx, s.db, id)
 }
 func (j *writeScope) OrderSequence(ctx context.Context) (int64, error) {
-	return maxSequence(ctx, j.tx, "order_events")
+	var sequence int64
+	err := j.tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(sequence),0) FROM order_events`).Scan(&sequence)
+	return sequence, err
 }
 func (j *writeScope) ResearchSequence(ctx context.Context) (int64, error) {
-	return maxSequence(ctx, j.tx, "strategy_research_evidence")
+	var sequence int64
+	err := j.tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(sequence),0) FROM strategy_research_evidence`).Scan(&sequence)
+	return sequence, err
 }
 func (j *writeScope) PreviousPromotionAttempt(ctx context.Context) (string, error) {
 	var id string
