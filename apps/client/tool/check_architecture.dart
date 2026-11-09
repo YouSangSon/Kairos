@@ -345,6 +345,11 @@ Iterable<_Token> _tokens(String source) sync* {
       i += marker.length;
       final value = StringBuffer();
       while (i < source.length && !source.startsWith(marker, i)) {
+        if (!raw && source[i] == r'$') {
+          throw const FormatException(
+            'Interpolation in library metadata or URIs is unsupported',
+          );
+        }
         if (!raw && source[i] == r'\') {
           i++;
           if (i >= source.length) throw const FormatException('Invalid escape');

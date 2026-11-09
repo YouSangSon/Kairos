@@ -106,11 +106,61 @@ void main() {
         );
         final preview = await api.previewOwnerData(original.input);
         final result = await api.applyOwnerData(preview);
-        expect(result.review.summary.sameAs(original.summary), isTrue);
+        expect(
+          encodeOwnerDataSummary(result.review.summary),
+          (c['preview'] as Json)['summary'],
+        );
         expect(calls, [
           '/v1/market-data/imports/preview',
           '/v1/market-data/imports/apply',
         ]);
+      }
+    },
+  );
+
+  test(
+    'a receipt with any changed summary field preserves pending input',
+    () async {
+      for (final c in cases()) {
+        final request = review(c);
+        final originalSummary = (c['preview'] as Json)['summary'] as Json;
+        for (final field in originalSummary.keys.where(
+          (key) => key != 'authority',
+        )) {
+          final altered = copy(originalSummary);
+          altered[field] = switch (altered[field]) {
+            bool value => !value,
+            int value => value + 1,
+            String value => '${value}different',
+            null => 'different',
+            _ => throw StateError('Unexpected summary field $field'),
+          };
+          final wrong = OwnerDataPreview(
+            request.input,
+            decodeOwnerDataSummary(request.kind, altered),
+          );
+          var stored = 0;
+          final api = _Api();
+          api.previewHandler = (_) async => request;
+          api.applyHandler = (_) async =>
+              OwnerDataReceipt(wrong, '2026-01-01T00:00:00Z');
+          final controller = testOwnerDataImportController(
+            api,
+            onStored: () => stored++,
+          );
+          addTearDown(controller.dispose);
+          await controller.selectFile(() async => request.input);
+          await controller.preview();
+          await controller.apply();
+          expect(controller.pending, same(request), reason: field);
+          expect(controller.receipt, isNull, reason: field);
+          expect(stored, 0, reason: field);
+          api.applyHandler = (value) async =>
+              decodeOwnerDataReceipt(c['result'] as Json, value);
+          await controller.apply();
+          expect(controller.pending, isNull, reason: field);
+          expect(stored, 1, reason: field);
+        }
       }
     },
   );

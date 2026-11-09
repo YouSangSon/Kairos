@@ -105,6 +105,19 @@ class Value {
     }
   });
 
+  test('interpolated metadata cannot hide imports or exports', () {
+    for (final directive in ["import 'dart:io';", "export 'dart:io';"]) {
+      expect(
+        architectureViolations({
+          'features/ledger/domain/value.dart':
+              r"@Deprecated('${')'}') " + directive,
+        }),
+        isNotEmpty,
+        reason: directive,
+      );
+    }
+  });
+
   test('rejects import, export and conditional dependency cycles', () {
     for (final directive in [
       "import 'nested/b.dart';",

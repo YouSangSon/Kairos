@@ -83,5 +83,3 @@ class WatchlistReport {
   final WatchlistState watchlist;
   final List<WatchlistQuote> quotes;
 }
-
-// Correlates a server input-only review with the exact posted text, not a local hash proof.
