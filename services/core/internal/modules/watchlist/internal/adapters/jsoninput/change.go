@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"omni-folio/services/core/internal/codec"
 	c "omni-folio/services/core/internal/modules/watchlist/contracts"
-	"omni-folio/services/core/internal/modules/watchlist/internal/domain"
+	"omni-folio/services/core/internal/modules/watchlist/internal/application"
 	"unicode/utf8"
 )
 
@@ -33,6 +33,6 @@ func Decode(raw []byte) (*c.WatchlistChange, error) {
 		}
 		change.Entries = append(change.Entries, entry)
 	}
-	change.Entries, err = domain.CanonicalEntries(change.Entries)
+	change.Entries, err = application.CanonicalEntries(change.Entries)
 	return &change, err
 }

@@ -2,7 +2,6 @@ package domain
 
 import (
 	"encoding/json"
-	market "omni-folio/services/core/internal/modules/marketdata/contracts"
 	"os"
 	"reflect"
 	"strings"
@@ -35,15 +34,12 @@ func TestPortfolioBenchmarksIndependentReferenceCases(t *testing.T) {
 	}
 	for _, test := range cases.Cases {
 		t.Run(test.Name, func(t *testing.T) {
-			var input market.BenchmarkSeriesInput
-			if err := json.Unmarshal([]byte(benchmarkSeriesTestInput), &input); err != nil {
-				t.Fatal(err)
-			}
+			input := BenchmarkSeriesInput{SchemaVersion: "benchmark-index-series.v1", BenchmarkID: "test_reference", Label: "Synthetic test reference", Currency: "KRW", ReturnBasis: "gross_total_return", SourceReference: "https://example.invalid/test-methodology", SourceVersion: "test-v1", Sample: true, FetchedAt: "2026-01-01T00:00:00Z", Points: []BenchmarkIndexPoint{{ObservedAt: "2025-01-01T00:00:00Z"}, {ObservedAt: "2026-01-01T00:00:00Z"}}}
 			input.Currency = test.Currency
 			input.Sample = false
 			input.Points[0].Level = test.Start
 			input.Points[1].Level = test.End
-			record := benchmarkSeriesRecord{Sequence: 1, Input: input, DataSHA256: strings.Repeat("1", 64), RecordedAt: "2026-01-01T00:00:00Z"}
+			record := BenchmarkVersion{Sequence: 1, Input: input, DataSHA256: strings.Repeat("1", 64), RecordedAt: "2026-01-01T00:00:00Z"}
 			marks := twrMarks{}
 			if test.FXStart != nil {
 				marks.fx = []FXObservation{{ObservationID: "start", Source: "local_fixture", BaseCurrency: "USD", QuoteCurrency: "KRW", Rate: *test.FXStart, ObservedAt: input.Points[0].ObservedAt, FetchedAt: input.FetchedAt, RecordedAt: record.RecordedAt}, {ObservationID: "end", Source: "local_fixture", BaseCurrency: "USD", QuoteCurrency: "KRW", Rate: *test.FXEnd, ObservedAt: input.Points[1].ObservedAt, FetchedAt: input.FetchedAt, RecordedAt: record.RecordedAt}}
@@ -86,16 +82,3 @@ func mustTime(raw string) time.Time {
 	}
 	return at
 }
-
-const benchmarkSeriesTestInput = `{
- "schema_version":"benchmark-index-series.v1",
- "benchmark_id":"test_reference",
- "label":"Synthetic test reference",
- "currency":"KRW",
- "return_basis":"gross_total_return",
- "source_reference":"https://example.invalid/test-methodology",
- "source_version":"test-v1",
- "sample":true,
- "fetched_at":"2026-01-01T00:00:00Z",
- "points":[{"observed_at":"2025-01-01T00:00:00Z","level":"100"},{"observed_at":"2026-01-01T00:00:00Z","level":"110"}]
-}`

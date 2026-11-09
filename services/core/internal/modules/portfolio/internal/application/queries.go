@@ -17,21 +17,22 @@ type Queries struct {
 
 var currencyCode = regexp.MustCompile(`^[A-Z]{3}$`)
 
-func (q *Queries) read(ctx context.Context, query c.InputQuery) (c.Inputs, error) {
+func (q *Queries) read(ctx context.Context, query c.InputQuery) (domain.Inputs, error) {
 	if q == nil || q.Inputs == nil || q.Now == nil {
-		return c.Inputs{}, errors.New("portfolio service is unavailable")
+		return domain.Inputs{}, errors.New("portfolio service is unavailable")
 	}
 	all, err := q.Inputs.ReadValuationInputs(ctx, query)
 	if err != nil {
-		return c.Inputs{}, err
+		return domain.Inputs{}, err
 	}
 	if query.At != nil && !all.Cutoff.Equal(*query.At) {
-		return c.Inputs{}, errors.New("valuation inputs have a different cutoff")
+		return domain.Inputs{}, errors.New("valuation inputs have a different cutoff")
 	}
-	if err := domain.ValidateInputs(all); err != nil {
-		return c.Inputs{}, err
+	canonical := valuationInputs(all)
+	if err := domain.ValidateInputs(canonical); err != nil {
+		return domain.Inputs{}, err
 	}
-	return all, nil
+	return canonical, nil
 }
 func (q *Queries) requested(raw, kind string) (time.Time, error) {
 	if !codec.CanonicalUTC(raw) {
@@ -63,7 +64,8 @@ func (q *Queries) CashValuation(ctx context.Context, base, raw string) (*c.CashV
 	if err != nil {
 		return nil, err
 	}
-	return domain.ComputeCashValuation(ctx, all, base, raw)
+	result, err := domain.ComputeCashValuation(ctx, all, base, raw)
+	return publicCashValuation(result), domainError(err)
 }
 func (q *Queries) HoldingValuation(ctx context.Context, raw string) (*c.HoldingValuation, error) {
 	at, err := q.requested(raw, "holding")
@@ -74,40 +76,46 @@ func (q *Queries) HoldingValuation(ctx context.Context, raw string) (*c.HoldingV
 	if err != nil {
 		return nil, err
 	}
-	return domain.ComputeHoldingValuation(ctx, all, raw)
+	result, err := domain.ComputeHoldingValuation(ctx, all, raw)
+	return publicHoldingValuation(result), domainError(err)
 }
 func (q *Queries) CurrentValuation(ctx context.Context) (*c.CurrentPortfolioValuation, error) {
 	all, err := q.read(ctx, c.InputQuery{FX: true, Prices: true})
 	if err != nil {
 		return nil, err
 	}
-	return domain.CurrentValuation(ctx, all)
+	result, err := domain.CurrentValuation(ctx, all)
+	return publicCurrentPortfolioValuation(result), domainError(err)
 }
 func (q *Queries) XIRR(ctx context.Context) (*c.PortfolioXIRR, error) {
 	all, err := q.read(ctx, c.InputQuery{FX: true, Prices: true})
 	if err != nil {
 		return nil, err
 	}
-	return domain.XIRR(ctx, all)
+	result, err := domain.XIRR(ctx, all)
+	return publicPortfolioXIRR(result), domainError(err)
 }
 func (q *Queries) TWR(ctx context.Context) (*c.PortfolioTWR, error) {
 	all, err := q.read(ctx, c.InputQuery{FX: true, Prices: true})
 	if err != nil {
 		return nil, err
 	}
-	return domain.TWR(ctx, all, nil)
+	result, err := domain.TWR(ctx, all, nil)
+	return publicPortfolioTWR(result), domainError(err)
 }
 func (q *Queries) TWRCheckpoints(ctx context.Context) (*c.PortfolioTWRCheckpoints, error) {
 	all, err := q.read(ctx, c.InputQuery{FX: true, Prices: true})
 	if err != nil {
 		return nil, err
 	}
-	return domain.TWRCheckpoints(ctx, all)
+	result, err := domain.TWRCheckpoints(ctx, all)
+	return publicPortfolioTWRCheckpoints(result), domainError(err)
 }
 func (q *Queries) Benchmarks(ctx context.Context) (*c.PortfolioBenchmarks, error) {
 	all, err := q.read(ctx, c.InputQuery{FX: true, Prices: true, Benchmarks: true})
 	if err != nil {
 		return nil, err
 	}
-	return domain.Benchmarks(ctx, all)
+	result, err := domain.Benchmarks(ctx, all)
+	return publicPortfolioBenchmarks(result), domainError(err)
 }

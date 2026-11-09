@@ -16,7 +16,8 @@ func (s *Service) Read(ctx context.Context) (*c.WatchlistReport, error) {
 	if err != nil {
 		return nil, err
 	}
-	return domain.Report(all)
+	report, err := domain.Report(domainInputs(all))
+	return publicReport(report), domainError(err)
 }
 func (s *Service) Replace(ctx context.Context, change c.WatchlistChange) (*c.WatchlistState, error) {
 	return s.Store.Replace(ctx, change)

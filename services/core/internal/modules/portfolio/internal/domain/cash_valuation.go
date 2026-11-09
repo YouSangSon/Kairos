@@ -3,7 +3,6 @@ package domain
 import (
 	"context"
 	"math/big"
-	c "omni-folio/services/core/internal/modules/portfolio/contracts"
 	"time"
 )
 
@@ -18,7 +17,7 @@ func ComputeCashValuation(ctx context.Context, all Inputs, baseCurrency, asOf st
 	snapshot := &all.Ledger.Snapshot
 	ledgerAsOf, _ := time.Parse(time.RFC3339Nano, snapshot.AsOf)
 	if valuationTime.Before(ledgerAsOf) || valuationTime.Before(all.Ledger.RecordedAt) || all.Ledger.FutureRecorded {
-		return nil, &c.Failure{Conflict: true, Code: "valuation_as_of_precedes_ledger_revision", Message: "valuation as_of precedes the current ledger state", Field: "as_of"}
+		return nil, &Failure{Conflict: true, Code: "valuation_as_of_precedes_ledger_revision", Message: "valuation as_of precedes the current ledger state", Field: "as_of"}
 	}
 	inputs, err := fxInputs(all)
 	if err != nil {

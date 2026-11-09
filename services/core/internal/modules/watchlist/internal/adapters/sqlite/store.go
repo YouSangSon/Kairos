@@ -7,7 +7,7 @@ import (
 	"errors"
 	"omni-folio/services/core/internal/codec"
 	c "omni-folio/services/core/internal/modules/watchlist/contracts"
-	"omni-folio/services/core/internal/modules/watchlist/internal/domain"
+	"omni-folio/services/core/internal/modules/watchlist/internal/application"
 	storage "omni-folio/services/core/internal/storage/contracts"
 	"omni-folio/services/core/internal/storage/observation"
 	"omni-folio/services/core/migrations"
@@ -117,7 +117,7 @@ func readState(ctx context.Context, q queryer) (*c.WatchlistState, c.RecoveryPro
 	if len(raw) > c.BodyLimit || json.Unmarshal([]byte(raw), &state) != nil || state.Revision != revision || revision < 0 || revision > c.RevisionLimit {
 		return nil, proof, errors.New("watchlist state is invalid")
 	}
-	entries, err := domain.CanonicalEntries(state.Entries)
+	entries, err := application.CanonicalEntries(state.Entries)
 	if err != nil || !reflect.DeepEqual(entries, state.Entries) || (revision == 0 && (state.UpdatedAt != nil || len(entries) != 0)) ||
 		(revision > 0 && (state.UpdatedAt == nil || !codec.CanonicalUTC(*state.UpdatedAt))) {
 		return nil, proof, errors.New("watchlist state metadata is invalid")
@@ -135,7 +135,7 @@ func proveWatchlistRecovery(ctx context.Context, q queryer) (c.RecoveryProof, er
 }
 
 func (s *Store) Replace(ctx context.Context, change c.WatchlistChange) (*c.WatchlistState, error) {
-	if _, err := domain.CanonicalEntries(change.Entries); err != nil || change.ExpectedRevision < 0 || change.ExpectedRevision > c.RevisionLimit {
+	if _, err := application.CanonicalEntries(change.Entries); err != nil || change.ExpectedRevision < 0 || change.ExpectedRevision > c.RevisionLimit {
 		return nil, c.ErrInput
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -147,7 +147,7 @@ func (s *Store) Replace(ctx context.Context, change c.WatchlistChange) (*c.Watch
 	if err != nil {
 		return nil, err
 	}
-	next, changed, err := domain.Transition(state, change, s.now)
+	next, changed, err := application.Transition(state, change, s.now)
 	if err != nil {
 		return nil, err
 	}

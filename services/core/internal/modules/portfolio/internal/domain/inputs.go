@@ -36,7 +36,7 @@ func ValidateInputs(all Inputs) error {
 	}
 	return nil
 }
-func benchmarkReceipt(r *benchmarkSeriesRecord) *BenchmarkSeriesReceipt {
+func benchmarkReceipt(r *BenchmarkVersion) *BenchmarkSeriesReceipt {
 	i := r.Input
 	return &BenchmarkSeriesReceipt{StorageCheck: "verified", Authority: "owner_declared", BenchmarkID: i.BenchmarkID, Label: i.Label, Currency: i.Currency, ReturnBasis: i.ReturnBasis, SourceReference: i.SourceReference, SourceVersion: i.SourceVersion, Sample: i.Sample, DataSHA256: r.DataSHA256, PointCount: len(i.Points), FirstObservedAt: i.Points[0].ObservedAt, LastObservedAt: i.Points[len(i.Points)-1].ObservedAt, FetchedAt: i.FetchedAt, RecordedAt: r.RecordedAt}
 }

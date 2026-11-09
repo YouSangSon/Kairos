@@ -36,7 +36,7 @@ func latestBenchmarkPoint(points []BenchmarkIndexPoint, at time.Time) *Benchmark
 	return &point
 }
 
-func comparePortfolioBenchmark(record benchmarkSeriesRecord, portfolio *PortfolioTWR, marks twrMarks, asOf time.Time) (PortfolioBenchmark, error) {
+func comparePortfolioBenchmark(record BenchmarkVersion, portfolio *PortfolioTWR, marks twrMarks, asOf time.Time) (PortfolioBenchmark, error) {
 	row := PortfolioBenchmark{Series: benchmarkReceipt(&record), Sample: record.Input.Sample, Native: UnavailableBenchmarkRate("portfolio_unavailable"), KRW: UnavailableBenchmarkRate("portfolio_unavailable")}
 	if portfolio.Status != "calculated" {
 		return row, nil

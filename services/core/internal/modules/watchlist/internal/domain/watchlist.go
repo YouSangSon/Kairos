@@ -2,33 +2,26 @@ package domain
 
 import (
 	"errors"
-	"omni-folio/services/core/internal/codec"
-	market "omni-folio/services/core/internal/modules/marketdata/contracts"
-	c "omni-folio/services/core/internal/modules/watchlist/contracts"
 	"reflect"
 	"regexp"
 	"sort"
 	"time"
 )
 
-type WatchlistEntry = c.WatchlistEntry
-type WatchlistState = c.WatchlistState
-type WatchlistChange = c.WatchlistChange
-type WatchlistPrice = c.WatchlistPrice
-type WatchlistQuote = c.WatchlistQuote
-type WatchlistReport = c.WatchlistReport
-type SecurityPriceObservation = market.SecurityPriceObservation
-
 const watchlistPolicy = "watchlist_stored_prices_24h.v1"
-const watchlistRevisionLimit = c.RevisionLimit
+const watchlistRevisionLimit = RevisionLimit
 const ownerPriceSource = "owner_declared"
 const ownerPriceAdjustment = "unadjusted"
 const marketDataAdjustmentUnspecified = "unspecified"
 
 var watchlistUSSymbol = regexp.MustCompile(`^[A-Z0-9][A-Z0-9.-]{0,31}$`)
 var watchlistKRSymbol = regexp.MustCompile(`^[0-9]{6}$`)
-var errWatchlistInput = c.ErrInput
-var canonicalUTCString = codec.CanonicalUTC
+var errWatchlistInput = ErrInput
+
+func canonicalUTCString(raw string) bool {
+	parsed, err := time.Parse(time.RFC3339Nano, raw)
+	return err == nil && parsed.UTC().Format(time.RFC3339Nano) == raw
+}
 
 func stringPointer(v string) *string { return &v }
 func priceTimeKey(p SecurityPriceObservation) string {
@@ -68,20 +61,20 @@ func CanonicalEntries(entries []WatchlistEntry) ([]WatchlistEntry, error) {
 func Transition(state *WatchlistState, change WatchlistChange, now func() time.Time) (*WatchlistState, bool, error) {
 	entries, err := CanonicalEntries(change.Entries)
 	if err != nil || change.ExpectedRevision < 0 || change.ExpectedRevision > watchlistRevisionLimit {
-		return nil, false, c.ErrInput
+		return nil, false, ErrInput
 	}
 	same := reflect.DeepEqual(state.Entries, entries)
 	if state.Revision != change.ExpectedRevision {
 		if state.Revision == change.ExpectedRevision+1 && same {
 			return state, false, nil
 		}
-		return nil, false, c.ErrChanged
+		return nil, false, ErrChanged
 	}
 	if same {
 		return state, false, nil
 	}
 	if state.Revision == watchlistRevisionLimit {
-		return nil, false, c.ErrInput
+		return nil, false, ErrInput
 	}
 	at := now().UTC()
 	if !canonicalUTCString(at.Format(time.RFC3339Nano)) || (state.UpdatedAt != nil && at.Before(mustParseWatchlistTime(*state.UpdatedAt))) {
@@ -141,7 +134,7 @@ func watchlistPrice(p *SecurityPriceObservation) *WatchlistPrice {
 	return price
 }
 
-func Report(all c.Inputs) (*WatchlistReport, error) {
+func Report(all Inputs) (*WatchlistReport, error) {
 	at := all.Cutoff
 	state := all.State
 	if !canonicalUTCString(at.Format(time.RFC3339Nano)) || (state.UpdatedAt != nil && at.Before(mustParseWatchlistTime(*state.UpdatedAt))) {
