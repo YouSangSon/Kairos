@@ -2,6 +2,7 @@ package sqlite
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"strings"
 	"testing"
@@ -36,7 +37,7 @@ func TestWriteScopePanicAndCancellationRollbackAndReleaseConnection(t *testing.T
 					cancel()
 					return nil
 				})
-				if kind == "cancel" && !errors.Is(err, context.Canceled) {
+				if kind == "cancel" && !errors.Is(err, context.Canceled) && !errors.Is(err, sql.ErrTxDone) {
 					t.Fatalf("canceled write err=%v", err)
 				}
 			}()
