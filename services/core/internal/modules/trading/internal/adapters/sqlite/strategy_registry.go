@@ -10,7 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math/big"
+
 	"omni-folio/services/core/internal/modules/trading/contracts"
 	"omni-folio/services/core/internal/modules/trading/internal/application"
 	"os"
@@ -29,11 +29,7 @@ const (
 
 var strategySHA256Pattern = regexp.MustCompile(`^[a-f0-9]{64}$`)
 
-type StrategyEvidence struct {
-	contracts.StrategyEvidence
-	artifactJSON    string
-	executionPolicy strategyExecutionPolicy
-}
+type StrategyEvidence = application.Evidence
 
 type strategyExecutionPolicy = application.StrategyExecutionPolicy
 
@@ -107,7 +103,7 @@ func (s *Store) registerStrategyEvidence(ctx context.Context, artifact []byte) (
 	var storedArtifact, recordedAt string
 	err = tx.QueryRowContext(ctx, `SELECT artifact_json,recorded_at FROM strategy_research_evidence WHERE result_sha256=?`, evidence.ResultSHA256).Scan(&storedArtifact, &recordedAt)
 	if err == nil {
-		if storedArtifact != evidence.artifactJSON {
+		if storedArtifact != evidence.ArtifactJSON {
 			return nil, errors.New("strategy result hash is already bound to different evidence")
 		}
 		evidence.RecordedAt = recordedAt
@@ -123,7 +119,7 @@ func (s *Store) registerStrategyEvidence(ctx context.Context, artifact []byte) (
 	_, err = tx.ExecContext(ctx, `INSERT INTO strategy_research_evidence(
 		result_sha256,artifact_sha256,strategy_name,strategy_version,parameter_sha256,target,artifact_json,recorded_at
 	) VALUES(?,?,?,?,?,?,?,?)`, evidence.ResultSHA256, evidence.ArtifactSHA256, evidence.StrategyName,
-		evidence.StrategyVersion, evidence.ParameterSHA256, evidence.Target, evidence.artifactJSON, evidence.RecordedAt)
+		evidence.StrategyVersion, evidence.ParameterSHA256, evidence.Target, evidence.ArtifactJSON, evidence.RecordedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -295,7 +291,7 @@ func replayStrategyRegistry(ctx context.Context, q orderQuerier) (strategyRegist
 		evidence, err := decodeStrategyArtifact([]byte(artifactJSON))
 		if err != nil || evidence.ResultSHA256 != resultSHA || evidence.ArtifactSHA256 != artifactSHA ||
 			evidence.StrategyName != name || evidence.StrategyVersion != version || evidence.ParameterSHA256 != parameterSHA ||
-			evidence.Target != target || evidence.artifactJSON != artifactJSON || !canonicalUTCString(recordedAt) {
+			evidence.Target != target || evidence.ArtifactJSON != artifactJSON || !canonicalUTCString(recordedAt) {
 			rows.Close()
 			return strategyRegistryRecoveryProof{}, fmt.Errorf("strategy evidence %q metadata or hash mismatch", resultSHA)
 		}
@@ -539,199 +535,19 @@ func loadCurrentStrategyExecutionPolicy(ctx context.Context, q orderQuerier, res
 	if evidence.ResultSHA256 != resultSHA256 {
 		return strategyExecutionPolicy{}, errors.New("strategy execution policy result mismatch")
 	}
-	return evidence.executionPolicy, nil
+	return evidence.ExecutionPolicy, nil
 }
 
-func decodeStrategyArtifact(artifact []byte) (*StrategyEvidence, error) {
-	if len(artifact) == 0 || len(artifact) > maxBodyBytes {
-		return nil, errors.New("strategy evidence size is invalid")
-	}
-	decoder := json.NewDecoder(bytes.NewReader(artifact))
-	decoder.UseNumber()
-	var result map[string]any
-	if err := decoder.Decode(&result); err != nil {
-		return nil, fmt.Errorf("strategy evidence JSON: %w", err)
-	}
-	if err := ensureJSONEOF(decoder); err != nil {
-		return nil, err
-	}
-	if !exactKeys(result, "schema_version", "experiment_id", "input_sha256", "config_sha256", "manifest", "execution", "evaluation", "candidates", "challenger", "promotion", "disclaimer", "result_sha256") ||
-		stringField(result, "schema_version") != strategyResultSchema || stringField(result, "experiment_id") == "" ||
-		!strategySHA256Pattern.MatchString(stringField(result, "input_sha256")) || !strategySHA256Pattern.MatchString(stringField(result, "config_sha256")) ||
-		stringField(result, "disclaimer") != "Research-only experiment; not investment advice or a production trading authorization." {
-		return nil, errors.New("strategy evidence top-level contract is invalid")
-	}
-	executionPolicy, err := decodeStrategyExecutionContract(result["execution"])
-	if err != nil {
-		return nil, err
-	}
-	claimedResultSHA := stringField(result, "result_sha256")
-	if !strategySHA256Pattern.MatchString(claimedResultSHA) {
-		return nil, errors.New("strategy result hash is invalid")
-	}
-	manifest, ok := mapField(result, "manifest")
-	if !ok || !exactKeys(manifest, "strategy", "data", "engine", "evaluation_policy") {
-		return nil, errors.New("strategy evidence manifest is invalid")
-	}
-	strategy, strategyOK := mapField(manifest, "strategy")
-	data, dataOK := mapField(manifest, "data")
-	engine, engineOK := mapField(manifest, "engine")
-	policy, policyOK := mapField(manifest, "evaluation_policy")
-	parameters, parametersOK := mapField(strategy, "parameters")
-	if !strategyOK || !dataOK || !engineOK || !policyOK || !parametersOK ||
-		!exactKeys(strategy, "name", "version", "parameters", "parameter_hash") || stringField(strategy, "name") != "long_only_sma_crossover" || stringField(strategy, "version") == "" ||
-		!exactKeys(data, "version", "input_sha256") || stringField(data, "version") == "" || stringField(data, "input_sha256") != stringField(result, "input_sha256") ||
-		!exactKeys(engine, "name", "version") || stringField(engine, "name") != "omni-folio-reference" || stringField(engine, "version") != "0.1.0" ||
-		!exactKeys(policy, "version") || stringField(policy, "version") != strategyEvaluationPolicy {
-		return nil, errors.New("strategy evidence manifest contract is invalid")
-	}
-	parameterJSON, err := strategyCanonicalJSON(parameters)
-	if err != nil {
-		return nil, err
-	}
-	parameterHash := sha256.Sum256(parameterJSON)
-	parameterSHA := hex.EncodeToString(parameterHash[:])
-	if stringField(strategy, "parameter_hash") != parameterSHA {
-		return nil, errors.New("strategy parameter hash mismatch")
-	}
-	evaluation, evaluationOK := mapField(result, "evaluation")
-	candidates, candidatesOK := result["candidates"].([]any)
-	challenger, challengerOK := mapField(result, "challenger")
-	promotion, promotionOK := mapField(result, "promotion")
-	folds, foldsOK := evaluation["folds"].([]any)
-	challengerFolds, challengerFoldsOK := challenger["walk_forward_folds"].([]any)
-	if !evaluationOK || !candidatesOK || !challengerOK || !promotionOK || !foldsOK || !challengerFoldsOK ||
-		len(candidates) == 0 || len(folds) < 2 || len(challengerFolds) < 2 ||
-		stringField(evaluation, "method") != "expanding_walk_forward_then_final_holdout" || evaluation["final_holdout_evaluated_after_selection"] != true ||
-		!exactKeys(promotion, "target", "baseline", "walk_forward_gate_passed", "final_holdout_gate_passed", "baseline_gate_passed", "failed_gates") {
-		return nil, errors.New("strategy evaluation contract is invalid")
-	}
-	target := stringField(promotion, "target")
-	gateNames := []string{"walk_forward", "final_holdout", "buy_and_hold_baseline"}
-	gateFields := []string{"walk_forward_gate_passed", "final_holdout_gate_passed", "baseline_gate_passed"}
-	failed, failedOK := promotion["failed_gates"].([]any)
-	var expectedFailed []string
-	for index, field := range gateFields {
-		passed, ok := promotion[field].(bool)
-		if !ok {
-			return nil, errors.New("strategy promotion gates are invalid")
-		}
-		if !passed {
-			expectedFailed = append(expectedFailed, gateNames[index])
-		}
-	}
-	if !failedOK || len(failed) != len(expectedFailed) {
-		return nil, errors.New("strategy failed gates are invalid")
-	}
-	for index := range failed {
-		if failed[index] != expectedFailed[index] {
-			return nil, errors.New("strategy failed gates are invalid")
-		}
-	}
-	if (target == "paper_candidate") != (len(expectedFailed) == 0) || (target != "paper_candidate" && target != "no_promotion") {
-		return nil, errors.New("strategy promotion target is inconsistent with its gates")
-	}
-	delete(result, "result_sha256")
-	bodyJSON, err := strategyCanonicalJSON(result)
-	if err != nil {
-		return nil, err
-	}
-	resultHash := sha256.Sum256(bodyJSON)
-	if hex.EncodeToString(resultHash[:]) != claimedResultSHA {
-		return nil, errors.New("strategy result hash mismatch")
-	}
-	result["result_sha256"] = claimedResultSHA
-	canonicalArtifact, err := strategyCanonicalJSON(result)
-	if err != nil {
-		return nil, err
-	}
-	artifactHash := sha256.Sum256(canonicalArtifact)
-	return &StrategyEvidence{
-		StrategyEvidence: contracts.StrategyEvidence{ResultSHA256: claimedResultSHA, ArtifactSHA256: hex.EncodeToString(artifactHash[:]),
-			StrategyName: stringField(strategy, "name"), StrategyVersion: stringField(strategy, "version"),
-			ParameterSHA256: parameterSHA, Target: target}, artifactJSON: string(canonicalArtifact), executionPolicy: executionPolicy,
-	}, nil
-}
+var decodeStrategyArtifact = application.DecodeStrategyArtifact
 
-func decodeStrategyExecutionContract(value any) (strategyExecutionPolicy, error) {
-	execution, ok := value.(map[string]any)
-	if !ok || !exactKeys(execution, "starting_cash", "fee", "tax", "slippage_bps", "delay_bars", "max_participation", "signal_price", "fill_price") ||
-		stringField(execution, "signal_price") != "bar_close" || stringField(execution, "fill_price") != "next_eligible_bar_open" {
-		return strategyExecutionPolicy{}, errors.New("strategy execution contract is invalid")
-	}
-	startingCash, err := parseDecimal(stringField(execution, "starting_cash"))
-	if err != nil || startingCash.Sign() <= 0 {
-		return strategyExecutionPolicy{}, errors.New("strategy execution contract is invalid")
-	}
-	fee, err := parseDecimal(stringField(execution, "fee"))
-	if err != nil || fee.Sign() < 0 {
-		return strategyExecutionPolicy{}, errors.New("strategy execution contract is invalid")
-	}
-	tax, err := parseDecimal(stringField(execution, "tax"))
-	if err != nil || tax.Sign() < 0 || tax.Cmp(big.NewRat(1, 1)) > 0 {
-		return strategyExecutionPolicy{}, errors.New("strategy execution contract is invalid")
-	}
-	slippage, err := parseDecimal(stringField(execution, "slippage_bps"))
-	if err != nil || slippage.Sign() < 0 || slippage.Cmp(big.NewRat(10000, 1)) >= 0 {
-		return strategyExecutionPolicy{}, errors.New("strategy execution contract is invalid")
-	}
-	delay, err := parseDecimal(stringField(execution, "delay_bars"))
-	if err != nil || delay.Sign() <= 0 || !delay.IsInt() || !delay.Num().IsInt64() {
-		return strategyExecutionPolicy{}, errors.New("strategy execution contract is invalid")
-	}
-	participation, err := parseDecimal(stringField(execution, "max_participation"))
-	if err != nil || participation.Sign() <= 0 || participation.Cmp(big.NewRat(1, 1)) > 0 {
-		return strategyExecutionPolicy{}, errors.New("strategy execution contract is invalid")
-	}
-	canonicalJSON, err := strategyCanonicalJSON(execution)
-	if err != nil {
-		return strategyExecutionPolicy{}, err
-	}
-	hash := sha256.Sum256(canonicalJSON)
-	return strategyExecutionPolicy{
-		StartingCash: stringField(execution, "starting_cash"), Fee: stringField(execution, "fee"), Tax: stringField(execution, "tax"),
-		SlippageBPS: stringField(execution, "slippage_bps"), DelayBars: delay.Num().Int64(),
-		MaxParticipation: stringField(execution, "max_participation"), SignalPrice: stringField(execution, "signal_price"),
-		FillPrice: stringField(execution, "fill_price"), SHA256: hex.EncodeToString(hash[:]), CanonicalJSON: string(canonicalJSON),
-	}, nil
-}
+var decodeStrategyExecutionContract = application.DecodeStrategyExecutionContract
 
-func strategyCanonicalJSON(value any) ([]byte, error) {
-	var output bytes.Buffer
-	encoder := json.NewEncoder(&output)
-	encoder.SetEscapeHTML(false)
-	if err := encoder.Encode(value); err != nil {
-		return nil, err
-	}
-	return bytes.TrimSuffix(output.Bytes(), []byte{'\n'}), nil
-}
+var strategyCanonicalJSON = application.StrategyCanonicalJSON
 
-func ensureJSONEOF(decoder *json.Decoder) error {
-	var extra any
-	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
-		return errors.New("strategy evidence contains trailing JSON")
-	}
-	return nil
-}
+var ensureJSONEOF = application.EnsureJSONEOF
 
-func exactKeys(value map[string]any, expected ...string) bool {
-	if len(value) != len(expected) {
-		return false
-	}
-	for _, key := range expected {
-		if _, ok := value[key]; !ok {
-			return false
-		}
-	}
-	return true
-}
+var exactKeys = application.ExactKeys
 
-func mapField(value map[string]any, key string) (map[string]any, bool) {
-	result, ok := value[key].(map[string]any)
-	return result, ok
-}
+var mapField = application.MapField
 
-func stringField(value map[string]any, key string) string {
-	result, _ := value[key].(string)
-	return result
-}
+var stringField = application.StringField

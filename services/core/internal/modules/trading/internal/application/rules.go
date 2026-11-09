@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math/big"
 	"omni-folio/services/core/internal/exact"
+	"omni-folio/services/core/internal/modules/trading/internal/codec"
 	"omni-folio/services/core/internal/modules/trading/internal/domain"
 	"omni-folio/services/core/internal/paperdomain"
 
@@ -312,3 +313,5 @@ func canonicalPaperTime(raw string) (string, bool) {
 	}
 	return value.Format(canonicalPaperTimeLayout), true
 }
+
+var orderJSONHash = codec.JSONHash

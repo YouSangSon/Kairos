@@ -56,7 +56,7 @@ func (s *Store) PaperInputStatus(ctx context.Context, account, selection string,
 		return nil, errors.New("paper input research binding differs")
 	}
 	session, found, err := loadPaperAccountingSession(ctx, tx, account)
-	if err != nil || !found || session.ExecutionPolicySHA256 != evidence.executionPolicy.SHA256 {
+	if err != nil || !found || session.ExecutionPolicySHA256 != evidence.ExecutionPolicy.SHA256 {
 		return nil, errors.New("paper input session binding differs")
 	}
 	var research map[string]any

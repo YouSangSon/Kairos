@@ -2,53 +2,24 @@ package sqlite
 
 import (
 	"context"
-	"crypto/sha256"
+	"omni-folio/services/core/internal/modules/trading/internal/application"
+
 	"database/sql"
-	"encoding/hex"
+
 	"encoding/json"
 	"errors"
 	"fmt"
 	"omni-folio/services/core/internal/modules/trading/contracts"
 	"omni-folio/services/core/internal/researchdomain"
-	"reflect"
+
 	"time"
 )
 
 const paperPromotionClaimSchema = "paper-promotion-claim.v1"
 
-type paperPromotionClaim struct {
-	SchemaVersion             string `json:"schema_version"`
-	AttemptID                 string `json:"attempt_id"`
-	ExpectedPreviousAttemptID string `json:"expected_previous_attempt_id"`
-	AccountRef                string `json:"account_ref"`
-	CandidateResultSHA256     string `json:"candidate_result_sha256"`
-	IncumbentResultSHA256     string `json:"incumbent_result_sha256"`
-	ExpectedCurrentEventID    string `json:"expected_current_event_id"`
-	InputDataSHA256           string `json:"input_data_sha256"`
-	InputCSV                  string `json:"input_csv"`
-	Symbol                    string `json:"symbol"`
-	ComparisonStart           string `json:"comparison_start"`
-	ComparisonEnd             string `json:"comparison_end"`
-	OrderSequenceCutoff       int64  `json:"order_sequence_cutoff"`
-	ResearchSequenceCutoff    int64  `json:"research_sequence_cutoff"`
-	StartingCash              string `json:"starting_cash"`
-	SessionID                 string `json:"session_id"`
-	ExecutionPolicySHA256     string `json:"execution_policy_sha256"`
-	StateSHA256               string `json:"state_sha256"`
-	RecordedAt                string `json:"recorded_at"`
-}
+type paperPromotionClaim = application.PromotionClaim
 
-type paperPromotionDecision struct {
-	AttemptID              string                    `json:"attempt_id"`
-	ClaimSHA256            string                    `json:"claim_sha256"`
-	CandidateResultSHA256  string                    `json:"candidate_result_sha256"`
-	ExpectedCurrentEventID string                    `json:"expected_current_event_id"`
-	Decision               string                    `json:"decision"`
-	Reason                 string                    `json:"reason"`
-	Comparison             *paperPromotionComparison `json:"comparison,omitempty"`
-	SelectionEventID       string                    `json:"selection_event_id,omitempty"`
-	RecordedAt             string                    `json:"recorded_at"`
-}
+type paperPromotionDecision = application.PromotionDecision
 
 type PaperPromotionReceipt = contracts.PaperPromotionReceipt
 
@@ -57,131 +28,14 @@ type paperPromotionRecoveryProof struct {
 	Claims, Decisions int
 }
 
-func promotionReceipt(claim paperPromotionClaim, decision *paperPromotionDecision) *PaperPromotionReceipt {
-	r := &PaperPromotionReceipt{AttemptID: claim.AttemptID, InputDataSHA256: claim.InputDataSHA256,
-		ComparisonStart: claim.ComparisonStart, ComparisonEnd: claim.ComparisonEnd, Decision: "PENDING", Reason: "comparison_claimed"}
-	if decision != nil {
-		r.Decision, r.Reason, r.Comparison, r.SelectionEventID = decision.Decision, decision.Reason, decision.Comparison, decision.SelectionEventID
-	}
-	return r
-}
+var promotionReceipt = application.PromotionReceipt
 
 func (s *Store) PromotePaperCandidate(ctx context.Context, account, candidateSHA, expectedSelection, attemptID string, raw []byte) (*PaperPromotionReceipt, error) {
-	claim, prior, err := s.claimPaperPromotion(ctx, account, candidateSHA, expectedSelection, attemptID, raw)
-	if err != nil || prior != nil {
-		return prior, err
-	}
-	comparison, scoreErr := scorePaperPromotionClaim(ctx, s.db, *claim)
-	if ctx.Err() != nil {
-		scoreErr = ctx.Err()
-	}
-	// A cancelled scorer must still consume its interval. A process crash leaves PENDING.
-	finishCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
-	defer cancel()
-	receipt, err := s.finishPaperPromotion(finishCtx, *claim, comparison, scoreErr, false)
-	if err != nil {
-		return nil, err
-	}
-	if ctx.Err() != nil {
-		return receipt, ctx.Err()
-	}
-	return receipt, nil
+	return s.business().PromotePaperCandidate(ctx, account, candidateSHA, expectedSelection, attemptID, raw)
 }
 
 func (s *Store) claimPaperPromotion(ctx context.Context, account, candidateSHA, expectedSelection, attemptID string, raw []byte) (*paperPromotionClaim, *PaperPromotionReceipt, error) {
-	if s == nil || s.db == nil || ctx == nil || !orderAlias(account, "account") || !strategySHA256Pattern.MatchString(candidateSHA) || !safeOrderID(expectedSelection) || !safeOrderID(attemptID) {
-		return nil, nil, errors.New("paper promotion identifiers are invalid")
-	}
-	symbol, bars, err := parsePaperPromotionBars(ctx, raw)
-	if err != nil {
-		return nil, nil, err
-	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, nil, err
-	}
-	defer tx.Rollback()
-	if err := requireSchemaContext(ctx, tx); err != nil {
-		return nil, nil, err
-	}
-	if _, err := provePaperPromotionRecovery(ctx, tx); err != nil {
-		return nil, nil, err
-	}
-	existing, decision, found, err := loadPaperPromotion(ctx, tx, attemptID)
-	if err != nil {
-		return nil, nil, err
-	}
-	if found {
-		if existing.AccountRef != account || existing.CandidateResultSHA256 != candidateSHA || existing.ExpectedCurrentEventID != expectedSelection || existing.InputCSV != string(raw) {
-			return nil, nil, errors.New("paper promotion attempt conflicts with its saved request")
-		}
-		return nil, promotionReceipt(*existing, decision), nil
-	}
-	var pending int
-	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM paper_promotion_claims c WHERE NOT EXISTS(SELECT 1 FROM paper_promotion_decisions d WHERE d.attempt_id=c.attempt_id)`).Scan(&pending); err != nil {
-		return nil, nil, err
-	}
-	if pending != 0 {
-		return nil, nil, errors.New("a paper comparison is pending; inspect or explicitly abort it first")
-	}
-	now := s.now().UTC()
-	stateSHA, session, cash, selection, err := capturePaperPromotionState(ctx, tx, account, now)
-	if err != nil {
-		return nil, nil, err
-	}
-	if selection.CurrentEventID != expectedSelection || selection.SelectedResultSHA256 == candidateSHA || selection.SelectedResultSHA256 == noStrategySelection {
-		return nil, nil, errors.New("paper promotion requires a distinct candidate and the current incumbent")
-	}
-	candidate, incumbent, _, err := paperPromotionInputs(ctx, tx, candidateSHA, selection.SelectedResultSHA256, cash, session.ExecutionPolicySHA256)
-	if err != nil {
-		return nil, nil, err
-	}
-	warmup := int(max(candidate.SlowWindow, incumbent.SlowWindow))
-	if len(bars) != warmup+90 {
-		return nil, nil, errors.New("paper promotion requires common warmup and three fresh 30-bar windows")
-	}
-	end, _ := paperResearchWholeSecond(bars[len(bars)-1].At)
-	if end.After(now) {
-		return nil, nil, errors.New("paper promotion input contains future bars")
-	}
-	hash := sha256.Sum256(raw)
-	claim := paperPromotionClaim{SchemaVersion: paperPromotionClaimSchema, AttemptID: attemptID, ExpectedPreviousAttemptID: "no_attempt",
-		AccountRef: account, CandidateResultSHA256: candidateSHA, IncumbentResultSHA256: selection.SelectedResultSHA256, ExpectedCurrentEventID: expectedSelection,
-		InputDataSHA256: hex.EncodeToString(hash[:]), InputCSV: string(raw), Symbol: symbol, ComparisonStart: bars[warmup].At, ComparisonEnd: bars[len(bars)-1].At,
-		StartingCash: cash, SessionID: session.SessionID, ExecutionPolicySHA256: session.ExecutionPolicySHA256, StateSHA256: stateSHA, RecordedAt: now.Format(canonicalPaperTimeLayout)}
-	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(sequence),0) FROM order_events`).Scan(&claim.OrderSequenceCutoff); err != nil {
-		return nil, nil, err
-	}
-	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(sequence),0) FROM strategy_research_evidence`).Scan(&claim.ResearchSequenceCutoff); err != nil {
-		return nil, nil, err
-	}
-	if err := tx.QueryRowContext(ctx, `SELECT COALESCE((SELECT attempt_id FROM paper_promotion_claims ORDER BY sequence DESC LIMIT 1),'no_attempt')`).Scan(&claim.ExpectedPreviousAttemptID); err != nil {
-		return nil, nil, err
-	}
-	if claim.ExpectedPreviousAttemptID != "no_attempt" {
-		var previousAt string
-		if err := tx.QueryRowContext(ctx, `SELECT recorded_at FROM paper_promotion_decisions WHERE attempt_id=?`, claim.ExpectedPreviousAttemptID).Scan(&previousAt); err != nil {
-			return nil, nil, err
-		}
-		previous, ok := parsePaperTime(previousAt)
-		if !ok || now.Before(previous) {
-			return nil, nil, errors.New("paper promotion clock regressed")
-		}
-	}
-	if err := validateStoredPaperPromotionClaim(ctx, tx, claim, 0); err != nil {
-		return nil, nil, err
-	}
-	canonical, recordSHA, err := orderJSONHash(claim)
-	if err != nil {
-		return nil, nil, err
-	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO paper_promotion_claims(attempt_id,record_sha256,record_json,recorded_at) VALUES(?,?,?,?)`, attemptID, recordSHA, string(canonical), claim.RecordedAt); err != nil {
-		return nil, nil, err
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, nil, err
-	}
-	return &claim, nil, nil
+	return s.business().ClaimPaperPromotion(ctx, account, candidateSHA, expectedSelection, attemptID, raw)
 }
 
 func paperPromotionInputs(ctx context.Context, q orderQuerier, candidateSHA, incumbentSHA, cash, policySHA string) (researchdomain.Strategy, researchdomain.Strategy, researchdomain.Execution, error) {
@@ -200,7 +54,7 @@ func paperPromotionInputs(ctx context.Context, q orderQuerier, candidateSHA, inc
 		if err != nil {
 			return strategies[0], strategies[1], researchdomain.Execution{}, err
 		}
-		policies[i] = evidence.executionPolicy
+		policies[i] = evidence.ExecutionPolicy
 	}
 	if strategies[0].Quantity != strategies[1].Quantity || policies[0].SHA256 != policies[1].SHA256 || policies[0].SHA256 != policySHA {
 		return strategies[0], strategies[1], researchdomain.Execution{}, errors.New("paper promotion requires identical quantity and execution policy")
@@ -316,74 +170,7 @@ func capturePaperPromotionState(ctx context.Context, q orderQuerier, account str
 }
 
 func (s *Store) finishPaperPromotion(ctx context.Context, claim paperPromotionClaim, comparison paperPromotionComparison, scoreErr error, abort bool) (*PaperPromotionReceipt, error) {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, err
-	}
-	defer tx.Rollback()
-	if _, err := provePaperPromotionRecovery(ctx, tx); err != nil {
-		return nil, err
-	}
-	saved, prior, found, err := loadPaperPromotion(ctx, tx, claim.AttemptID)
-	if err != nil {
-		return nil, err
-	}
-	if !found || !reflect.DeepEqual(*saved, claim) {
-		return nil, errors.New("paper promotion claim changed")
-	}
-	if prior != nil {
-		return promotionReceipt(claim, prior), nil
-	}
-	_, claimSHA, err := orderJSONHash(claim)
-	if err != nil {
-		return nil, err
-	}
-	now := s.now().UTC()
-	claimedAt, _ := parsePaperTime(claim.RecordedAt)
-	if now.Before(claimedAt) {
-		return nil, errors.New("paper promotion clock regressed")
-	}
-	decision := paperPromotionDecision{AttemptID: claim.AttemptID, ClaimSHA256: claimSHA, CandidateResultSHA256: claim.CandidateResultSHA256, ExpectedCurrentEventID: claim.ExpectedCurrentEventID, RecordedAt: now.Format(canonicalPaperTimeLayout)}
-	switch {
-	case abort:
-		decision.Decision, decision.Reason = "ABORTED", "explicit_abort"
-	case scoreErr != nil:
-		decision.Decision, decision.Reason = "ERROR", "comparison_failed"
-	default:
-		decision.Comparison = &comparison
-		decision.Decision, decision.Reason = comparison.Decision, comparison.Reason
-		stateSHA, _, _, selection, stateErr := capturePaperPromotionState(ctx, tx, claim.AccountRef, now)
-		if stateErr != nil || stateSHA != claim.StateSHA256 || selection.CurrentEventID != claim.ExpectedCurrentEventID {
-			decision.Decision, decision.Reason = "STALE", "account_or_selection_changed"
-		}
-	}
-	var event StrategySelectionEvent
-	if decision.Decision == "PROMOTE" {
-		sequence, err := latestPaperEvaluationSequence(ctx, tx)
-		if err != nil {
-			return nil, err
-		}
-		decision.SelectionEventID = s.id("strategy_selection")
-		event = StrategySelectionEvent{EventID: decision.SelectionEventID, EventType: "SELECT", CandidateResultSHA256: claim.CandidateResultSHA256,
-			ExpectedCurrentEventID: claim.ExpectedCurrentEventID, PreviousSelectedResultSHA256: claim.IncumbentResultSHA256, SelectedResultSHA256: claim.CandidateResultSHA256,
-			ReasonCode: "auto_comparison", PaperEvaluationSequence: sequence, PaperPromotionAttemptID: claim.AttemptID, RecordedAt: now.Format(time.RFC3339Nano)}
-	}
-	canonical, sha, err := orderJSONHash(decision)
-	if err != nil {
-		return nil, err
-	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO paper_promotion_decisions(attempt_id,selection_event_id,record_sha256,record_json,recorded_at) VALUES(?,?,?,?,?)`, claim.AttemptID, nullable(decision.SelectionEventID), sha, string(canonical), decision.RecordedAt); err != nil {
-		return nil, err
-	}
-	if decision.SelectionEventID != "" {
-		if err := insertStrategySelectionEvent(ctx, tx, event); err != nil {
-			return nil, err
-		}
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, err
-	}
-	return promotionReceipt(claim, &decision), nil
+	return s.business().FinishPaperPromotion(ctx, claim, comparison, scoreErr, abort)
 }
 
 func (s *Store) PaperPromotionStatus(ctx context.Context, attemptID string) (*PaperPromotionReceipt, error) {

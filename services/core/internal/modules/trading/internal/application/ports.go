@@ -3,15 +3,33 @@ package application
 import (
 	"context"
 	"math/big"
+	"omni-folio/services/core/internal/modules/trading/contracts"
 	"omni-folio/services/core/internal/paperdomain"
+	"omni-folio/services/core/internal/researchdomain"
 	"time"
 )
 
 type UnitOfWork interface {
 	Write(context.Context, func(WriteScope) error) error
+	PromotionInputs(context.Context, string, string, string, string) (researchdomain.Strategy, researchdomain.Strategy, researchdomain.Execution, error)
+	LoadPromotion(context.Context, string) (*PromotionClaim, *PromotionDecision, bool, error)
 }
 
 type WriteScope interface {
+	RequireSchema(context.Context) error
+	ProvePaperPromotionRecovery(context.Context) (contracts.PromotionRecovery, error)
+	LoadPaperPromotion(context.Context, string) (*PromotionClaim, *PromotionDecision, bool, error)
+	PendingPromotionCount(context.Context) (int, error)
+	PromotionInputs(context.Context, string, string, string, string) (researchdomain.Strategy, researchdomain.Strategy, researchdomain.Execution, error)
+	OrderSequence(context.Context) (int64, error)
+	ResearchSequence(context.Context) (int64, error)
+	PreviousPromotionAttempt(context.Context) (string, error)
+	PromotionDecisionTime(context.Context, string) (string, error)
+	ValidatePromotionClaim(context.Context, PromotionClaim, int64) error
+	InsertPromotionClaim(context.Context, PromotionClaim) error
+	InsertPromotionDecision(context.Context, PromotionDecision) error
+	CapturePromotionState(context.Context, string, time.Time) (string, *PaperAccountingSession, string, StrategyRegistryProof, error)
+
 	RecordPaperSignalEventTx(ctx context.Context, accountRef string, signal PaperSignal) (*PaperSignalEvent, error)
 	PaperOrderBySignalFrom(ctx context.Context, accountRef, signalID string) (string, bool, error)
 	LoadOrderIntentFrom(ctx context.Context, orderID string) (OrderIntent, error)

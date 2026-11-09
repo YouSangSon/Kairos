@@ -631,8 +631,8 @@ func validateStoredPaperAccountingSession(ctx context.Context, q orderQuerier, s
 		return err
 	}
 	evidence, err := decodeStrategyArtifact([]byte(artifactJSON))
-	if err != nil || evidence.ResultSHA256 != session.StrategyResultSHA256 || evidence.executionPolicy.SHA256 != policy.SHA256 ||
-		evidence.executionPolicy.CanonicalJSON != session.ExecutionPolicyJSON || evidence.executionPolicy.StartingCash != session.StartingCash {
+	if err != nil || evidence.ResultSHA256 != session.StrategyResultSHA256 || evidence.ExecutionPolicy.SHA256 != policy.SHA256 ||
+		evidence.ExecutionPolicy.CanonicalJSON != session.ExecutionPolicyJSON || evidence.ExecutionPolicy.StartingCash != session.StartingCash {
 		return errors.New("paper accounting session policy is not derived from strategy evidence")
 	}
 	var selectedResult string

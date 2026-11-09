@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"omni-folio/services/core/internal/modules/trading/internal/application"
 	"time"
 	"unicode/utf8"
 )
@@ -67,7 +68,4 @@ func validatePaperResearchInput(raw []byte, expectedSHA, symbol, proposalAsOf st
 	return nil
 }
 
-func paperResearchWholeSecond(raw string) (time.Time, bool) {
-	value, err := time.Parse(time.RFC3339, raw)
-	return value, err == nil && value.Location() == time.UTC && value.Nanosecond() == 0 && value.Format(time.RFC3339) == raw
-}
+var paperResearchWholeSecond = application.PaperResearchWholeSecond

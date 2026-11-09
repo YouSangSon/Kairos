@@ -401,7 +401,7 @@ func validateStoredPaperSignalEvent(ctx context.Context, q orderQuerier, event P
 		return err
 	}
 	evidence, err := decodeStrategyArtifact([]byte(artifactJSON))
-	if err != nil || evidence.ResultSHA256 != event.StrategyResultSHA256 || evidence.executionPolicy.SHA256 != event.ExecutionPolicySHA256 {
+	if err != nil || evidence.ResultSHA256 != event.StrategyResultSHA256 || evidence.ExecutionPolicy.SHA256 != event.ExecutionPolicySHA256 {
 		return errors.New("paper signal execution policy binding is invalid")
 	}
 	if err := q.QueryRowContext(ctx, `SELECT selected_result_sha256 FROM strategy_selection_events WHERE event_id=?`, event.StrategySelectionEventID).Scan(&selectedResult); err != nil || selectedResult != event.StrategyResultSHA256 {

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"omni-folio/services/core/internal/modules/trading/contracts"
 	"omni-folio/services/core/internal/modules/trading/internal/application"
+	"omni-folio/services/core/internal/modules/trading/internal/codec"
 	"omni-folio/services/core/internal/orderdomain"
 	"omni-folio/services/core/internal/paperdomain"
 	"regexp"
@@ -565,14 +566,7 @@ func sameProviderExecution(left, right OrderEvent) bool {
 	return orderdomain.SameProviderExecution(left, right)
 }
 
-func orderJSONHash(value any) ([]byte, string, error) {
-	raw, err := json.Marshal(value)
-	if err != nil {
-		return nil, "", err
-	}
-	hash := sha256.Sum256(raw)
-	return raw, hex.EncodeToString(hash[:]), nil
-}
+var orderJSONHash = codec.JSONHash
 
 func insertOrderEvent(ctx context.Context, tx *sql.Tx, event OrderEvent, recordedAt string) error {
 	eventJSON, eventSHA, err := orderJSONHash(event)

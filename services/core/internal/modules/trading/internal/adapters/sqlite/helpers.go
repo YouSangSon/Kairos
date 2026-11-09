@@ -2,14 +2,16 @@ package sqlite
 
 import (
 	"context"
-	"encoding/json"
+	"omni-folio/services/core/internal/modules/trading/internal/application"
+	"omni-folio/services/core/internal/modules/trading/internal/domain"
+
 	"errors"
 	"fmt"
 	"math/big"
 	"omni-folio/services/core/internal/exact"
 	"omni-folio/services/core/migrations"
 	"regexp"
-	"strconv"
+
 	"strings"
 	"time"
 )
@@ -58,43 +60,11 @@ func nullable(value string) any {
 	return value
 }
 
-func validateMarketDataValues(open, high, low, close, volume string) error {
-	prices := make([]*big.Rat, 4)
-	for index, item := range []struct{ name, raw string }{{"open", open}, {"high", high}, {"low", low}, {"close", close}} {
-		value, err := parseDecimal(item.raw)
-		if err != nil || value.Sign() <= 0 {
-			return fmt.Errorf("has invalid %s", item.name)
-		}
-		prices[index] = value
-	}
-	parsedVolume, err := parseDecimal(volume)
-	if err != nil || parsedVolume.Sign() < 0 {
-		return errors.New("has invalid volume")
-	}
-	if prices[2].Cmp(prices[0]) > 0 || prices[2].Cmp(prices[3]) > 0 ||
-		prices[0].Cmp(prices[1]) > 0 || prices[3].Cmp(prices[1]) > 0 {
-		return errors.New("has invalid OHLC range")
-	}
-	return nil
-}
+var validateMarketDataValues = domain.ValidateBarValues
 
-func researchReportDecimal(value any, minimumSign int) (string, bool) {
-	raw, ok := value.(string)
-	if !ok || len(raw) > 128 {
-		return "", false
-	}
-	parsed, err := parseDecimal(raw)
-	return raw, err == nil && parsed.Sign() >= minimumSign
-}
+var researchReportDecimal = application.ResearchReportDecimal
 
-func researchReportInteger(value any) (int64, bool) {
-	number, ok := value.(json.Number)
-	if !ok {
-		return 0, false
-	}
-	parsed, err := number.Int64()
-	return parsed, err == nil && parsed > 0 && parsed <= 9007199254740991 && number.String() == strconv.FormatInt(parsed, 10)
-}
+var researchReportInteger = application.ResearchReportInteger
 
 const (
 	latestSchema                    = 27
