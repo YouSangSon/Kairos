@@ -281,3 +281,25 @@ func TestSQLGateRecognizesOnlyTransparentPrivateForwarders(t *testing.T) {
 		t.Fatal(violations)
 	}
 }
+
+func TestMigrationLivenessProbeIsExact(t *testing.T) {
+	source := `package observation;type MigrationProof struct{};func(p *MigrationProof)Verify(){p.tx.QueryRowContext(ctx,"SELECT 1")}`
+	root := fixtureSources(t, map[string]string{"storage/observation/migration.go": source})
+	violations, err := inspectSQLSources(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(violations) != 0 {
+		t.Fatal(violations)
+	}
+	for _, bad := range []string{strings.Replace(source, "SELECT 1", "SELECT * FROM events", 1), strings.Replace(source, "Verify", "Other", 1)} {
+		root = fixtureSources(t, map[string]string{"storage/observation/migration.go": bad})
+		violations, err = inspectSQLSources(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(violations) == 0 {
+			t.Fatal("accepted broadened migration probe")
+		}
+	}
+}

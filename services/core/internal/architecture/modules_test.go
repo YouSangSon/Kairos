@@ -26,8 +26,16 @@ func TestModuleGateRejectsBoundaryViolations(t *testing.T) {
 	cases := []struct{ name, path, source, want string }{
 		{"private import", "modules/portfolio/internal/application/nested/a.go", `package nested; import _ "omni-folio/services/core/internal/modules/ledger/internal/domain"`, "private"},
 		{"reverse business edge", "modules/ledger/internal/application/a.go", `package application; import _ "omni-folio/services/core/internal/modules/marketdata/contracts"`, "module dependency"},
+		{"codec IO", "codec/a.go", `package codec;import _ "os"`, "impure dependency"},
+		{"codec wall clock", "codec/a.go", `package codec;import "time";var now=time.Now`, "impure time.Now"},
+		{"domain codec", "modules/ledger/internal/domain/a.go", `package domain;import _ "omni-folio/services/core/internal/codec"`, "layer"},
+		{"ordinary migration authority", "modules/ledger/internal/adapters/sqlite/a.go", `package sqlite;func migrate(){registry.MigrationStarter()}`, "migration authority"},
+		{"ordinary migration config", "modules/ledger/compose.go", `package ledger;import o "omni-folio/services/core/internal/storage/observation";type Config struct{Migration *o.MigrationStarter};func Compose(){}`, "scoped capability"},
+		{"provider business import", "providers/kiwoom/a.go", `package kiwoom;import _ "omni-folio/services/core/internal/modules/trading/contracts"`, "business module"},
 		{"nested domain database", "modules/ledger/internal/domain/nested/a.go", `package nested; import _ "database/sql"`, "forbidden database/sql"},
 		{"nested domain clock", "modules/ledger/internal/domain/nested/a.go", `package nested; import clock "time"; var now=clock.Now`, "impure time.Now"},
+		{"application context timer", "modules/ledger/internal/application/a.go", `package application;import "context";var timer=context.WithTimeout`, "creates clock"},
+		{"domain stdout", "modules/ledger/internal/domain/a.go", `package domain;import "fmt";func debug(){fmt.Println("business")}`, "impure fmt"},
 		{"nested application clock", "modules/ledger/internal/application/a.go", `package application; import clock "time"; var now=clock.Now`, "impure time.Now"},
 		{"adapter legacy bypass", "modules/trading/internal/adapters/sqlite/a.go", `package sqlite; import _ "omni-folio/services/core/internal/application/ledger"`, "legacy"},
 		{"nested application adapter", "modules/ledger/internal/application/nested/a.go", `package nested; import _ "omni-folio/services/core/internal/modules/ledger/internal/adapters/sqlite"`, "layer"},
@@ -38,7 +46,13 @@ func TestModuleGateRejectsBoundaryViolations(t *testing.T) {
 		{"contract iterator", "modules/ledger/contracts/a.go", `package contracts; import "iter"; type Result struct { Rows iter.Seq[int] }`, "contract"},
 		{"contract observation result", "modules/ledger/contracts/a.go", `package contracts; import s "omni-folio/services/core/internal/storage/contracts"; type Reader interface{ Snapshot() s.ObservationRef }`, "escapes observation"},
 		{"contract hidden observation field", "modules/ledger/contracts/a.go", `package contracts; import s "omni-folio/services/core/internal/storage/contracts"; type Data struct{ ref s.ObservationRef }`, "escapes observation"},
+		{"contract context result", "modules/ledger/contracts/a.go", `package contracts;import "context";type Reader interface{Snapshot()context.Context}`, "escapes observation"},
+		{"contract timer field", "modules/ledger/contracts/a.go", `package contracts;import "time";type Result struct{Timer *time.Timer}`, "escapes observation"},
 		{"contract callback result", "modules/ledger/contracts/a.go", `package contracts; type Reader interface{ Snapshot() func() int }`, "escapes observation"},
+		{"contract hidden empty interface", "modules/ledger/contracts/a.go", `package contracts;type Payload interface{};type Result struct{Value Payload}`, "unbounded interface"},
+		{"contract custom iterator", "modules/ledger/contracts/a.go", `package contracts;type Iterator interface{Next()bool;Scan(...any)error};type Result struct{Rows Iterator}`, "generic storage"},
+		{"contract callback input", "modules/ledger/contracts/a.go", `package contracts;type Writer interface{Run(func(any)error)error}`, "callback or resource"},
+		{"contract global handle", "modules/ledger/contracts/a.go", `package contracts;var Handle any`, "mutable capability"},
 		{"contract query escape", "modules/ledger/contracts/a.go", `package contracts; type Reader interface { Query(string) error }`, "generic storage"},
 		{"unknown module", "modules/research/contracts/a.go", `package contracts; type Result string`, "unknown module"},
 		{"module root business", "modules/ledger/api.go", `package ledger; func Snapshot() int { return 1 }`, "construction"},
@@ -76,6 +90,7 @@ func TestModuleGateRejectsBoundaryViolations(t *testing.T) {
 
 func TestModuleGateAllowsPrivateInwardComposition(t *testing.T) {
 	root := fixtureSources(t, map[string]string{
+		"modules/ledger/contracts/errors.go":                   `package contracts;import "errors";var ErrMissing=errors.New("missing")`,
 		"modules/ledger/contracts/api.go":                      `package contracts; import "context"; type Snapshot struct { Revision int64 }; type Reader interface { Snapshot(context.Context) (Snapshot,error) }`,
 		"modules/marketdata/contracts/read.go":                 `package contracts; import "context"; import s "omni-folio/services/core/internal/storage/contracts"; type Reader interface { Read(context.Context,s.ObservationRef) (string,error) }`,
 		"modules/trading/internal/adapters/kiwoom/dispatch.go": `package kiwoom;import sdk "omni-folio/services/core/internal/providers/kiwoom";type MockDispatch struct{};func NewMockDispatch(){sdk.NewMockOrders(nil)};func(MockDispatch)SubmitLimitOrder(){orders.SubmitMockLimitOrder()}`,

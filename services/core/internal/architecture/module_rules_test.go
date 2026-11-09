@@ -74,6 +74,12 @@ func moduleImportViolation(relative, name string) string {
 		}
 	}
 	if owner == "" {
+		if strings.HasPrefix(relative, "providers/") && target != "" {
+			return "provider SDK imports business module " + name
+		}
+		if strings.HasPrefix(relative, "codec/") && !pureModuleImport(name) && name != "io" {
+			return "shared codec imports impure dependency " + name
+		}
 		if strings.HasPrefix(relative, "composition/") && strings.HasPrefix(name, internalPrefix) && target == "" && !strings.HasPrefix(name, internalPrefix+"storage/") && !strings.HasPrefix(name, internalPrefix+"composition/") {
 			return "composition imports private legacy implementation " + name
 		}
@@ -172,7 +178,7 @@ func inspectModuleDeclarations(path string, file *ast.File, imports map[string]s
 							continue
 						}
 						for _, field := range structure.Fields.List {
-							if forbiddenConstructionInput(field.Type, imports) {
+							if forbiddenConstructionInput(field.Type, imports, owner) {
 								violations = append(violations, path+" construction config exposes private or scoped capability")
 							}
 						}
@@ -231,6 +237,13 @@ func inspectModuleDeclarations(path string, file *ast.File, imports map[string]s
 		return violations
 	}
 	checkResults := func(function *ast.FuncType) {
+		if function.Params != nil {
+			for _, field := range function.Params.List {
+				if forbiddenContractInput(field.Type, imports) {
+					violations = append(violations, path+" public contract accepts unbounded callback or resource")
+				}
+			}
+		}
 		if function.Results != nil {
 			for _, field := range function.Results.List {
 				if forbiddenContractResult(field.Type, imports) {
@@ -247,6 +260,28 @@ func inspectModuleDeclarations(path string, file *ast.File, imports map[string]s
 		if !ok {
 			continue
 		}
+		if group.Tok == token.VAR {
+			for _, spec := range group.Specs {
+				value := spec.(*ast.ValueSpec)
+				for _, initializer := range value.Values {
+					call, ok := initializer.(*ast.CallExpr)
+					approved := false
+					if ok {
+						if selector, ok := call.Fun.(*ast.SelectorExpr); ok {
+							if pkg, ok := selector.X.(*ast.Ident); ok {
+								approved = imports[pkg.Name] == "errors" && selector.Sel.Name == "New"
+							}
+						}
+					}
+					if !approved {
+						violations = append(violations, path+" public contract contains mutable capability state")
+					}
+				}
+				if len(value.Values) == 0 {
+					violations = append(violations, path+" public contract contains mutable capability state")
+				}
+			}
+		}
 		for _, spec := range group.Specs {
 			typ, ok := spec.(*ast.TypeSpec)
 			if !ok {
@@ -260,15 +295,20 @@ func inspectModuleDeclarations(path string, file *ast.File, imports map[string]s
 					}
 				}
 			case *ast.InterfaceType:
+				if value.Methods.NumFields() == 0 {
+					violations = append(violations, path+" public contract exposes unbounded interface")
+				}
 				for _, field := range value.Methods.List {
 					for _, name := range field.Names {
 						switch name.Name {
-						case "Query", "QueryContext", "QueryRow", "QueryRowContext", "Exec", "ExecContext", "Begin", "BeginTx", "Commit", "Rollback", "RawTx":
+						case "Query", "QueryContext", "QueryRow", "QueryRowContext", "Exec", "ExecContext", "Begin", "BeginTx", "Commit", "Rollback", "RawTx", "Next", "Scan", "Columns", "ColumnTypes":
 							violations = append(violations, path+" exposes generic storage capability "+name.Name)
 						}
 					}
 					if method, ok := field.Type.(*ast.FuncType); ok {
 						checkResults(method)
+					} else if forbiddenContractResult(field.Type, imports) {
+						violations = append(violations, path+" public contract embeds escaping capability")
 					}
 				}
 			default:
@@ -301,7 +341,8 @@ func forbiddenContractResult(expr ast.Expr, imports map[string]string) bool {
 		case *ast.SelectorExpr:
 			if pkg, ok := value.X.(*ast.Ident); ok {
 				path := imports[pkg.Name]
-				if path == "database/sql" || strings.HasPrefix(path, "net/") || path == "iter" || strings.Contains(path, "/internal/") && path != internalPrefix+"exact" && path != internalPrefix+"storage/contracts" && !strings.HasSuffix(path, "/contracts") || value.Sel.Name == "ObservationRef" || strings.Contains(path, "/adapters/") {
+
+				if path == "database/sql" || path == "context" && value.Sel.Name == "Context" || path == "time" && (value.Sel.Name == "Timer" || value.Sel.Name == "Ticker") || strings.HasPrefix(path, "net/") || path == "iter" || strings.Contains(path, "/internal/") && path != internalPrefix+"exact" && path != internalPrefix+"storage/contracts" && !strings.HasSuffix(path, "/contracts") || value.Sel.Name == "ObservationRef" || strings.Contains(path, "/adapters/") {
 					bad = true
 				}
 			}
@@ -384,7 +425,7 @@ func constructionCall(name string) bool {
 		return true
 	}
 	switch name {
-	case "MatchesDB", "LedgerReader", "MarketReader", "WatchlistReader", "OwnerPriceWriter", "ReadStatements", "OwnerPriceStatements":
+	case "MatchesDB", "LedgerReader", "MarketReader", "WatchlistReader", "OwnerPriceWriter", "ReadStatements", "OwnerPriceStatements", "MigrationStarter":
 		return true
 	}
 	return false
@@ -419,24 +460,51 @@ func constructionCondition(expr ast.Expr) bool {
 	return false
 }
 
-func forbiddenConstructionInput(expr ast.Expr, imports map[string]string) bool {
+func forbiddenConstructionInput(expr ast.Expr, imports map[string]string, owner string) bool {
 	bad := false
 	ast.Inspect(expr, func(node ast.Node) bool {
 		if selector, ok := node.(*ast.SelectorExpr); ok {
 			if pkg, ok := selector.X.(*ast.Ident); ok {
 				path := imports[pkg.Name]
+				if path == internalPrefix+"storage/observation" && selector.Sel.Name == "MigrationStarter" && owner != "maintenance" {
+					bad = true
+				}
 				if path == "database/sql" && selector.Sel.Name != "DB" {
 					bad = true
 				}
 				if path == internalPrefix+"providers/kiwoom" && selector.Sel.Name != "Client" {
 					bad = true
 				}
-				if path == internalPrefix+"storage/observation" && selector.Sel.Name != "Registry" && selector.Sel.Name != "ReadResolver" && selector.Sel.Name != "ImportResolver" {
+				if path == internalPrefix+"storage/observation" && selector.Sel.Name != "Registry" && selector.Sel.Name != "ReadResolver" && selector.Sel.Name != "ImportResolver" && selector.Sel.Name != "MigrationStarter" {
 					bad = true
 				}
 				if strings.Contains(path, "/modules/") && !strings.HasSuffix(path, "/contracts") {
 					bad = true
 				}
+			}
+		}
+		return true
+	})
+	return bad
+}
+
+func forbiddenContractInput(expr ast.Expr, imports map[string]string) bool {
+	bad := false
+	ast.Inspect(expr, func(node ast.Node) bool {
+		switch value := node.(type) {
+		case *ast.FuncType, *ast.ChanType:
+			bad = true
+		case *ast.Ident:
+			if value.Name == "any" {
+				bad = true
+			}
+		case *ast.InterfaceType:
+			if value.Methods.NumFields() == 0 {
+				bad = true
+			}
+		case *ast.SelectorExpr:
+			if pkg, ok := value.X.(*ast.Ident); ok && imports[pkg.Name] == "time" && (value.Sel.Name == "Timer" || value.Sel.Name == "Ticker") {
+				bad = true
 			}
 		}
 		return true

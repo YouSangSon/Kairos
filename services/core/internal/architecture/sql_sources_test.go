@@ -31,6 +31,7 @@ type parsedSource struct {
 	path      string
 	file      *ast.File
 	constants map[string]ast.Expr
+	positions *token.FileSet
 }
 
 func inspectSQLSources(root string) ([]string, error) {
@@ -49,10 +50,11 @@ func inspectSQLSources(root string) ([]string, error) {
 		}
 		relative = filepath.ToSlash(relative)
 		// Legacy packages are covered by the original dependency gate until their atomic migration.
-		if !strings.HasPrefix(relative, "modules/") && !strings.HasPrefix(relative, "composition/") && !strings.HasPrefix(relative, "storage/") {
+		if !strings.HasPrefix(relative, "modules/") && !strings.HasPrefix(relative, "composition/") && !strings.HasPrefix(relative, "storage/") && !strings.HasPrefix(relative, "codec/") && !strings.HasPrefix(relative, "providers/") {
 			return nil
 		}
-		file, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
+		positions := token.NewFileSet()
+		file, err := parser.ParseFile(positions, path, nil, 0)
 		if err != nil {
 			return err
 		}
@@ -72,7 +74,7 @@ func inspectSQLSources(root string) ([]string, error) {
 				}
 			}
 		}
-		sources = append(sources, parsedSource{relative, file, packages[pkg]})
+		sources = append(sources, parsedSource{relative, file, packages[pkg], positions})
 		return nil
 	})
 	if err != nil {
@@ -185,7 +187,10 @@ func inspectSQLSources(root string) ([]string, error) {
 	for _, source := range sources {
 		owner, layer := modulePath(source.path)
 		sqlite := owner != "" && layer == "adapters" && strings.Contains(source.path, "/internal/adapters/sqlite/")
-		check := func(sql string, called bool) {
+		check := func(sql string, called bool, pos token.Pos) {
+			if approvedSchemaProbe(source.path, source.file, pos, sql) {
+				return
+			}
 			if !called && !looksLikeSQL(sql) {
 				return
 			}
@@ -228,16 +233,16 @@ func inspectSQLSources(root string) ([]string, error) {
 						}
 						sql, known := constantString(call.Args[index], source.constants, map[string]bool{})
 						if !known {
-							violations = append(violations, source.path+" unresolved SQL expression")
+							violations = append(violations, fmt.Sprintf("%s:%d unresolved SQL expression in %s", source.path, source.positions.Position(call.Pos()).Line, selector.Sel.Name))
 						} else {
-							check(sql, true)
+							check(sql, true, call.Pos())
 						}
 					}
 				}
 			}
 			if expr, ok := node.(ast.Expr); ok {
 				if sql, known := constantString(expr, source.constants, map[string]bool{}); known && looksLikeSQL(sql) {
-					check(sql, false)
+					check(sql, false, expr.Pos())
 					return false
 				}
 			}
@@ -433,6 +438,25 @@ func transparentSQLForwarder(path string, file *ast.File, call *ast.CallExpr) bo
 		}
 		_, variadic := function.Type.Params.List[2].Type.(*ast.Ellipsis)
 		return variadic
+	}
+	return false
+}
+
+func approvedSchemaProbe(path string, file *ast.File, pos token.Pos, sql string) bool {
+	if path != "storage/observation/migration.go" || strings.Join(strings.Fields(sql), " ") != "SELECT 1" {
+		return false
+	}
+	for _, decl := range file.Decls {
+		function, ok := decl.(*ast.FuncDecl)
+		if !ok || function.Name.Name != "Verify" || function.Recv == nil || pos < function.Pos() || pos > function.End() {
+			continue
+		}
+		receiver := function.Recv.List[0].Type
+		if pointer, ok := receiver.(*ast.StarExpr); ok {
+			receiver = pointer.X
+		}
+		name, ok := receiver.(*ast.Ident)
+		return ok && name.Name == "MigrationProof"
 	}
 	return false
 }

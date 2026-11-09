@@ -37,7 +37,7 @@ func TestDomainDependencies(t *testing.T) {
 		t.Error(violation)
 	}
 	for _, domain := range []string{"exact", "orderdomain", "paperdomain", "riskdomain", "strategydomain", "researchdomain"} {
-		if !seen[domain] {
+		if !seen[domain] && !(domain != "exact" && seen["trading/domain"]) {
 			t.Errorf("%s has no production source", domain)
 		}
 	}
@@ -72,6 +72,13 @@ func inspectDependencies(root string) ([]string, map[string]bool, error) {
 		}
 		scope := strings.Split(relative, "/")[0]
 		seen[scope] = true
+		owner, layer := modulePath(relative)
+		if owner != "" {
+			seen["module:"+owner] = true
+			if layer == "domain" {
+				seen[owner+"/domain"] = true
+			}
+		}
 		file, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
 		if err != nil {
 			return err
@@ -149,6 +156,13 @@ func inspectDependencies(root string) ([]string, map[string]bool, error) {
 			if !ok {
 				return true
 			}
+			isMigrationType := false
+			if pkg, ok := selector.X.(*ast.Ident); ok && imports[pkg.Name] == internalPrefix+"storage/observation" {
+				isMigrationType = true
+			}
+			if selector.Sel.Name == "MigrationStarter" && !isMigrationType && !approvedMigrationConstruction(relative, file, selector.Pos()) {
+				violations = append(violations, relative+" obtains migration authority outside maintenance")
+			}
 			if selector.Sel.Name == "NewMockOrders" || selector.Sel.Name == "SubmitMockLimitOrder" {
 				if !approvedSDKDispatch(relative, file, selector.Pos(), selector.Sel.Name) || !directCalls[selector] {
 					violations = append(violations, relative+" references mock order SDK outside sealed dispatch adapter")
@@ -159,9 +173,22 @@ func inspectDependencies(root string) ([]string, map[string]bool, error) {
 				return true
 			}
 			_, legacyDomain := domainDependencies[scope]
-			if (legacyDomain || moduleLayer(relative) == "domain" || moduleLayer(relative) == "application" || moduleLayer(relative) == "contracts") && imports[pkg.Name] == "time" {
+			pureLayer := legacyDomain || strings.HasPrefix(relative, "codec/") || moduleLayer(relative) == "domain" || moduleLayer(relative) == "application" || moduleLayer(relative) == "contracts"
+			if pureLayer && imports[pkg.Name] == "context" {
 				switch selector.Sel.Name {
-				case "Now", "Since", "Until", "After", "AfterFunc", "NewTimer", "NewTicker", "Tick", "Sleep", "LoadLocation":
+				case "WithTimeout", "WithTimeoutCause", "WithDeadline", "WithDeadlineCause", "AfterFunc":
+					violations = append(violations, relative+" creates clock through context."+selector.Sel.Name)
+				}
+			}
+			if pureLayer && imports[pkg.Name] == "fmt" {
+				switch selector.Sel.Name {
+				case "Print", "Printf", "Println":
+					violations = append(violations, relative+" uses impure fmt."+selector.Sel.Name)
+				}
+			}
+			if (legacyDomain || strings.HasPrefix(relative, "codec/") || moduleLayer(relative) == "domain" || moduleLayer(relative) == "application" || moduleLayer(relative) == "contracts") && imports[pkg.Name] == "time" {
+				switch selector.Sel.Name {
+				case "Local", "Now", "Since", "Until", "After", "AfterFunc", "NewTimer", "NewTicker", "Tick", "Sleep", "LoadLocation":
 					violations = append(violations, relative+" uses impure time."+selector.Sel.Name)
 				}
 			}
@@ -288,6 +315,25 @@ func approvedSDKDispatch(path string, file *ast.File, pos token.Pos, symbol stri
 			return function.Name.Name == "NewMockDispatch" && function.Recv == nil
 		}
 		return function.Name.Name == "SubmitLimitOrder" && function.Recv != nil
+	}
+	return false
+}
+
+func approvedMigrationConstruction(path string, file *ast.File, pos token.Pos) bool {
+	if strings.HasPrefix(path, "storage/observation/") {
+		return true
+	}
+	if strings.HasPrefix(path, "modules/maintenance/internal/adapters/sqlite/") {
+		return true
+	}
+	if path != "modules/maintenance/compose.go" {
+		return false
+	}
+	for _, decl := range file.Decls {
+		function, ok := decl.(*ast.FuncDecl)
+		if ok && function.Name.Name == "Compose" && pos >= function.Pos() && pos <= function.End() {
+			return true
+		}
 	}
 	return false
 }
