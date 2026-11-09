@@ -2,7 +2,6 @@ package ownership
 
 import (
 	"sort"
-	"strings"
 )
 
 const ControlTable = "schema_migrations"
@@ -52,21 +51,8 @@ func ObjectOwner(name string) (string, bool) {
 	if owner, ok := Owner(name); ok {
 		return owner, true
 	}
-	aliases := map[string]string{
-		"execution_authority_latest_idx": "execution_authority_events",
-		"owner_price_series_latest_idx":  "owner_price_series_versions",
-		"owner_fx_series_latest_idx":     "owner_fx_series_versions",
-		"benchmark_series_latest_idx":    "benchmark_series_versions",
-	}
-	if table, ok := aliases[name]; ok {
-		return Owner(table)
-	}
-	for table, owner := range owners {
-		if strings.HasPrefix(name, table+"_") {
-			return owner, true
-		}
-	}
-	return "", false
+	owner, ok := schemaObjects[name]
+	return owner, ok
 }
 
 func Tables(owner string) []string {
