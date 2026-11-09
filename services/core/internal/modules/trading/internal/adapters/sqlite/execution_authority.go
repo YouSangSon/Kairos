@@ -87,7 +87,7 @@ func (s *Store) AcquireSyntheticExecutionLease(ctx context.Context, accountRef s
 	return state, nil
 }
 
-func (s *Store) acquireSyntheticExecutionLeaseTx(ctx context.Context, tx *sql.Tx, accountRef string) (*ExecutionAuthorityState, error) {
+func (s *Store) acquireSyntheticExecutionLeaseTx(ctx context.Context, tx *transaction, accountRef string) (*ExecutionAuthorityState, error) {
 	return s.business().AcquireSyntheticExecutionLeaseTx(ctx, &writeScope{store: s, tx: tx}, accountRef)
 }
 
@@ -115,7 +115,7 @@ func (s *Store) authorizeSyntheticDispatchOnce(ctx context.Context, orderID stri
 	return state, dispatched, nil
 }
 
-func (s *Store) authorizeSyntheticDispatchOnceTx(ctx context.Context, tx *sql.Tx, orderID string, fencingToken int64) (*OrderState, bool, error) {
+func (s *Store) authorizeSyntheticDispatchOnceTx(ctx context.Context, tx *transaction, orderID string, fencingToken int64) (*OrderState, bool, error) {
 	return s.business().AuthorizeSyntheticDispatchOnceTx(ctx, &writeScope{store: s, tx: tx}, orderID, fencingToken)
 }
 
@@ -134,7 +134,7 @@ func (s *Store) validateOwnedExecutionLease(authority ExecutionAuthorityState, f
 	return s.business().ValidateOwnedExecutionLease(authority, fencingToken, now)
 }
 
-func (s *Store) haltAllSyntheticExecutionTx(ctx context.Context, tx *sql.Tx, now time.Time) error {
+func (s *Store) haltAllSyntheticExecutionTx(ctx context.Context, tx *transaction, now time.Time) error {
 	accountRefs, err := armedExecutionAccounts(ctx, tx)
 	if err != nil {
 		return err
@@ -143,7 +143,7 @@ func (s *Store) haltAllSyntheticExecutionTx(ctx context.Context, tx *sql.Tx, now
 	return err
 }
 
-func (s *Store) haltSyntheticExecutionTx(ctx context.Context, tx *sql.Tx, now time.Time, reasonCode, policyEventID string, accountRefs []string, automaticHaltIDs map[string]string) (int, error) {
+func (s *Store) haltSyntheticExecutionTx(ctx context.Context, tx *transaction, now time.Time, reasonCode, policyEventID string, accountRefs []string, automaticHaltIDs map[string]string) (int, error) {
 	return s.business().HaltSyntheticExecutionTx(ctx, &writeScope{store: s, tx: tx}, now, reasonCode, policyEventID, accountRefs, automaticHaltIDs)
 }
 
@@ -251,7 +251,7 @@ var authorizedOrderEvent = application.AuthorizedOrderEvent
 
 var authorityState = application.AuthorityState
 
-func insertExecutionAuthorityRecord(ctx context.Context, tx *sql.Tx, record executionAuthorityRecord) error {
+func insertExecutionAuthorityRecord(ctx context.Context, tx *transaction, record executionAuthorityRecord) error {
 	if err := validateExecutionAuthorityRecordBasic(record); err != nil {
 		return err
 	}
@@ -366,7 +366,7 @@ func loadExecutionAuthorityRecordByID(ctx context.Context, q orderQuerier, event
 
 var validateExecutionAuthorityRecordStandalone = application.ValidateExecutionAuthorityRecordStandalone
 
-func insertRiskReservation(ctx context.Context, tx *sql.Tx, record riskReservationRecord) error {
+func insertRiskReservation(ctx context.Context, tx *transaction, record riskReservationRecord) error {
 	if err := validateRiskReservationRecord(record); err != nil {
 		return err
 	}

@@ -141,7 +141,7 @@ func (s *Store) AdmitPaperSignal(ctx context.Context, accountRef string, signal 
 	return event, state, nil
 }
 
-func (s *Store) admitPaperSignalTx(ctx context.Context, tx *sql.Tx, accountRef string, signal PaperSignal, fencingToken int64) (*PaperSignalEvent, *OrderState, error) {
+func (s *Store) admitPaperSignalTx(ctx context.Context, tx *transaction, accountRef string, signal PaperSignal, fencingToken int64) (*PaperSignalEvent, *OrderState, error) {
 	return s.business().AdmitPaperSignalTx(ctx, &writeScope{store: s, tx: tx}, accountRef, signal, fencingToken)
 }
 
@@ -157,7 +157,7 @@ func (s *Store) runPaperOrderThroughCloseWithClaim(ctx context.Context, orderID 
 	return s.business().RunPaperOrderThroughCloseWithClaim(ctx, orderID, fencingToken, claim, throughClose)
 }
 
-func appendCapitalizedPaperFillTx(ctx context.Context, tx *sql.Tx, event OrderEvent, recordedAt string) (*OrderState, error) {
+func appendCapitalizedPaperFillTx(ctx context.Context, tx *transaction, event OrderEvent, recordedAt string) (*OrderState, error) {
 	if err := validateOrderEvent(event); err != nil {
 		return nil, err
 	}

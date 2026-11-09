@@ -2,6 +2,7 @@ package contracts
 
 import (
 	"context"
+	storage "omni-folio/services/core/internal/storage/contracts"
 )
 
 type BackupQuery struct {
@@ -9,7 +10,9 @@ type BackupQuery struct {
 	Archival bool
 }
 type Recovery interface {
-	VerifyBackup(context.Context, BackupQuery) (*RecoverySnapshot, error)
+	VerifyRecovery(context.Context) (*RecoverySnapshot, error)
+	MigrationFacts(context.Context, storage.ObservationRef, MigrationQuery) (*MigrationSnapshot, error)
+	VerifyBackup(context.Context, storage.ObservationRef, BackupQuery) (*RecoverySnapshot, error)
 }
 type RecoverySnapshot struct {
 	Orders              OrderRecovery
@@ -74,4 +77,23 @@ type RunnerLeaseRecovery struct {
 type PromotionRecovery struct {
 	SHA256            string
 	Claims, Decisions int
+}
+
+type MigrationQuery struct {
+	Schema      int
+	PostRebuild bool
+}
+type JournalShape struct {
+	Rows        int
+	MaxSequence int64
+}
+type MigrationSnapshot struct {
+	AuthoritySHA       string
+	AuthorityCount     int
+	AuthorityShape     JournalShape
+	Strategy           StrategyRecovery
+	StrategyShape      JournalShape
+	Orders             OrderRecovery
+	SelectionShape     JournalShape
+	AddedPromotionRows int
 }

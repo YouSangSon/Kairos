@@ -2,7 +2,6 @@ package sqlite
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"strings"
@@ -16,7 +15,7 @@ type cancelPaperAuthorizationRead struct {
 	cancel context.CancelFunc
 }
 
-func (q cancelPaperAuthorizationRead) QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row {
+func (q cancelPaperAuthorizationRead) QueryRowContext(ctx context.Context, query string, args ...any) rowScanner {
 	if strings.Contains(query, "FROM "+q.table) {
 		q.cancel()
 	}

@@ -2,7 +2,6 @@ package sqlite
 
 import (
 	"context"
-	"database/sql"
 	"math/big"
 	"omni-folio/services/core/internal/modules/trading/internal/application"
 	"time"
@@ -10,7 +9,7 @@ import (
 
 type writeScope struct {
 	store *Store
-	tx    *sql.Tx
+	tx    *transaction
 }
 
 func (s *Store) Write(ctx context.Context, work func(application.WriteScope) error) error {
@@ -25,7 +24,7 @@ func (s *Store) Write(ctx context.Context, work func(application.WriteScope) err
 	return tx.Commit()
 }
 func (s *Store) business() *application.UseCases {
-	return application.New(s, s.now, s.id, s.executionOwner, s.paperRunnerOwner)
+	return application.New(s, s, s.now, s.id, s.executionOwner, s.paperRunnerOwner)
 }
 func (j *writeScope) RecordPaperSignalEventTx(ctx context.Context, accountRef string, signal PaperSignal) (*PaperSignalEvent, error) {
 	return j.store.recordPaperSignalEventTx(ctx, j.tx, accountRef, signal)

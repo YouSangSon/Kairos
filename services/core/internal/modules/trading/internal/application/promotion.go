@@ -212,7 +212,7 @@ func (s *UseCases) scorePaperPromotionClaim(ctx context.Context, claim Promotion
 	if err != nil {
 		return paperPromotionComparison{}, err
 	}
-	candidate, incumbent, execution, err := s.journal.PromotionInputs(ctx, claim.CandidateResultSHA256, claim.IncumbentResultSHA256, claim.StartingCash, claim.ExecutionPolicySHA256)
+	candidate, incumbent, execution, err := s.promotionReader.PromotionInputs(ctx, claim.CandidateResultSHA256, claim.IncumbentResultSHA256, claim.StartingCash, claim.ExecutionPolicySHA256)
 	if err != nil {
 		return paperPromotionComparison{}, err
 	}

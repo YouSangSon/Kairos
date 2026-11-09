@@ -197,7 +197,7 @@ func latestPaperEvaluationSequence(ctx context.Context, q orderQuerier) (int64, 
 	return sequence, err
 }
 
-func insertPaperEvaluationEvent(ctx context.Context, tx *sql.Tx, event PaperEvaluationEvent) error {
+func insertPaperEvaluationEvent(ctx context.Context, tx *transaction, event PaperEvaluationEvent) error {
 	if err := validatePaperEvaluationEvent(event); err != nil {
 		return err
 	}

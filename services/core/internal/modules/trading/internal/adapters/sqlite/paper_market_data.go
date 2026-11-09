@@ -75,7 +75,7 @@ func (s *Store) RecordPaperMarketBar(ctx context.Context, input PaperMarketBarOb
 	return stored, nil
 }
 
-func recordPaperMarketBarTx(ctx context.Context, tx *sql.Tx, bar PaperMarketBarObservation) (*PaperMarketBarObservation, error) {
+func recordPaperMarketBarTx(ctx context.Context, tx *transaction, bar PaperMarketBarObservation) (*PaperMarketBarObservation, error) {
 	if tx == nil {
 		return nil, errors.New("paper market transaction is required")
 	}
@@ -106,7 +106,7 @@ func recordPaperMarketBarTx(ctx context.Context, tx *sql.Tx, bar PaperMarketBarO
 	return &bar, nil
 }
 
-func (s *Store) recordPaperSignalEventTx(ctx context.Context, tx *sql.Tx, accountRef string, signal PaperSignal) (*PaperSignalEvent, error) {
+func (s *Store) recordPaperSignalEventTx(ctx context.Context, tx *transaction, accountRef string, signal PaperSignal) (*PaperSignalEvent, error) {
 	if s == nil || s.db == nil || s.now == nil || tx == nil || !orderAlias(accountRef, "account") {
 		return nil, errors.New("paper signal recorder is not configured")
 	}
@@ -569,7 +569,7 @@ func paperSignalEventID(accountRef, signalID string) string {
 	return "paper_signal_event_" + hex.EncodeToString(hash[:16])
 }
 
-func closeRows(rows *sql.Rows) error {
+func closeRows(rows rowset) error {
 	if err := rows.Err(); err != nil {
 		rows.Close()
 		return err

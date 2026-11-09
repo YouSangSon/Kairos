@@ -11,8 +11,8 @@ import (
 	"omni-folio/services/core/internal/codec"
 	"omni-folio/services/core/internal/modules/trading/contracts"
 	"omni-folio/services/core/internal/modules/trading/internal/application"
+	"omni-folio/services/core/internal/modules/trading/internal/domain"
 	"omni-folio/services/core/internal/orderdomain"
-	"omni-folio/services/core/internal/paperdomain"
 	"regexp"
 	"strings"
 	"time"
@@ -32,8 +32,8 @@ type OrderEvent = contracts.OrderEvent
 type OrderState = contracts.OrderState
 
 type orderQuerier interface {
-	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
-	QueryRowContext(context.Context, string, ...any) *sql.Row
+	QueryContext(context.Context, string, ...any) (rowset, error)
+	QueryRowContext(context.Context, string, ...any) rowScanner
 }
 
 type orderRecoveryProof struct {
@@ -206,7 +206,7 @@ func (s *Store) RecordOrderIntent(ctx context.Context, intent OrderIntent) (*Ord
 	return state, nil
 }
 
-func (s *Store) recordOrderIntentTx(ctx context.Context, tx *sql.Tx, intent OrderIntent) (*OrderState, error) {
+func (s *Store) recordOrderIntentTx(ctx context.Context, tx *transaction, intent OrderIntent) (*OrderState, error) {
 	if err := validateOrderIntent(intent); err != nil {
 		return nil, err
 	}
@@ -277,11 +277,11 @@ func (s *Store) AppendOrderEvent(ctx context.Context, event OrderEvent) (*OrderS
 	return next, nil
 }
 
-func appendOrderEventTx(ctx context.Context, tx *sql.Tx, event OrderEvent, recordedAt string) (*OrderState, error) {
+func appendOrderEventTx(ctx context.Context, tx *transaction, event OrderEvent, recordedAt string) (*OrderState, error) {
 	return appendOrderEventTxMode(ctx, tx, event, recordedAt, false)
 }
 
-func appendOrderEventTxMode(ctx context.Context, tx *sql.Tx, event OrderEvent, recordedAt string, allowCapitalizedPaperFill bool) (*OrderState, error) {
+func appendOrderEventTxMode(ctx context.Context, tx *transaction, event OrderEvent, recordedAt string, allowCapitalizedPaperFill bool) (*OrderState, error) {
 	if event.Type == "FILL_RECORDED" {
 		intent, err := loadOrderIntentFrom(ctx, tx, event.OrderID)
 		if err != nil {
@@ -433,79 +433,7 @@ func applyOrderEvent(current *OrderState, event OrderEvent) (*OrderState, error)
 }
 
 func validateOrderIntent(intent OrderIntent) error {
-	if !safeOrderID(intent.ClientOrderID) {
-		return errors.New("client_order_id is invalid")
-	}
-	if intent.Provider != "kiwoom" || (intent.Mode != "synthetic" && intent.Mode != "paper") || intent.Exchange != "KRX" ||
-		(intent.Side != "BUY" && intent.Side != "SELL") || intent.Currency != "KRW" {
-		return errors.New("order intent is outside the synthetic/paper Kiwoom/KRW/KRX boundary")
-	}
-	if !orderAlias(intent.AccountRef, "account") {
-		return errors.New("account_ref must be an opaque Kiwoom account alias")
-	}
-	if !kiwoomStockPattern.MatchString(intent.Symbol) {
-		return errors.New("symbol must be a six-digit KRX code")
-	}
-	if !validOrderInteger(intent.Quantity) {
-		return errors.New("quantity must be a positive canonical integer")
-	}
-	capitalized := intent.Mode == "paper" && intent.SignalSchemaVersion == capitalizedPaperSignalSchema
-	if capitalized {
-		if intent.OrderType != "PAPER_MARKET" || intent.LimitPrice != "" || !paperdomain.ValidCapitalizedQuantity(intent.Quantity, false) {
-			return errors.New("capitalized paper order must be PAPER_MARKET without a limit price")
-		}
-	} else {
-		if intent.OrderType != "LIMIT" || len(intent.LimitPrice) == 0 || len(intent.LimitPrice) > 64 {
-			return errors.New("limit_price is invalid")
-		}
-		price, err := parseDecimal(intent.LimitPrice)
-		if err != nil || price.Sign() <= 0 {
-			return errors.New("limit_price must be a positive canonical decimal")
-		}
-	}
-	strategyBound := intent.StrategyResultSHA256 != "" || intent.StrategySelectionEventID != ""
-	if strategyBound && (!strategySHA256Pattern.MatchString(intent.StrategyResultSHA256) || !safeOrderID(intent.StrategySelectionEventID)) {
-		return errors.New("strategy order selection binding is invalid")
-	}
-	signalBound := intent.SignalSchemaVersion != "" || intent.SignalID != "" || intent.SignalDataSHA256 != "" ||
-		intent.SignalDataAsOf != "" || intent.SignalGeneratedAt != "" || intent.SignalExpiresAt != "" || intent.SignalTargetQuantity != ""
-	if intent.Mode == "paper" && (!strategyBound || !signalBound) {
-		return errors.New("paper order requires strategy and signal bindings")
-	}
-	if signalBound {
-		dataAsOf, dataOK := canonicalUTCTime(intent.SignalDataAsOf)
-		generatedAt, generatedOK := canonicalUTCTime(intent.SignalGeneratedAt)
-		expiresAt, expiresOK := canonicalUTCTime(intent.SignalExpiresAt)
-		legacySignal := intent.SignalSchemaVersion == legacyPaperSignalSchema && intent.SignalTargetQuantity == ""
-		targetSignal := intent.SignalSchemaVersion == paperSignalSchema && validOrderInteger(intent.SignalTargetQuantity)
-		if targetSignal {
-			target, _ := parseDecimal(intent.SignalTargetQuantity)
-			quantity, _ := parseDecimal(intent.Quantity)
-			targetSignal = target.Cmp(quantity) >= 0
-		}
-		capitalizedSignal := intent.SignalSchemaVersion == capitalizedPaperSignalSchema && validPaperTargetQuantity(intent.SignalTargetQuantity)
-		if capitalizedSignal {
-			dataAsOf, dataOK = parsePaperTime(intent.SignalDataAsOf)
-			generatedAt, generatedOK = parsePaperTime(intent.SignalGeneratedAt)
-			expiresAt, expiresOK = parsePaperTime(intent.SignalExpiresAt)
-		}
-		if !strategyBound || (!legacySignal && !targetSignal && !capitalizedSignal) || !safeOrderID(intent.SignalID) ||
-			!strategySHA256Pattern.MatchString(intent.SignalDataSHA256) || !dataOK || !generatedOK || !expiresOK ||
-			dataAsOf.After(generatedAt) || !generatedAt.Before(expiresAt) {
-			return errors.New("strategy signal binding is invalid")
-		}
-	}
-	paperBound := intent.PaperAccountingSessionID != "" || intent.PaperAccountingPolicyVersion != "" ||
-		intent.PaperSignalEventID != "" || intent.ExecutionPolicySHA256 != ""
-	if capitalized {
-		if !safeOrderID(intent.PaperAccountingSessionID) || intent.PaperAccountingPolicyVersion != paperAccountingPolicyVersion ||
-			!safeOrderID(intent.PaperSignalEventID) || !strategySHA256Pattern.MatchString(intent.ExecutionPolicySHA256) {
-			return errors.New("capitalized paper order accounting binding is invalid")
-		}
-	} else if paperBound {
-		return errors.New("paper accounting binding is invalid for a legacy or synthetic order")
-	}
-	return nil
+	return domain.ValidateOrderIntent(domain.OrderIntent(intent))
 }
 
 var validateOrderEvent = application.ValidateOrderEvent
@@ -568,7 +496,7 @@ func sameProviderExecution(left, right OrderEvent) bool {
 
 var orderJSONHash = codec.JSONHash
 
-func insertOrderEvent(ctx context.Context, tx *sql.Tx, event OrderEvent, recordedAt string) error {
+func insertOrderEvent(ctx context.Context, tx *transaction, event OrderEvent, recordedAt string) error {
 	eventJSON, eventSHA, err := orderJSONHash(event)
 	if err != nil {
 		return err
@@ -576,7 +504,7 @@ func insertOrderEvent(ctx context.Context, tx *sql.Tx, event OrderEvent, recorde
 	return insertOrderEventRow(ctx, tx, event, eventSHA, string(eventJSON), recordedAt)
 }
 
-func insertOrderEventRow(ctx context.Context, tx *sql.Tx, event OrderEvent, eventSHA, eventJSON, recordedAt string) error {
+func insertOrderEventRow(ctx context.Context, tx *transaction, event OrderEvent, eventSHA, eventJSON, recordedAt string) error {
 	if err := requirePaperPromotionAppendTime(ctx, tx, recordedAt); err != nil {
 		return err
 	}

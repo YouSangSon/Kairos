@@ -50,7 +50,7 @@ var paperPerformancePolicyID = application.PaperPerformancePolicyID
 
 var paperPerformanceAutomaticHaltID = application.PaperPerformanceAutomaticHaltID
 
-func insertPaperPerformancePolicyEvent(ctx context.Context, tx *sql.Tx, event PaperPerformancePolicyEvent) error {
+func insertPaperPerformancePolicyEvent(ctx context.Context, tx *transaction, event PaperPerformancePolicyEvent) error {
 	if err := validatePaperPerformancePolicyEvent(event); err != nil {
 		return fmt.Errorf("paper performance policy event %q: %w", event.PolicyEventID, err)
 	}

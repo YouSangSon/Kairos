@@ -11,6 +11,9 @@ import (
 
 type UnitOfWork interface {
 	Write(context.Context, func(WriteScope) error) error
+}
+
+type PromotionReader interface {
 	PromotionInputs(context.Context, string, string, string, string) (researchdomain.Strategy, researchdomain.Strategy, researchdomain.Execution, error)
 	LoadPromotion(context.Context, string) (*PromotionClaim, *PromotionDecision, bool, error)
 }

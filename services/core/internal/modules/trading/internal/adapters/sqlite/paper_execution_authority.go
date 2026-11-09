@@ -18,7 +18,7 @@ const (
 
 type paperExecutionAuthorization = application.PaperAuthorization
 
-func (s *Store) authorizePaperDispatchOnceTx(ctx context.Context, tx *sql.Tx, orderID string, fencingToken int64) (*OrderState, bool, error) {
+func (s *Store) authorizePaperDispatchOnceTx(ctx context.Context, tx *transaction, orderID string, fencingToken int64) (*OrderState, bool, error) {
 	return s.business().AuthorizePaperDispatchOnceTx(ctx, &writeScope{store: s, tx: tx}, orderID, fencingToken)
 }
 
@@ -50,7 +50,7 @@ func validateCapitalizedPaperOrderBindings(ctx context.Context, q orderQuerier, 
 
 var paperAuthorizedOrderEvent = application.PaperAuthorizedOrderEvent
 
-func insertPaperExecutionAuthorization(ctx context.Context, tx *sql.Tx, authorization paperExecutionAuthorization) error {
+func insertPaperExecutionAuthorization(ctx context.Context, tx *transaction, authorization paperExecutionAuthorization) error {
 	if err := validatePaperExecutionAuthorizationRecord(authorization); err != nil {
 		return err
 	}

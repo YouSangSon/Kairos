@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"math/big"
+	"omni-folio/services/core/internal/modules/trading/internal/domain"
 	"omni-folio/services/core/internal/paperdomain"
 	"omni-folio/services/core/internal/riskdomain"
 
@@ -38,34 +39,18 @@ func (s *UseCases) AdmitPaperSignalTx(ctx context.Context, tx WriteScope, accoun
 		}
 		return event, state, nil
 	}
-	target, ok := new(big.Int).SetString(event.TargetQuantity, 10)
-	if !ok || target.Sign() < 0 {
-		return nil, nil, errors.New("paper target quantity is invalid")
-	}
 	projection, err := tx.Paper().ReplayPaperProjectionFrom(ctx, accountRef, event.Symbol)
 	if err != nil {
 		return nil, nil, err
 	}
-	if projection.Active {
-		if projection.Quantity.Cmp(target) == 0 {
-			return event, nil, nil
-		}
-		return nil, nil, errors.New("active paper order target cannot be replaced")
+	change, err := domain.ChangeForTarget(projection, event.TargetQuantity)
+	if err != nil {
+		return nil, nil, err
 	}
-	delta := new(big.Int).Sub(target, projection.Quantity)
-	if delta.Sign() == 0 {
+	if change == nil {
 		return event, nil, nil
 	}
-	side := "BUY"
-	quantity := new(big.Int).Set(delta)
-	if delta.Sign() < 0 {
-		side = "SELL"
-		quantity.Neg(quantity)
-		if quantity.Cmp(projection.Quantity) > 0 {
-			return nil, nil, errors.New("paper SELL exceeds filled holdings")
-		}
-	}
-	intent := CapitalizedPaperOrderIntent(*event, side, quantity.String())
+	intent := CapitalizedPaperOrderIntent(*event, change.Side, change.Quantity)
 	state, err := tx.Orders().RecordOrderIntentTx(ctx, intent)
 	if err != nil {
 		return nil, nil, err

@@ -135,7 +135,7 @@ func TestPaperProposalFailureAtomicityAndOwnedDeadline(t *testing.T) {
 	lease := mustK2CLease(t, svc, k2aAccountRef)
 	raw := paperProposalForTest(t, svc, signal, "golden_cross")
 	before := paperAdmissionCountsForTest(t, svc)
-	foreign := newService(svc.db, svc.now, randomID)
+	foreign := newService(svc.db.DB, svc.now, randomID)
 	if _, _, err := foreign.AdmitPaperProposal(context.Background(), k2aAccountRef, signal.StrategySelectionEventID, raw, signal.SignalBarObservationID, lease.FencingToken); err == nil {
 		t.Fatal("foreign execution owner accepted")
 	}

@@ -98,7 +98,7 @@ func paperAccountingSessionID(accountRef, resultSHA256, selectionEventID, policy
 	return "paper_accounting_session_" + hex.EncodeToString(hash[:16])
 }
 
-func insertPaperAccountingSession(ctx context.Context, tx *sql.Tx, session PaperAccountingSession) error {
+func insertPaperAccountingSession(ctx context.Context, tx *transaction, session PaperAccountingSession) error {
 	if _, err := validatePaperAccountingSession(session); err != nil {
 		return err
 	}

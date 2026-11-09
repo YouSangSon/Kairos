@@ -1,8 +1,8 @@
 package application
 
 import (
-	"math/big"
 	"omni-folio/services/core/internal/modules/trading/contracts"
+	"omni-folio/services/core/internal/modules/trading/internal/domain"
 )
 
 type RunnerClaim struct {
@@ -76,10 +76,7 @@ type StrategyRegistryProof struct {
 	Stack                []string
 }
 
-type Projection struct {
-	Quantity *big.Int
-	Active   bool
-}
+type Projection = domain.Projection
 
 type AuthoritySnapshot struct {
 	contracts.ExecutionAuthorityState

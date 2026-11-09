@@ -176,14 +176,14 @@ func validatePaperRunnerLeaseTx(ctx context.Context, q orderQuerier, claim *pape
 	return nil
 }
 
-func renewPaperRunnerLeaseTx(ctx context.Context, tx *sql.Tx, claim *paperRunnerClaim, ownerID string, now time.Time) (*paperRunnerClaim, error) {
+func renewPaperRunnerLeaseTx(ctx context.Context, tx *transaction, claim *paperRunnerClaim, ownerID string, now time.Time) (*paperRunnerClaim, error) {
 	if err := validatePaperRunnerLeaseTx(ctx, tx, claim, claimAccountRef(claim), ownerID, now); err != nil {
 		return nil, err
 	}
 	return renewPaperRunnerLeaseRowTx(ctx, tx, claim, now)
 }
 
-func renewPaperRunnerLeaseAfterPolicyRollbackTx(ctx context.Context, tx *sql.Tx, claim *paperRunnerClaim, policyEventID, rollbackEventID, ownerID string, now time.Time) (*paperRunnerClaim, error) {
+func renewPaperRunnerLeaseAfterPolicyRollbackTx(ctx context.Context, tx *transaction, claim *paperRunnerClaim, policyEventID, rollbackEventID, ownerID string, now time.Time) (*paperRunnerClaim, error) {
 	row, err := loadPaperRunnerLease(ctx, tx)
 	if err != nil {
 		return nil, err
@@ -222,7 +222,7 @@ func renewPaperRunnerLeaseAfterPolicyRollbackTx(ctx context.Context, tx *sql.Tx,
 	return renewPaperRunnerLeaseRowTx(ctx, tx, claim, now)
 }
 
-func renewPaperRunnerLeaseRowTx(ctx context.Context, tx *sql.Tx, claim *paperRunnerClaim, now time.Time) (*paperRunnerClaim, error) {
+func renewPaperRunnerLeaseRowTx(ctx context.Context, tx *transaction, claim *paperRunnerClaim, now time.Time) (*paperRunnerClaim, error) {
 	nowNS, err := paperRunnerTimeNS(now)
 	if err != nil {
 		return nil, err
@@ -428,7 +428,7 @@ func validateStoredPaperRunnerLease(ctx context.Context, q orderQuerier, row sto
 	return nil
 }
 
-func updatePaperRunnerLeaseTx(ctx context.Context, tx *sql.Tx, previous, next paperRunnerLeaseRecord) error {
+func updatePaperRunnerLeaseTx(ctx context.Context, tx *transaction, previous, next paperRunnerLeaseRecord) error {
 	raw, hash, err := orderJSONHash(next)
 	if err != nil {
 		return err

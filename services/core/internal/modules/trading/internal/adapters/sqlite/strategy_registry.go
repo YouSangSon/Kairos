@@ -219,11 +219,11 @@ func (s *Store) RollbackPaperCandidate(ctx context.Context, expectedCurrentEvent
 	return returned, nil
 }
 
-func (s *Store) rollbackPaperCandidateTx(ctx context.Context, tx *sql.Tx, state strategyRegistryRecoveryProof, expectedCurrentEventID, sourceEventID, reasonCode, policyEventID, eventID string, now time.Time) (*StrategySelectionState, error) {
+func (s *Store) rollbackPaperCandidateTx(ctx context.Context, tx *transaction, state strategyRegistryRecoveryProof, expectedCurrentEventID, sourceEventID, reasonCode, policyEventID, eventID string, now time.Time) (*StrategySelectionState, error) {
 	return s.business().RollbackPaperCandidateTx(ctx, &writeScope{store: s, tx: tx}, state, expectedCurrentEventID, sourceEventID, reasonCode, policyEventID, eventID, now)
 }
 
-func insertStrategySelectionEvent(ctx context.Context, tx *sql.Tx, event StrategySelectionEvent) error {
+func insertStrategySelectionEvent(ctx context.Context, tx *transaction, event StrategySelectionEvent) error {
 	recordJSON, recordSHA, err := orderJSONHash(event)
 	if err != nil {
 		return err

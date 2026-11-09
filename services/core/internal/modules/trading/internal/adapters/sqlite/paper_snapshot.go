@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
-	"database/sql"
 	"encoding/csv"
 	"encoding/hex"
 	"errors"
@@ -163,7 +162,7 @@ func paperSnapshotBar(row []string, inputSHA string, now time.Time) (PaperMarket
 	return bar, nil
 }
 
-func loadPaperSnapshotRange(ctx context.Context, tx *sql.Tx, first, last PaperMarketBarObservation) (map[string][]PaperMarketBarObservation, string, error) {
+func loadPaperSnapshotRange(ctx context.Context, tx *transaction, first, last PaperMarketBarObservation) (map[string][]PaperMarketBarObservation, string, error) {
 	var latest string
 	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(close_at),'') FROM paper_market_bar_observations
 		WHERE source=? AND symbol=? AND venue=? AND interval=? AND timezone=? AND price_adjustment=?`,

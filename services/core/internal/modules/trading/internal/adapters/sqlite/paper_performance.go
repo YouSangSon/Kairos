@@ -198,7 +198,7 @@ func paperPerformanceID(policyVersion, accountRef, sessionID, asOf string) strin
 	return "paper_performance_" + hex.EncodeToString(hash[:16])
 }
 
-func insertPaperPerformanceEvent(ctx context.Context, tx *sql.Tx, event PaperPerformanceEvent) error {
+func insertPaperPerformanceEvent(ctx context.Context, tx *transaction, event PaperPerformanceEvent) error {
 	if err := validatePaperPerformanceEventShape(event); err != nil {
 		return err
 	}

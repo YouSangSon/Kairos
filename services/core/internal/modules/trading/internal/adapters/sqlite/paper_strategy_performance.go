@@ -178,7 +178,7 @@ func paperStrategyPerformanceID(event PaperStrategyPerformanceEvent) string {
 	return "paper_strategy_performance_" + hex.EncodeToString(hash[:16])
 }
 
-func insertPaperStrategyPerformanceEvent(ctx context.Context, tx *sql.Tx, event PaperStrategyPerformanceEvent) error {
+func insertPaperStrategyPerformanceEvent(ctx context.Context, tx *transaction, event PaperStrategyPerformanceEvent) error {
 	if err := validatePaperStrategyPerformanceEventShape(event); err != nil {
 		return err
 	}
