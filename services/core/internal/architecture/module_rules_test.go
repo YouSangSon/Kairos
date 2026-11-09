@@ -15,6 +15,7 @@ var moduleEdges = map[string]map[string]bool{
 	"watchlist":   {"marketdata": true},
 	"trading":     {"marketdata": true},
 	"portfolio":   {"ledger": true, "marketdata": true},
+	"research":    {},
 	"maintenance": {"ledger": true, "marketdata": true, "watchlist": true, "trading": true, "portfolio": true},
 }
 
@@ -50,6 +51,9 @@ func moduleImportViolation(relative, name string) string {
 	owner, layer := modulePath(relative)
 	target, targetLayer := modulePath(name)
 	if owner != "" {
+		if owner == "research" && (name == "database/sql" || strings.HasPrefix(name, "database/sql/") || strings.HasPrefix(name, internalPrefix+"storage/") || name == "omni-folio/services/core/migrations") {
+			return "research compatibility module has no storage authority " + name
+		}
 		if _, ok := moduleEdges[owner]; !ok {
 			return "unknown module " + owner
 		}
@@ -74,7 +78,7 @@ func moduleImportViolation(relative, name string) string {
 		}
 	}
 	if owner == "" {
-		if strings.HasPrefix(relative, "providers/") && target != "" {
+		if (strings.HasPrefix(relative, "providers/") || strings.HasPrefix(relative, "transport/")) && target != "" {
 			return "provider SDK imports business module " + name
 		}
 		if strings.HasPrefix(relative, "codec/") && !pureModuleImport(name) && name != "io" {
@@ -117,11 +121,11 @@ func moduleImportViolation(relative, name string) string {
 			return "public contract imports forbidden " + name
 		}
 	case "root":
-		if filepath.Base(relative) != "compose.go" {
-			return "module construction must be in compose.go"
+		if !rootConstructionFile(relative) {
+			return "module root must use a fixed construction entrypoint file"
 		}
 	case "adapters":
-		if name == internalPrefix+"codec" || name == internalPrefix+"providers/kiwoom" {
+		if name == internalPrefix+"codec" || name == internalPrefix+"providers/kiwoom" || name == internalPrefix+"transport/httpjson" {
 			return ""
 		}
 		if strings.HasPrefix(name, internalPrefix) && target == "" && name != internalPrefix+"exact" && !strings.HasPrefix(name, internalPrefix+"storage/") {
@@ -158,7 +162,7 @@ func inspectModuleDeclarations(path string, file *ast.File, imports map[string]s
 		violations = append(violations, path+" unknown module "+owner)
 	}
 	if layer == "root" {
-		if filepath.Base(path) != "compose.go" {
+		if !rootConstructionFile(path) {
 			violations = append(violations, path+" module root is construction only")
 		}
 		for _, declaration := range file.Decls {
@@ -191,14 +195,22 @@ func inspectModuleDeclarations(path string, file *ast.File, imports map[string]s
 			if !ok {
 				continue
 			}
-			if (function.Name.Name != "Compose" && !(owner == "marketdata" && function.Name.Name == "ComposeOwnerPrice")) || function.Recv != nil {
-				violations = append(violations, path+" module root permits Compose construction only")
+			if !rootConstructionEntry(path, owner, function.Name.Name) || function.Recv != nil {
+				violations = append(violations, path+" module root permits fixed construction entrypoints only")
 				continue
 			}
 			if function.Type.Results != nil {
 				for _, field := range function.Type.Results.List {
-					if forbiddenContractResult(field.Type, imports) {
+					if forbiddenConstructionResult(field.Type, imports, function.Name.Name) {
 						violations = append(violations, path+" construction result exposes private capability")
+					}
+				}
+			}
+			entryName := function.Name.Name
+			if function.Type.Params != nil {
+				for _, field := range function.Type.Params.List {
+					if forbiddenConstructionInput(field.Type, imports, owner) {
+						violations = append(violations, path+" construction input exposes private capability")
 					}
 				}
 			}
@@ -210,7 +222,11 @@ func inspectModuleDeclarations(path string, file *ast.File, imports map[string]s
 				if call, ok := node.(*ast.CallExpr); ok {
 					switch function := call.Fun.(type) {
 					case *ast.SelectorExpr:
-						if !constructionCall(function.Sel.Name) {
+						pkgPath := ""
+						if pkg, ok := function.X.(*ast.Ident); ok {
+							pkgPath = imports[pkg.Name]
+						}
+						if !constructionCall(function.Sel.Name) && !transportConstructionCall(entryName, pkgPath, owner, function.Sel.Name) {
 							violations = append(violations, path+" calls business function in construction "+function.Sel.Name)
 						}
 					case *ast.Ident:
@@ -469,6 +485,9 @@ func forbiddenConstructionInput(expr ast.Expr, imports map[string]string, owner 
 				if path == internalPrefix+"storage/observation" && selector.Sel.Name == "MigrationStarter" && owner != "maintenance" {
 					bad = true
 				}
+				if path == "database/sql" && owner == "research" {
+					bad = true
+				}
 				if path == "database/sql" && selector.Sel.Name != "DB" {
 					bad = true
 				}
@@ -510,4 +529,57 @@ func forbiddenContractInput(expr ast.Expr, imports map[string]string) bool {
 		return true
 	})
 	return bad
+}
+
+func rootConstructionFile(path string) bool {
+	switch filepath.Base(path) {
+	case "compose.go", "register_http.go", "compose_http.go", "run_cli.go", "cli.go":
+		return true
+	}
+	return false
+}
+func rootConstructionEntry(path, owner, name string) bool {
+	switch filepath.Base(path) {
+	case "compose.go":
+		return name == "Compose" || owner == "marketdata" && name == "ComposeOwnerPrice" || name == "ComposeHTTP"
+	case "register_http.go":
+		return name == "RegisterHTTP"
+	case "compose_http.go":
+		return name == "ComposeHTTP"
+	case "run_cli.go", "cli.go":
+		return name == "RunCLI"
+	}
+	return false
+}
+func transportConstructionCall(entry, pkgPath, owner, name string) bool {
+	prefix := internalPrefix + "modules/" + owner + "/internal/adapters/"
+	if entry == "RegisterHTTP" && (pkgPath == prefix+"http" || strings.HasPrefix(pkgPath, prefix+"http/")) {
+		return name == "Register" || name == "RegisterHTTP"
+	}
+	if entry == "RunCLI" && (pkgPath == prefix+"cli" || strings.HasPrefix(pkgPath, prefix+"cli/")) {
+		return name == "Run" || name == "RunCLI"
+	}
+	return false
+}
+func forbiddenConstructionResult(expr ast.Expr, imports map[string]string, entry string) bool {
+	if entry != "ComposeHTTP" {
+		return forbiddenContractResult(expr, imports)
+	}
+	sanitized := map[string]string{}
+	for alias, path := range imports {
+		sanitized[alias] = path
+		if path == "net/http" {
+			sanitized[alias] = "construction/http"
+		}
+	}
+	bad := false
+	ast.Inspect(expr, func(node ast.Node) bool {
+		if selector, ok := node.(*ast.SelectorExpr); ok {
+			if pkg, ok := selector.X.(*ast.Ident); ok && imports[pkg.Name] == "net/http" && selector.Sel.Name != "Handler" {
+				bad = true
+			}
+		}
+		return true
+	})
+	return bad || forbiddenContractResult(expr, sanitized)
 }

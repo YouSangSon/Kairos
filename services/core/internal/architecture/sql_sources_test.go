@@ -50,7 +50,7 @@ func inspectSQLSources(root string) ([]string, error) {
 		}
 		relative = filepath.ToSlash(relative)
 		// Legacy packages are covered by the original dependency gate until their atomic migration.
-		if !strings.HasPrefix(relative, "modules/") && !strings.HasPrefix(relative, "composition/") && !strings.HasPrefix(relative, "storage/") && !strings.HasPrefix(relative, "codec/") && !strings.HasPrefix(relative, "providers/") {
+		if !strings.HasPrefix(relative, "modules/") && !strings.HasPrefix(relative, "composition/") && !strings.HasPrefix(relative, "storage/") && !strings.HasPrefix(relative, "codec/") && !strings.HasPrefix(relative, "providers/") && !strings.HasPrefix(relative, "transport/") {
 			return nil
 		}
 		positions := token.NewFileSet()
@@ -192,6 +192,10 @@ func inspectSQLSources(root string) ([]string, error) {
 				return
 			}
 			if !called && !looksLikeSQL(sql) {
+				return
+			}
+			if owner == "research" {
+				violations = append(violations, source.path+" research compatibility module has no SQL ownership")
 				return
 			}
 			if !sqlite {
