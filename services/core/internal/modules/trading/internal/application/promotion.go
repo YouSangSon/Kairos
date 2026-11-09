@@ -32,13 +32,13 @@ func (s *UseCases) ClaimPaperPromotion(ctx context.Context, account, candidateSH
 }
 
 func (s *UseCases) claimPaperPromotionInScope(ctx context.Context, tx WriteScope, account, candidateSHA, expectedSelection, attemptID string, raw []byte, symbol string, bars []researchdomain.Bar) (*PromotionClaim, *PaperPromotionReceipt, error) {
-	if err := tx.RequireSchema(ctx); err != nil {
+	if err := tx.Recovery().RequireSchema(ctx); err != nil {
 		return nil, nil, err
 	}
-	if _, err := tx.ProvePaperPromotionRecovery(ctx); err != nil {
+	if _, err := tx.Recovery().ProvePaperPromotionRecovery(ctx); err != nil {
 		return nil, nil, err
 	}
-	existing, decision, found, err := tx.LoadPaperPromotion(ctx, attemptID)
+	existing, decision, found, err := tx.Promotions().LoadPaperPromotion(ctx, attemptID)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -49,7 +49,7 @@ func (s *UseCases) claimPaperPromotionInScope(ctx context.Context, tx WriteScope
 		return nil, PromotionReceipt(*existing, decision), nil
 	}
 	var pending int
-	pending, err = tx.PendingPromotionCount(ctx)
+	pending, err = tx.Promotions().PendingPromotionCount(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -57,14 +57,14 @@ func (s *UseCases) claimPaperPromotionInScope(ctx context.Context, tx WriteScope
 		return nil, nil, errors.New("a paper comparison is pending; inspect or explicitly abort it first")
 	}
 	now := s.now().UTC()
-	stateSHA, session, cash, selection, err := tx.CapturePromotionState(ctx, account, now)
+	stateSHA, session, cash, selection, err := tx.Promotions().CapturePromotionState(ctx, account, now)
 	if err != nil {
 		return nil, nil, err
 	}
 	if selection.CurrentEventID != expectedSelection || selection.SelectedResultSHA256 == candidateSHA || selection.SelectedResultSHA256 == noStrategySelection {
 		return nil, nil, errors.New("paper promotion requires a distinct candidate and the current incumbent")
 	}
-	candidate, incumbent, _, err := tx.PromotionInputs(ctx, candidateSHA, selection.SelectedResultSHA256, cash, session.ExecutionPolicySHA256)
+	candidate, incumbent, _, err := tx.Promotions().PromotionInputs(ctx, candidateSHA, selection.SelectedResultSHA256, cash, session.ExecutionPolicySHA256)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -81,21 +81,21 @@ func (s *UseCases) claimPaperPromotionInScope(ctx context.Context, tx WriteScope
 		AccountRef: account, CandidateResultSHA256: candidateSHA, IncumbentResultSHA256: selection.SelectedResultSHA256, ExpectedCurrentEventID: expectedSelection,
 		InputDataSHA256: hex.EncodeToString(hash[:]), InputCSV: string(raw), Symbol: symbol, ComparisonStart: bars[warmup].At, ComparisonEnd: bars[len(bars)-1].At,
 		StartingCash: cash, SessionID: session.SessionID, ExecutionPolicySHA256: session.ExecutionPolicySHA256, StateSHA256: stateSHA, RecordedAt: now.Format(canonicalPaperTimeLayout)}
-	claim.OrderSequenceCutoff, err = tx.OrderSequence(ctx)
+	claim.OrderSequenceCutoff, err = tx.Promotions().OrderSequence(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
-	claim.ResearchSequenceCutoff, err = tx.ResearchSequence(ctx)
+	claim.ResearchSequenceCutoff, err = tx.Promotions().ResearchSequence(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
-	claim.ExpectedPreviousAttemptID, err = tx.PreviousPromotionAttempt(ctx)
+	claim.ExpectedPreviousAttemptID, err = tx.Promotions().PreviousPromotionAttempt(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
 	if claim.ExpectedPreviousAttemptID != "no_attempt" {
 		var previousAt string
-		previousAt, err = tx.PromotionDecisionTime(ctx, claim.ExpectedPreviousAttemptID)
+		previousAt, err = tx.Promotions().PromotionDecisionTime(ctx, claim.ExpectedPreviousAttemptID)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -104,10 +104,10 @@ func (s *UseCases) claimPaperPromotionInScope(ctx context.Context, tx WriteScope
 			return nil, nil, errors.New("paper promotion clock regressed")
 		}
 	}
-	if err := tx.ValidatePromotionClaim(ctx, claim, 0); err != nil {
+	if err := tx.Promotions().ValidatePromotionClaim(ctx, claim, 0); err != nil {
 		return nil, nil, err
 	}
-	if err := tx.InsertPromotionClaim(ctx, claim); err != nil {
+	if err := tx.Promotions().InsertPromotionClaim(ctx, claim); err != nil {
 		return nil, nil, err
 	}
 	return &claim, nil, nil
@@ -127,10 +127,10 @@ func (s *UseCases) FinishPaperPromotion(ctx context.Context, claim PromotionClai
 }
 
 func (s *UseCases) finishPaperPromotionInScope(ctx context.Context, tx WriteScope, claim PromotionClaim, comparison paperPromotionComparison, scoreErr error, abort bool) (*PaperPromotionReceipt, error) {
-	if _, err := tx.ProvePaperPromotionRecovery(ctx); err != nil {
+	if _, err := tx.Recovery().ProvePaperPromotionRecovery(ctx); err != nil {
 		return nil, err
 	}
-	saved, prior, found, err := tx.LoadPaperPromotion(ctx, claim.AttemptID)
+	saved, prior, found, err := tx.Promotions().LoadPaperPromotion(ctx, claim.AttemptID)
 	if err != nil {
 		return nil, err
 	}
@@ -158,14 +158,14 @@ func (s *UseCases) finishPaperPromotionInScope(ctx context.Context, tx WriteScop
 	default:
 		decision.Comparison = &comparison
 		decision.Decision, decision.Reason = comparison.Decision, comparison.Reason
-		stateSHA, _, _, selection, stateErr := tx.CapturePromotionState(ctx, claim.AccountRef, now)
+		stateSHA, _, _, selection, stateErr := tx.Promotions().CapturePromotionState(ctx, claim.AccountRef, now)
 		if stateErr != nil || stateSHA != claim.StateSHA256 || selection.CurrentEventID != claim.ExpectedCurrentEventID {
 			decision.Decision, decision.Reason = "STALE", "account_or_selection_changed"
 		}
 	}
 	var event StrategySelectionEvent
 	if decision.Decision == "PROMOTE" {
-		sequence, err := tx.LatestPaperEvaluationSequence(ctx)
+		sequence, err := tx.Selections().LatestPaperEvaluationSequence(ctx)
 		if err != nil {
 			return nil, err
 		}
@@ -174,11 +174,11 @@ func (s *UseCases) finishPaperPromotionInScope(ctx context.Context, tx WriteScop
 			ExpectedCurrentEventID: claim.ExpectedCurrentEventID, PreviousSelectedResultSHA256: claim.IncumbentResultSHA256, SelectedResultSHA256: claim.CandidateResultSHA256,
 			ReasonCode: "auto_comparison", PaperEvaluationSequence: sequence, PaperPromotionAttemptID: claim.AttemptID, RecordedAt: now.Format(time.RFC3339Nano)}
 	}
-	if err := tx.InsertPromotionDecision(ctx, decision); err != nil {
+	if err := tx.Promotions().InsertPromotionDecision(ctx, decision); err != nil {
 		return nil, err
 	}
 	if decision.SelectionEventID != "" {
-		if err := tx.InsertStrategySelectionEvent(ctx, event); err != nil {
+		if err := tx.Selections().InsertStrategySelectionEvent(ctx, event); err != nil {
 			return nil, err
 		}
 	}

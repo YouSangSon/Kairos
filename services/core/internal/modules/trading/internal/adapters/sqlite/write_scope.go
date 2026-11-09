@@ -222,3 +222,13 @@ func (j *writeScope) LatestAuthorityID(ctx context.Context, account string) (str
 	err := j.tx.QueryRowContext(ctx, `SELECT event_id FROM execution_authority_events WHERE account_ref=? ORDER BY sequence DESC LIMIT 1`, account).Scan(&id)
 	return id, err
 }
+
+func (j *writeScope) Orders() application.OrdersJournal             { return j }
+func (j *writeScope) Authority() application.AuthorityJournal       { return j }
+func (j *writeScope) Reservations() application.ReservationsJournal { return j }
+func (j *writeScope) Selections() application.SelectionsJournal     { return j }
+func (j *writeScope) Paper() application.PaperJournal               { return j }
+func (j *writeScope) Promotions() application.PromotionsJournal     { return j }
+func (j *writeScope) Runner() application.RunnerJournal             { return j }
+func (j *writeScope) Policy() application.PolicyJournal             { return j }
+func (j *writeScope) Recovery() application.RecoveryJournal         { return j }

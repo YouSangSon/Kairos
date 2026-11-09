@@ -13,26 +13,26 @@ import (
 )
 
 func (s *UseCases) AdmitPaperSignalTx(ctx context.Context, tx WriteScope, accountRef string, signal PaperSignal, fencingToken int64) (*PaperSignalEvent, *OrderState, error) {
-	event, err := tx.RecordPaperSignalEventTx(ctx, accountRef, signal)
+	event, err := tx.Paper().RecordPaperSignalEventTx(ctx, accountRef, signal)
 	if err != nil {
 		return nil, nil, err
 	}
 	if _, err := s.RequireCurrentSyntheticExecutionLease(ctx, tx, accountRef, fencingToken, s.now().UTC()); err != nil {
 		return nil, nil, err
 	}
-	orderID, exists, err := tx.PaperOrderBySignalFrom(ctx, accountRef, signal.SignalID)
+	orderID, exists, err := tx.Paper().PaperOrderBySignalFrom(ctx, accountRef, signal.SignalID)
 	if err != nil {
 		return nil, nil, err
 	}
 	if exists {
-		intent, err := tx.LoadOrderIntentFrom(ctx, orderID)
+		intent, err := tx.Orders().LoadOrderIntentFrom(ctx, orderID)
 		if err != nil {
 			return nil, nil, err
 		}
-		if _, boundSignal, err := tx.ValidateCapitalizedPaperOrderBindings(ctx, intent); err != nil || boundSignal.EventID != event.EventID {
+		if _, boundSignal, err := tx.Paper().ValidateCapitalizedPaperOrderBindings(ctx, intent); err != nil || boundSignal.EventID != event.EventID {
 			return nil, nil, errors.New("paper signal conflicts with its recorded order")
 		}
-		state, err := tx.LoadOrderStateFrom(ctx, orderID)
+		state, err := tx.Orders().LoadOrderStateFrom(ctx, orderID)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -42,7 +42,7 @@ func (s *UseCases) AdmitPaperSignalTx(ctx context.Context, tx WriteScope, accoun
 	if !ok || target.Sign() < 0 {
 		return nil, nil, errors.New("paper target quantity is invalid")
 	}
-	projection, err := tx.ReplayPaperProjectionFrom(ctx, accountRef, event.Symbol)
+	projection, err := tx.Paper().ReplayPaperProjectionFrom(ctx, accountRef, event.Symbol)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -66,7 +66,7 @@ func (s *UseCases) AdmitPaperSignalTx(ctx context.Context, tx WriteScope, accoun
 		}
 	}
 	intent := CapitalizedPaperOrderIntent(*event, side, quantity.String())
-	state, err := tx.RecordOrderIntentTx(ctx, intent)
+	state, err := tx.Orders().RecordOrderIntentTx(ctx, intent)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -81,26 +81,26 @@ func (s *UseCases) AuthorizePaperDispatchOnceTx(ctx context.Context, tx WriteSco
 	if !safeOrderID(orderID) || fencingToken <= 0 {
 		return nil, false, errors.New("paper authorization identifiers are invalid")
 	}
-	authorization, found, err := tx.LoadPaperExecutionAuthorizationByOrder(ctx, orderID)
+	authorization, found, err := tx.Paper().LoadPaperExecutionAuthorizationByOrder(ctx, orderID)
 	if err != nil {
 		return nil, false, err
 	}
 	if found {
-		state, err := tx.ValidatePaperExecutionAuthorization(ctx, authorization)
+		state, err := tx.Paper().ValidatePaperExecutionAuthorization(ctx, authorization)
 		return state, false, err
 	}
-	state, err := tx.LoadOrderStateFrom(ctx, orderID)
+	state, err := tx.Orders().LoadOrderStateFrom(ctx, orderID)
 	if err != nil {
 		return nil, false, err
 	}
 	if state.Status != "RECORDED" || state.PendingAction != "" {
 		return nil, false, errors.New("paper authorization requires a recorded order")
 	}
-	intent, err := tx.LoadOrderIntentFrom(ctx, orderID)
+	intent, err := tx.Orders().LoadOrderIntentFrom(ctx, orderID)
 	if err != nil {
 		return nil, false, err
 	}
-	if _, _, err := tx.ValidateCapitalizedPaperOrderBindings(ctx, intent); err != nil {
+	if _, _, err := tx.Paper().ValidateCapitalizedPaperOrderBindings(ctx, intent); err != nil {
 		return nil, false, err
 	}
 	now := s.now().UTC()
@@ -108,7 +108,7 @@ func (s *UseCases) AuthorizePaperDispatchOnceTx(ctx context.Context, tx WriteSco
 	if err != nil {
 		return nil, false, err
 	}
-	blocked, err := tx.AccountHasUnresolvedOrder(ctx, intent.AccountRef)
+	blocked, err := tx.Orders().AccountHasUnresolvedOrder(ctx, intent.AccountRef)
 	if err != nil {
 		return nil, false, err
 	}
@@ -123,7 +123,7 @@ func (s *UseCases) AuthorizePaperDispatchOnceTx(ctx context.Context, tx WriteSco
 		Side: intent.Side, Quantity: intent.Quantity, AuthorityEventID: authority.EventID, FencingToken: fencingToken,
 		RiskEventID: paperEventID("risk", orderID), DispatchEventID: paperEventID("dispatch", orderID), AuthorizedAt: recordedAt,
 	}
-	if err := tx.InsertPaperExecutionAuthorization(ctx, authorization); err != nil {
+	if err := tx.Paper().InsertPaperExecutionAuthorization(ctx, authorization); err != nil {
 		return nil, false, err
 	}
 	risk := PaperAuthorizedOrderEvent(authorization.RiskEventID, orderID, "RISK_APPROVED", authorization)
@@ -136,7 +136,7 @@ func (s *UseCases) AuthorizePaperDispatchOnceTx(ctx context.Context, tx WriteSco
 		if err := ValidateOrderEvent(event); err != nil {
 			return nil, false, err
 		}
-		state, err = tx.AppendOrderEventTx(ctx, event, recordedAt)
+		state, err = tx.Orders().AppendOrderEventTx(ctx, event, recordedAt)
 		if err != nil {
 			return nil, false, err
 		}
@@ -145,17 +145,17 @@ func (s *UseCases) AuthorizePaperDispatchOnceTx(ctx context.Context, tx WriteSco
 		return nil, false, errors.New("paper authorization did not finish with a local acknowledgement")
 	}
 	var riskSequence, dispatchSequence, ackSequence int64
-	if value, err := tx.EventSequence(ctx, authorization.RiskEventID); err != nil {
+	if value, err := tx.Orders().EventSequence(ctx, authorization.RiskEventID); err != nil {
 		return nil, false, err
 	} else {
 		riskSequence = value
 	}
-	if value, err := tx.EventSequence(ctx, authorization.DispatchEventID); err != nil {
+	if value, err := tx.Orders().EventSequence(ctx, authorization.DispatchEventID); err != nil {
 		return nil, false, err
 	} else {
 		dispatchSequence = value
 	}
-	if value, err := tx.EventSequence(ctx, ack.EventID); err != nil {
+	if value, err := tx.Orders().EventSequence(ctx, ack.EventID); err != nil {
 		return nil, false, err
 	} else {
 		ackSequence = value
@@ -186,27 +186,27 @@ func (s *UseCases) RunPaperOrderThroughCloseWithClaim(ctx context.Context, order
 }
 
 func (s *UseCases) runPaperFillInScope(ctx context.Context, tx WriteScope, orderID string, fencingToken int64, claim *RunnerClaim, throughClose string) (*OrderState, error) {
-	if _, err := tx.ProvePaperAccountingRecovery(ctx); err != nil {
+	if _, err := tx.Recovery().ProvePaperAccountingRecovery(ctx); err != nil {
 		return nil, fmt.Errorf("paper fill accounting recovery: %w", err)
 	}
-	intent, err := tx.LoadOrderIntentFrom(ctx, orderID)
+	intent, err := tx.Orders().LoadOrderIntentFrom(ctx, orderID)
 	if err != nil {
 		return nil, err
 	}
 	if claim != nil {
-		if err := tx.ValidatePaperRunnerLeaseTx(ctx, claim, intent.AccountRef, s.paperRunnerOwner, s.now()); err != nil {
+		if err := tx.Runner().ValidatePaperRunnerLeaseTx(ctx, claim, intent.AccountRef, s.paperRunnerOwner, s.now()); err != nil {
 			return nil, err
 		}
 	}
-	session, signal, err := tx.ValidateCapitalizedPaperOrderBindings(ctx, intent)
+	session, signal, err := tx.Paper().ValidateCapitalizedPaperOrderBindings(ctx, intent)
 	if err != nil {
 		return nil, err
 	}
-	authorization, found, err := tx.LoadPaperExecutionAuthorizationByOrder(ctx, orderID)
+	authorization, found, err := tx.Paper().LoadPaperExecutionAuthorizationByOrder(ctx, orderID)
 	if err != nil || !found {
 		return nil, errors.New("paper fill authorization is missing")
 	}
-	state, err := tx.ValidatePaperExecutionAuthorization(ctx, authorization)
+	state, err := tx.Paper().ValidatePaperExecutionAuthorization(ctx, authorization)
 	if err != nil {
 		return nil, err
 	}
@@ -218,7 +218,7 @@ func (s *UseCases) runPaperFillInScope(ctx context.Context, tx WriteScope, order
 	if err != nil {
 		return nil, err
 	}
-	states, err := tx.ReplayPaperAccounting(ctx)
+	states, err := tx.Paper().ReplayPaperAccounting(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -226,15 +226,15 @@ func (s *UseCases) runPaperFillInScope(ctx context.Context, tx WriteScope, order
 	if !ok || account.PaperAccountingSessionID != session.SessionID {
 		return nil, errors.New("paper fill account state is missing")
 	}
-	policy, err := tx.ValidatePaperAccountingSession(*session)
+	policy, err := tx.Paper().ValidatePaperAccountingSession(*session)
 	if err != nil {
 		return nil, err
 	}
-	candidates, err := tx.PaperFillBars(ctx, *signal, policy.DelayBars)
+	candidates, err := tx.Paper().PaperFillBars(ctx, *signal, policy.DelayBars)
 	if err != nil {
 		return nil, err
 	}
-	usedBars, err := tx.PaperOrderUsedFillBars(ctx, orderID)
+	usedBars, err := tx.Paper().PaperOrderUsedFillBars(ctx, orderID)
 	if err != nil {
 		return nil, err
 	}
@@ -255,7 +255,7 @@ func (s *UseCases) runPaperFillInScope(ctx context.Context, tx WriteScope, order
 		if usedBars[candidate.ObservationID] || (throughClose != "" && candidate.CloseAt > throughClose) {
 			continue
 		}
-		consumed, err := tx.PaperConsumedBarCapacity(ctx, intent.AccountRef, intent.Symbol, candidate.ObservationID)
+		consumed, err := tx.Paper().PaperConsumedBarCapacity(ctx, intent.AccountRef, intent.Symbol, candidate.ObservationID)
 		if err != nil {
 			return nil, err
 		}
@@ -288,11 +288,11 @@ func (s *UseCases) runPaperFillInScope(ctx context.Context, tx WriteScope, order
 	if err := ValidateOrderEvent(event); err != nil {
 		return nil, err
 	}
-	next, err := tx.AppendCapitalizedPaperFillTx(ctx, event, now.Format(time.RFC3339Nano))
+	next, err := tx.Paper().AppendCapitalizedPaperFillTx(ctx, event, now.Format(time.RFC3339Nano))
 	if err != nil {
 		return nil, err
 	}
-	proposed, err := tx.ReplayPaperAccounting(ctx)
+	proposed, err := tx.Paper().ReplayPaperAccounting(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -320,33 +320,33 @@ func (s *UseCases) HeartbeatLocalPaperExecution(ctx context.Context, claim *Runn
 }
 
 func (s *UseCases) heartbeatInScope(ctx context.Context, tx WriteScope, claim *RunnerClaim, fence int64) (*RunnerClaim, *ExecutionAuthorityState, error) {
-	if _, err := tx.ProvePaperRunnerLeaseRecovery(ctx); err != nil {
+	if _, err := tx.Recovery().ProvePaperRunnerLeaseRecovery(ctx); err != nil {
 		return nil, nil, err
 	}
 	now := s.now().UTC()
-	if err := tx.ValidatePaperRunnerLeaseTx(ctx, claim, claim.AccountRef, s.paperRunnerOwner, now); err != nil {
+	if err := tx.Runner().ValidatePaperRunnerLeaseTx(ctx, claim, claim.AccountRef, s.paperRunnerOwner, now); err != nil {
 		return nil, nil, err
 	}
-	session, found, err := tx.LoadPaperAccountingSession(ctx, claim.AccountRef)
+	session, found, err := tx.Paper().LoadPaperAccountingSession(ctx, claim.AccountRef)
 	if err != nil {
 		return nil, nil, err
 	}
-	policy, err := tx.LoadCurrentStrategyExecutionPolicy(ctx, claim.SelectedResultSHA256, claim.StrategySelectionEventID)
+	policy, err := tx.Selections().LoadCurrentStrategyExecutionPolicy(ctx, claim.SelectedResultSHA256, claim.StrategySelectionEventID)
 	if err != nil || !found || session.ExecutionPolicySHA256 != policy.SHA256 {
 		return nil, nil, errors.New("local paper heartbeat session changed")
 	}
-	if err := tx.RequireIsolatedPaperAccount(ctx, claim.AccountRef); err != nil {
+	if err := tx.Paper().RequireIsolatedPaperAccount(ctx, claim.AccountRef); err != nil {
 		return nil, nil, err
 	}
 	// The complete history was verified above in this same transaction, with
 	// no intervening writes. Read only its indexed head; independent callers
 	// still require loadExecutionAuthoritySnapshot's full replay.
 	var currentID string
-	currentID, err = tx.LatestAuthorityID(ctx, claim.AccountRef)
+	currentID, err = tx.Authority().LatestAuthorityID(ctx, claim.AccountRef)
 	if err != nil {
 		return nil, nil, err
 	}
-	previous, err := tx.LoadExecutionAuthorityRecordByID(ctx, currentID)
+	previous, err := tx.Authority().LoadExecutionAuthorityRecordByID(ctx, currentID)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -367,10 +367,10 @@ func (s *UseCases) heartbeatInScope(ctx context.Context, tx WriteScope, claim *R
 	}
 	// ponytail: immutable renewals grow replay cost; measure sustained history
 	// before promoting an always-on consumer, not a second mutable authority.
-	if err := tx.InsertExecutionAuthorityRecord(ctx, next); err != nil {
+	if err := tx.Authority().InsertExecutionAuthorityRecord(ctx, next); err != nil {
 		return nil, nil, err
 	}
-	nextClaim, err := tx.RenewPaperRunnerLeaseTx(ctx, claim, s.paperRunnerOwner, now)
+	nextClaim, err := tx.Runner().RenewPaperRunnerLeaseTx(ctx, claim, s.paperRunnerOwner, now)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -405,18 +405,18 @@ func (s *UseCases) ApplyPaperPerformancePolicyTx(ctx context.Context, accountRef
 
 func (s *UseCases) applyPolicyInScope(ctx context.Context, tx WriteScope, accountRef, expectedSelectionEventID, expectedStrategyPerformanceID string, claim *RunnerClaim) (*PaperPerformancePolicyEvent, error) {
 	if claim != nil {
-		if err := tx.ValidatePaperRunnerLeaseTx(ctx, claim, accountRef, s.paperRunnerOwner, s.now()); err != nil {
+		if err := tx.Runner().ValidatePaperRunnerLeaseTx(ctx, claim, accountRef, s.paperRunnerOwner, s.now()); err != nil {
 			return nil, err
 		}
 	}
-	if _, err := tx.ProvePaperPerformancePolicyRecovery(ctx); err != nil {
+	if _, err := tx.Recovery().ProvePaperPerformancePolicyRecovery(ctx); err != nil {
 		return nil, fmt.Errorf("paper performance policy recovery: %w", err)
 	}
-	if existing, found, err := tx.LoadPaperPerformancePolicyByKey(ctx, accountRef, expectedSelectionEventID, expectedStrategyPerformanceID); err != nil {
+	if existing, found, err := tx.Policy().LoadPaperPerformancePolicyByKey(ctx, accountRef, expectedSelectionEventID, expectedStrategyPerformanceID); err != nil {
 		return nil, err
 	} else if found {
 		if claim != nil {
-			renewed, err := tx.RenewPaperRunnerLeaseTx(ctx, claim, s.paperRunnerOwner, s.now())
+			renewed, err := tx.Runner().RenewPaperRunnerLeaseTx(ctx, claim, s.paperRunnerOwner, s.now())
 			if err != nil {
 				return nil, err
 			}
@@ -424,19 +424,19 @@ func (s *UseCases) applyPolicyInScope(ctx context.Context, tx WriteScope, accoun
 		}
 		return existing, nil
 	}
-	strategy, err := tx.ReplayStrategyRegistry(ctx)
+	strategy, err := tx.Selections().ReplayStrategyRegistry(ctx)
 	if err != nil {
 		return nil, err
 	}
 	if strategy.CurrentEventID != expectedSelectionEventID || strategy.SelectedResultSHA256 == noStrategySelection {
 		return nil, errors.New("paper performance policy selection is stale or no_strategy")
 	}
-	performance, _, err := tx.LoadPaperStrategyPerformanceByID(ctx, expectedStrategyPerformanceID)
+	performance, _, err := tx.Policy().LoadPaperStrategyPerformanceByID(ctx, expectedStrategyPerformanceID)
 	if err != nil {
 		return nil, err
 	}
 	var latestID string
-	latestID, err = tx.LatestStrategyPerformanceID(ctx, accountRef)
+	latestID, err = tx.Policy().LatestStrategyPerformanceID(ctx, accountRef)
 	if err != nil {
 		return nil, err
 	}
@@ -450,23 +450,23 @@ func (s *UseCases) applyPolicyInScope(ctx context.Context, tx WriteScope, accoun
 	if err != nil {
 		return nil, fmt.Errorf("paper performance policy evidence: %w", err)
 	}
-	previous, err := tx.LatestPaperPerformancePolicyID(ctx, accountRef, strategy.CurrentEventID)
+	previous, err := tx.Policy().LatestPaperPerformancePolicyID(ctx, accountRef, strategy.CurrentEventID)
 	if err != nil {
 		return nil, err
 	}
-	selectionCutoff, err := tx.SelectionSequence(ctx)
+	selectionCutoff, err := tx.Selections().SelectionSequence(ctx)
 	if err != nil {
 		return nil, err
 	}
-	authorityCutoff, err := tx.AuthoritySequence(ctx)
+	authorityCutoff, err := tx.Authority().AuthoritySequence(ctx)
 	if err != nil {
 		return nil, err
 	}
-	performanceCutoff, err := tx.StrategyPerformanceSequence(ctx)
+	performanceCutoff, err := tx.Policy().StrategyPerformanceSequence(ctx)
 	if err != nil {
 		return nil, err
 	}
-	armed, err := tx.ArmedExecutionAccounts(ctx)
+	armed, err := tx.Authority().ArmedExecutionAccounts(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -491,7 +491,7 @@ func (s *UseCases) applyPolicyInScope(ctx context.Context, tx WriteScope, accoun
 			automaticHaltIDs[armedAccountRef] = PaperPerformanceAutomaticHaltID(event.PolicyEventID, armedAccountRef)
 		}
 	}
-	if err := tx.InsertPaperPerformancePolicyEvent(ctx, event); err != nil {
+	if err := tx.Policy().InsertPaperPerformancePolicyEvent(ctx, event); err != nil {
 		return nil, err
 	}
 	if decision.Decision == "HALT_AND_ROLLBACK" {
@@ -503,15 +503,15 @@ func (s *UseCases) applyPolicyInScope(ctx context.Context, tx WriteScope, accoun
 			return nil, err
 		}
 	}
-	if _, err := tx.ProvePaperPerformancePolicyRecovery(ctx); err != nil {
+	if _, err := tx.Recovery().ProvePaperPerformancePolicyRecovery(ctx); err != nil {
 		return nil, fmt.Errorf("proposed paper performance policy recovery: %w", err)
 	}
 	var renewed *RunnerClaim
 	if claim != nil {
 		if event.Decision == "HALT_AND_ROLLBACK" {
-			renewed, err = tx.RenewPaperRunnerLeaseAfterPolicyRollbackTx(ctx, claim, event.PolicyEventID, event.RollbackSelectionEventID, s.paperRunnerOwner, s.now())
+			renewed, err = tx.Runner().RenewPaperRunnerLeaseAfterPolicyRollbackTx(ctx, claim, event.PolicyEventID, event.RollbackSelectionEventID, s.paperRunnerOwner, s.now())
 		} else {
-			renewed, err = tx.RenewPaperRunnerLeaseTx(ctx, claim, s.paperRunnerOwner, s.now())
+			renewed, err = tx.Runner().RenewPaperRunnerLeaseTx(ctx, claim, s.paperRunnerOwner, s.now())
 		}
 		if err != nil {
 			return nil, err
@@ -527,26 +527,26 @@ func (s *UseCases) AuthorizeSyntheticDispatchOnceTx(ctx context.Context, tx Writ
 	if !safeOrderID(orderID) || fencingToken <= 0 {
 		return nil, false, errors.New("execution authorization identifiers are invalid")
 	}
-	reservation, found, err := tx.LoadRiskReservationByOrder(ctx, orderID)
+	reservation, found, err := tx.Reservations().LoadRiskReservationByOrder(ctx, orderID)
 	if err != nil {
 		return nil, false, err
 	}
 	if found {
-		state, err := tx.ValidateAuthorizedReservation(ctx, reservation)
+		state, err := tx.Reservations().ValidateAuthorizedReservation(ctx, reservation)
 		return state, false, err
 	}
-	state, err := tx.LoadOrderStateFrom(ctx, orderID)
+	state, err := tx.Orders().LoadOrderStateFrom(ctx, orderID)
 	if err != nil {
 		return nil, false, err
 	}
 	if state.Status != "RECORDED" || state.PendingAction != "" {
 		return nil, false, errors.New("execution authorization requires a recorded order")
 	}
-	intent, err := tx.LoadOrderIntentFrom(ctx, orderID)
+	intent, err := tx.Orders().LoadOrderIntentFrom(ctx, orderID)
 	if err != nil {
 		return nil, false, err
 	}
-	if err := tx.ValidateStrategyOrderSelection(ctx, intent); err != nil {
+	if err := tx.Selections().ValidateStrategyOrderSelection(ctx, intent); err != nil {
 		return nil, false, err
 	}
 	notional, notionalValue, err := ValidateSyntheticBuyPolicy(intent)
@@ -558,14 +558,14 @@ func (s *UseCases) AuthorizeSyntheticDispatchOnceTx(ctx context.Context, tx Writ
 	if err != nil {
 		return nil, false, err
 	}
-	blocked, err := tx.AccountHasUnresolvedOrder(ctx, intent.AccountRef)
+	blocked, err := tx.Orders().AccountHasUnresolvedOrder(ctx, intent.AccountRef)
 	if err != nil {
 		return nil, false, err
 	}
 	if blocked {
 		return nil, false, errors.New("account has an unresolved order command")
 	}
-	active, err := tx.ActiveReservedNotional(ctx, intent.AccountRef)
+	active, err := tx.Reservations().ActiveReservedNotional(ctx, intent.AccountRef)
 	if err != nil {
 		return nil, false, err
 	}
@@ -579,7 +579,7 @@ func (s *UseCases) AuthorizeSyntheticDispatchOnceTx(ctx context.Context, tx Writ
 		Quantity: intent.Quantity, LimitPrice: intent.LimitPrice, LimitNotional: notional,
 		RiskEventID: s.id("order_event"), DispatchEventID: s.id("order_event"), ReservedAt: recordedAt,
 	}
-	if err := tx.InsertRiskReservation(ctx, reservation); err != nil {
+	if err := tx.Reservations().InsertRiskReservation(ctx, reservation); err != nil {
 		return nil, false, err
 	}
 	risk := AuthorizedOrderEvent(reservation.RiskEventID, orderID, "RISK_APPROVED", reservation)
@@ -587,24 +587,24 @@ func (s *UseCases) AuthorizeSyntheticDispatchOnceTx(ctx context.Context, tx Writ
 	if err := ValidateOrderEvent(risk); err != nil {
 		return nil, false, err
 	}
-	state, err = tx.AppendOrderEventTx(ctx, risk, recordedAt)
+	state, err = tx.Orders().AppendOrderEventTx(ctx, risk, recordedAt)
 	if err != nil || state.Status != "READY" {
 		return nil, false, fmt.Errorf("append risk approval: %w", err)
 	}
 	if err := ValidateOrderEvent(dispatch); err != nil {
 		return nil, false, err
 	}
-	state, err = tx.AppendOrderEventTx(ctx, dispatch, recordedAt)
+	state, err = tx.Orders().AppendOrderEventTx(ctx, dispatch, recordedAt)
 	if err != nil || state.Status != "SUBMIT_UNKNOWN" || state.PendingAction != "SUBMIT" {
 		return nil, false, fmt.Errorf("append submit dispatch: %w", err)
 	}
 	var riskSequence, dispatchSequence int64
-	if value, err := tx.EventSequence(ctx, reservation.RiskEventID); err != nil {
+	if value, err := tx.Orders().EventSequence(ctx, reservation.RiskEventID); err != nil {
 		return nil, false, err
 	} else {
 		riskSequence = value
 	}
-	if value, err := tx.EventSequence(ctx, reservation.DispatchEventID); err != nil {
+	if value, err := tx.Orders().EventSequence(ctx, reservation.DispatchEventID); err != nil {
 		return nil, false, err
 	} else {
 		dispatchSequence = value
@@ -616,10 +616,10 @@ func (s *UseCases) AuthorizeSyntheticDispatchOnceTx(ctx context.Context, tx Writ
 }
 
 func (s *UseCases) AcquireSyntheticExecutionLeaseTx(ctx context.Context, tx WriteScope, accountRef string) (*ExecutionAuthorityState, error) {
-	if _, err := tx.ProvePaperPerformancePolicyRecovery(ctx); err != nil {
+	if _, err := tx.Recovery().ProvePaperPerformancePolicyRecovery(ctx); err != nil {
 		return nil, fmt.Errorf("execution authority policy recovery: %w", err)
 	}
-	current, err := tx.LoadExecutionAuthoritySnapshot(ctx, accountRef)
+	current, err := tx.Authority().LoadExecutionAuthoritySnapshot(ctx, accountRef)
 	if err != nil {
 		return nil, err
 	}
@@ -645,7 +645,7 @@ func (s *UseCases) AcquireSyntheticExecutionLeaseTx(ctx context.Context, tx Writ
 		FencingToken: current.FencingToken + 1, LeaseExpiresAt: now.Add(syntheticExecutionLeaseTTL).Format(time.RFC3339Nano),
 		ReasonCode: "lease_acquired", RecordedAt: now.Format(time.RFC3339Nano),
 	}
-	if err := tx.InsertExecutionAuthorityRecord(ctx, record); err != nil {
+	if err := tx.Authority().InsertExecutionAuthorityRecord(ctx, record); err != nil {
 		return nil, err
 	}
 	return AuthorityState(record), nil
@@ -658,7 +658,7 @@ func (s *UseCases) HaltSyntheticExecutionTx(ctx context.Context, tx WriteScope, 
 	}
 	recordedAt := now.Format(time.RFC3339Nano)
 	for _, accountRef := range accountRefs {
-		current, err := tx.LoadExecutionAuthoritySnapshot(ctx, accountRef)
+		current, err := tx.Authority().LoadExecutionAuthoritySnapshot(ctx, accountRef)
 		if err != nil {
 			return 0, err
 		}
@@ -672,7 +672,7 @@ func (s *UseCases) HaltSyntheticExecutionTx(ctx context.Context, tx WriteScope, 
 				return 0, errors.New("automatic execution halt identifier is invalid")
 			}
 		}
-		if err := tx.InsertExecutionAuthorityRecord(ctx, AuthorityRecord{
+		if err := tx.Authority().InsertExecutionAuthorityRecord(ctx, AuthorityRecord{
 			EventID: eventID, AccountRef: accountRef,
 			FencingToken: current.FencingToken + 1, ReasonCode: reasonCode,
 			PaperPerformancePolicyEventID: policyEventID, RecordedAt: recordedAt,
@@ -702,19 +702,19 @@ func (s *UseCases) RollbackPaperCandidateTx(ctx context.Context, tx WriteScope, 
 		SelectedResultSHA256: selected, ReasonCode: reasonCode, PaperPerformancePolicyEventID: policyEventID,
 		RecordedAt: now.Format(time.RFC3339Nano),
 	}
-	sequence, err := tx.LatestPaperEvaluationSequence(ctx)
+	sequence, err := tx.Selections().LatestPaperEvaluationSequence(ctx)
 	if err != nil {
 		return nil, err
 	}
 	event.PaperEvaluationSequence = sequence
-	if err := tx.InsertStrategySelectionEvent(ctx, event); err != nil {
+	if err := tx.Selections().InsertStrategySelectionEvent(ctx, event); err != nil {
 		return nil, err
 	}
 	return &StrategySelectionState{CurrentEventID: event.EventID, SelectedResultSHA256: selected}, nil
 }
 
 func (s *UseCases) RequireCurrentSyntheticExecutionLease(ctx context.Context, tx WriteScope, accountRef string, fencingToken int64, now time.Time) (AuthoritySnapshot, error) {
-	authority, err := tx.LoadExecutionAuthoritySnapshot(ctx, accountRef)
+	authority, err := tx.Authority().LoadExecutionAuthoritySnapshot(ctx, accountRef)
 	if err != nil {
 		return AuthoritySnapshot{}, err
 	}
