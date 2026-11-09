@@ -78,6 +78,10 @@ func TestSQLSourceGateRejectsDynamicAndWrongLocation(t *testing.T) {
 	cases := []struct{ name, path, source, want string }{
 		{"fixed foreign", "modules/marketdata/internal/adapters/sqlite/a.go", "package sqlite; func read(){ db.Query(`SELECT * FROM events`) }", "owned by ledger"},
 		{"concatenated const foreign", "modules/marketdata/internal/adapters/sqlite/a.go", "package sqlite; const table=`events`; const query=`SELECT * FROM `+table; func read(){ db.Query(query) }", "owned by ledger"},
+		{"local const foreign", "modules/marketdata/internal/adapters/sqlite/a.go", "package sqlite; func read(){const query=`SELECT * FROM events`; db.Query(query)}", "owned by ledger"},
+		{"shadowed SQL const", "modules/marketdata/internal/adapters/sqlite/a.go", "package sqlite; const query=`SELECT * FROM security_price_observations`; func read(query string){db.Query(query)}", "unresolved SQL"},
+		{"method value", "modules/marketdata/internal/adapters/sqlite/a.go", "package sqlite; func read(query string){run:=db.Query; run(query)}", "method value"},
+		{"comment prefixed SQL", "modules/marketdata/internal/adapters/sqlite/a.go", "package sqlite; func read(){db.Query(`/*bounded*/ SELECT * FROM events`)}", "owned by ledger"},
 		{"dynamic table", "modules/marketdata/internal/adapters/sqlite/a.go", "package sqlite; func read(table string){ db.Query(`SELECT * FROM `+table) }", "unresolved SQL"},
 		{"dynamic variable", "modules/marketdata/internal/adapters/sqlite/a.go", "package sqlite; var statement=`SELECT * FROM security_price_observations`; func read(){ db.Query(statement) }", "unresolved SQL"},
 		{"application SQL", "modules/ledger/internal/application/a.go", "package application; func read(){ db.Query(`SELECT * FROM events`) }", "private sqlite adapter"},
@@ -114,6 +118,9 @@ func TestSchemaGateRejectsUnownedObjects(t *testing.T) {
 		`CREATE VIEW mystery AS SELECT * FROM events`,
 		`CREATE TRIGGER mystery AFTER INSERT ON events BEGIN SELECT 1; END`,
 		`CREATE TRIGGER events_guard AFTER INSERT ON events BEGIN DELETE FROM order_events; END`,
+		`CREATE TRIGGER events_guard AFTER INSERT ON events BEGIN SELECT * FROM events, order_events; END`,
+		`CREATE TRIGGER events_guard AFTER INSERT ON events BEGIN SELECT 1 WHERE 1 IN order_events; END`,
+		`CREATE TABLE events(id INTEGER REFERENCES order_events)`,
 	} {
 		t.Run(fmt.Sprint(sql), func(t *testing.T) {
 			if err := checkSchemaSQL(sql); err == nil {
@@ -142,5 +149,29 @@ func TestCatalogObjectArgumentPositions(t *testing.T) {
 	}
 	if !reflect.DeepEqual(indexes, []int{0, 1}) {
 		t.Fatalf("got object arguments %v", indexes)
+	}
+}
+
+func TestSQLStatementMetadataRequiresEveryObjectArgument(t *testing.T) {
+	source := `package sqlite
+ import o "omni-folio/services/core/internal/storage/observation"
+ const query="SELECT name FROM sqlite_master WHERE name=? OR tbl_name=?"
+ var statements=[]o.Statement{{SQL:query,Arguments:2,Objects:[]string{"watchlist_state"},ObjectArguments:[]int{0}}}
+ func read(){db.Query(query,"watchlist_state","watchlist_state")}`
+	root := fixtureSources(t, map[string]string{"modules/watchlist/internal/adapters/sqlite/a.go": source})
+	violations, err := inspectSQLSources(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(strings.Join(violations, "\n"), "does not cover") {
+		t.Fatal(violations)
+	}
+	root = fixtureSources(t, map[string]string{"modules/watchlist/internal/adapters/sqlite/a.go": strings.Replace(source, "[]int{0}", "[]int{0,1}", 1)})
+	violations, err = inspectSQLSources(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(violations) != 0 {
+		t.Fatal(violations)
 	}
 }

@@ -45,6 +45,8 @@ func TestDomainDependencies(t *testing.T) {
 
 func inspectDependencies(root string) ([]string, map[string]bool, error) {
 	var violations []string
+	_, rootErr := os.Stat(filepath.Join(root, "go.mod"))
+	coreRoot := rootErr == nil
 	seen := map[string]bool{}
 	methods := map[string]map[string]bool{}
 	graph := map[string]map[string]bool{}
@@ -60,6 +62,14 @@ func inspectDependencies(root string) ([]string, map[string]bool, error) {
 			return err
 		}
 		relative = filepath.ToSlash(relative)
+		physicalRelative := relative
+		if coreRoot {
+			if strings.HasPrefix(relative, "internal/") {
+				relative = strings.TrimPrefix(relative, "internal/")
+			} else {
+				relative = "root/" + relative
+			}
+		}
 		scope := strings.Split(relative, "/")[0]
 		seen[scope] = true
 		file, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
@@ -87,6 +97,9 @@ func inspectDependencies(root string) ([]string, map[string]bool, error) {
 		}
 		imports := map[string]string{}
 		packagePath := internalPrefix + filepath.ToSlash(filepath.Dir(relative))
+		if coreRoot {
+			packagePath = strings.TrimSuffix(internalPrefix, "internal/") + filepath.ToSlash(filepath.Dir(physicalRelative))
+		}
 		if graph[packagePath] == nil {
 			graph[packagePath] = map[string]bool{}
 		}
@@ -123,7 +136,7 @@ func inspectDependencies(root string) ([]string, map[string]bool, error) {
 				return true
 			}
 			_, legacyDomain := domainDependencies[scope]
-			if (legacyDomain || moduleLayer(relative) == "domain") && imports[pkg.Name] == "time" {
+			if (legacyDomain || moduleLayer(relative) == "domain" || moduleLayer(relative) == "application" || moduleLayer(relative) == "contracts") && imports[pkg.Name] == "time" {
 				switch selector.Sel.Name {
 				case "Now", "Since", "Until", "After", "AfterFunc", "NewTimer", "NewTicker", "Tick", "Sleep", "LoadLocation":
 					violations = append(violations, relative+" uses impure time."+selector.Sel.Name)
@@ -142,6 +155,7 @@ func inspectDependencies(root string) ([]string, map[string]bool, error) {
 		}
 	}
 	violations = append(violations, importCycles(graph)...)
+	violations = append(violations, moduleCycles(graph)...)
 	return violations, seen, err
 }
 
@@ -222,5 +236,15 @@ func TestDependencyGateAllowsInwardComposition(t *testing.T) {
 	}
 	if len(violations) != 0 {
 		t.Fatalf("inward composition rejected: %v", violations)
+	}
+}
+
+func TestAllProductionPackageDependencies(t *testing.T) {
+	violations, _, err := inspectDependencies("../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, violation := range violations {
+		t.Error(violation)
 	}
 }

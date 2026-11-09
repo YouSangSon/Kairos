@@ -74,6 +74,9 @@ func moduleImportViolation(relative, name string) string {
 		}
 	}
 	if owner == "" {
+		if strings.HasPrefix(relative, "composition/") && strings.HasPrefix(name, internalPrefix) && target == "" && !strings.HasPrefix(name, internalPrefix+"storage/") && !strings.HasPrefix(name, internalPrefix+"composition/") {
+			return "composition imports private legacy implementation " + name
+		}
 		return ""
 	}
 	switch layer {
@@ -109,6 +112,9 @@ func moduleImportViolation(relative, name string) string {
 			return "module construction must be in compose.go"
 		}
 	case "adapters":
+		if strings.HasPrefix(name, internalPrefix) && target == "" && name != internalPrefix+"exact" && !strings.HasPrefix(name, internalPrefix+"storage/") {
+			return "adapter imports legacy implementation outside module boundary " + name
+		}
 	default:
 		return "unknown module layer " + layer
 	}
@@ -146,6 +152,9 @@ func inspectModuleDeclarations(path string, file *ast.File, imports map[string]s
 			violations = append(violations, path+" module root is construction only")
 		}
 		for _, declaration := range file.Decls {
+			if group, ok := declaration.(*ast.GenDecl); ok && group.Tok == token.VAR {
+				violations = append(violations, path+" module construction cannot expose package state")
+			}
 			function, ok := declaration.(*ast.FuncDecl)
 			if !ok {
 				continue
@@ -154,7 +163,28 @@ func inspectModuleDeclarations(path string, file *ast.File, imports map[string]s
 				violations = append(violations, path+" module root permits Compose construction only")
 				continue
 			}
+			if function.Type.Results != nil {
+				for _, field := range function.Type.Results.List {
+					if forbiddenContractResult(field.Type, imports) {
+						violations = append(violations, path+" construction result exposes private capability")
+					}
+				}
+			}
 			ast.Inspect(function.Body, func(node ast.Node) bool {
+				if condition, ok := node.(*ast.IfStmt); ok {
+					binary, valid := condition.Cond.(*ast.BinaryExpr)
+					if !valid || binary.Op != token.NEQ || !isNil(binary.Y) || !isErrorIdentifier(binary.X) {
+						violations = append(violations, path+" contains business condition in construction")
+					}
+				}
+				if call, ok := node.(*ast.CallExpr); ok {
+					switch function := call.Fun.(type) {
+					case *ast.SelectorExpr:
+						if !strings.HasPrefix(function.Sel.Name, "New") && function.Sel.Name != "Compose" && function.Sel.Name != "Errorf" {
+							violations = append(violations, path+" calls business function in construction "+function.Sel.Name)
+						}
+					}
+				}
 				switch node.(type) {
 				case *ast.ForStmt, *ast.RangeStmt, *ast.SwitchStmt, *ast.TypeSwitchStmt, *ast.GoStmt, *ast.DeferStmt:
 					violations = append(violations, path+" contains business control flow in construction")
@@ -166,35 +196,55 @@ func inspectModuleDeclarations(path string, file *ast.File, imports map[string]s
 	if layer != "contracts" {
 		return violations
 	}
-	ast.Inspect(file, func(node ast.Node) bool {
-		if field, ok := node.(*ast.Field); ok {
-			for _, name := range field.Names {
-				switch name.Name {
-				case "Query", "QueryContext", "QueryRow", "QueryRowContext", "Exec", "ExecContext", "Begin", "BeginTx", "Commit", "Rollback", "RawTx":
-					violations = append(violations, path+" exposes generic storage capability "+name.Name)
+	checkResults := func(function *ast.FuncType) {
+		if function.Results != nil {
+			for _, field := range function.Results.List {
+				if forbiddenContractResult(field.Type, imports) {
+					violations = append(violations, path+" public contract result escapes observation or iterator")
 				}
 			}
-			if _, ok := field.Type.(*ast.FuncType); ok && len(field.Names) > 0 && field.Names[0].IsExported() { // Interface method parameters remain checked below.
-				if function := field.Type.(*ast.FuncType); function.Results != nil {
-					for _, result := range function.Results.List {
-						if forbiddenContractResult(result.Type, imports) {
-							violations = append(violations, path+" public contract result escapes observation or iterator")
-						}
+		}
+	}
+	for _, decl := range file.Decls {
+		if function, ok := decl.(*ast.FuncDecl); ok && function.Name.IsExported() {
+			checkResults(function.Type)
+		}
+		group, ok := decl.(*ast.GenDecl)
+		if !ok {
+			continue
+		}
+		for _, spec := range group.Specs {
+			typ, ok := spec.(*ast.TypeSpec)
+			if !ok {
+				continue
+			}
+			switch value := typ.Type.(type) {
+			case *ast.StructType:
+				for _, field := range value.Fields.List {
+					if forbiddenContractResult(field.Type, imports) {
+						violations = append(violations, path+" public contract field escapes observation or iterator")
 					}
 				}
-			} else if forbiddenContractResult(field.Type, imports) {
-				violations = append(violations, path+" public contract field escapes observation or iterator")
-			}
-		}
-		if typ, ok := node.(*ast.TypeSpec); ok && typ.Assign.IsValid() {
-			if selector, ok := typ.Type.(*ast.SelectorExpr); ok {
-				if pkg, ok := selector.X.(*ast.Ident); ok && strings.Contains(imports[pkg.Name], "/internal/") && imports[pkg.Name] != internalPrefix+"exact" {
-					violations = append(violations, path+" public contract aliases private type")
+			case *ast.InterfaceType:
+				for _, field := range value.Methods.List {
+					for _, name := range field.Names {
+						switch name.Name {
+						case "Query", "QueryContext", "QueryRow", "QueryRowContext", "Exec", "ExecContext", "Begin", "BeginTx", "Commit", "Rollback", "RawTx":
+							violations = append(violations, path+" exposes generic storage capability "+name.Name)
+						}
+					}
+					if method, ok := field.Type.(*ast.FuncType); ok {
+						checkResults(method)
+					}
+				}
+			default:
+				if forbiddenContractResult(typ.Type, imports) {
+					violations = append(violations, path+" public contract aliases private type or escaping capability")
 				}
 			}
 		}
-		return true
-	})
+	}
+
 	return violations
 }
 
@@ -202,12 +252,18 @@ func forbiddenContractResult(expr ast.Expr, imports map[string]string) bool {
 	bad := false
 	ast.Inspect(expr, func(node ast.Node) bool {
 		switch value := node.(type) {
+		case *ast.Ident:
+			if value.Name == "any" {
+				bad = true
+			}
+		case *ast.FuncType:
+			bad = true
 		case *ast.ChanType:
 			bad = true
 		case *ast.SelectorExpr:
 			if pkg, ok := value.X.(*ast.Ident); ok {
 				path := imports[pkg.Name]
-				if path == "database/sql" || strings.HasPrefix(path, "net/") || path == "iter" || value.Sel.Name == "ObservationRef" || strings.Contains(path, "/adapters/") {
+				if path == "database/sql" || strings.HasPrefix(path, "net/") || path == "iter" || strings.Contains(path, "/internal/") && path != internalPrefix+"exact" && path != internalPrefix+"storage/contracts" && !strings.HasSuffix(path, "/contracts") || value.Sel.Name == "ObservationRef" || strings.Contains(path, "/adapters/") {
 					bad = true
 				}
 			}
@@ -253,4 +309,34 @@ func importCycles(graph map[string]map[string]bool) []string {
 		visit(node)
 	}
 	return violations
+}
+
+func isNil(expr ast.Expr) bool { value, ok := expr.(*ast.Ident); return ok && value.Name == "nil" }
+func isErrorIdentifier(expr ast.Expr) bool {
+	value, ok := expr.(*ast.Ident)
+	return ok && (value.Name == "err" || strings.HasSuffix(value.Name, "Err"))
+}
+
+func moduleCycles(packages map[string]map[string]bool) []string {
+	graph := map[string]map[string]bool{}
+	for source, targets := range packages {
+		owner, _ := modulePath(source)
+		if owner == "" {
+			continue
+		}
+		node := "module:" + owner
+		if graph[node] == nil {
+			graph[node] = map[string]bool{}
+		}
+		for target := range targets {
+			other, _ := modulePath(target)
+			if other != "" && other != owner {
+				graph[node]["module:"+other] = true
+				if graph["module:"+other] == nil {
+					graph["module:"+other] = map[string]bool{}
+				}
+			}
+		}
+	}
+	return importCycles(graph)
 }

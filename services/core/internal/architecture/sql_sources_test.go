@@ -8,6 +8,8 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -79,11 +81,24 @@ func inspectSQLSources(root string) ([]string, error) {
 	var violations []string
 	catalogs := map[string][]string{}
 	for _, source := range sources {
-		ast.Inspect(source.file, func(node ast.Node) bool {
-			literal, ok := node.(*ast.CompositeLit)
-			if !ok {
-				return true
+		imports := map[string]string{}
+		for _, imp := range source.file.Imports {
+			path, _ := strconv.Unquote(imp.Path.Value)
+			alias := filepath.Base(path)
+			if imp.Name != nil {
+				alias = imp.Name.Name
 			}
+			imports[alias] = path
+		}
+		statementType := func(expr ast.Expr) bool {
+			selector, ok := expr.(*ast.SelectorExpr)
+			if !ok {
+				return false
+			}
+			pkg, ok := selector.X.(*ast.Ident)
+			return ok && imports[pkg.Name] == internalPrefix+"storage/observation" && selector.Sel.Name == "Statement"
+		}
+		collect := func(literal *ast.CompositeLit) {
 			fields := map[string]ast.Expr{}
 			for _, element := range literal.Elts {
 				if field, ok := element.(*ast.KeyValueExpr); ok {
@@ -92,35 +107,77 @@ func inspectSQLSources(root string) ([]string, error) {
 					}
 				}
 			}
-			sql, ok := constantString(fields["SQL"], source.constants, map[string]bool{})
-			if !ok {
-				return true
+			sql, known := constantString(fields["SQL"], source.constants, map[string]bool{})
+			if !known {
+				violations = append(violations, source.path+" unresolved SQL statement registration")
+				return
 			}
-			objects, ok := fields["Objects"].(*ast.CompositeLit)
-			if !ok {
-				return true
-			}
-			_, bounded := fields["ObjectArguments"]
-			if !bounded {
-				return true
-			}
+			objects, hasObjects := fields["Objects"].(*ast.CompositeLit)
 			var names []string
-			for _, element := range objects.Elts {
-				name, known := constantString(element, source.constants, map[string]bool{})
-				if !known {
-					return true
+			if hasObjects {
+				for _, element := range objects.Elts {
+					name, known := constantString(element, source.constants, map[string]bool{})
+					if !known {
+						violations = append(violations, source.path+" unresolved catalog object registration")
+						return
+					}
+					names = append(names, name)
 				}
-				names = append(names, name)
+			}
+			expected, err := ownership.CatalogArguments(sql)
+			if err != nil {
+				violations = append(violations, source.path+" "+err.Error())
+				return
+			}
+			indexes, hasIndexes := fields["ObjectArguments"].(*ast.CompositeLit)
+			var actual []int
+			if hasIndexes {
+				for _, element := range indexes.Elts {
+					value, ok := element.(*ast.BasicLit)
+					if !ok || value.Kind != token.INT {
+						violations = append(violations, source.path+" unresolved catalog argument registration")
+						return
+					}
+					index, err := strconv.Atoi(value.Value)
+					if err != nil {
+						violations = append(violations, source.path+" unresolved catalog argument registration")
+						return
+					}
+					actual = append(actual, index)
+				}
+			}
+			sort.Ints(expected)
+			sort.Ints(actual)
+			if !slices.Equal(expected, actual) || len(expected) > 0 && len(names) == 0 {
+				violations = append(violations, source.path+" catalog argument registration does not cover object predicates")
+				return
 			}
 			catalogs[filepath.Dir(source.path)+"\x00"+sql] = names
+		}
+		ast.Inspect(source.file, func(node ast.Node) bool {
+			literal, ok := node.(*ast.CompositeLit)
+			if !ok {
+				return true
+			}
+			if statementType(literal.Type) {
+				collect(literal)
+			}
+			if array, ok := literal.Type.(*ast.ArrayType); ok && statementType(array.Elt) {
+				for _, element := range literal.Elts {
+					if entry, ok := element.(*ast.CompositeLit); ok {
+						collect(entry)
+					}
+				}
+			}
 			return true
 		})
 	}
+
 	for _, source := range sources {
 		owner, layer := modulePath(source.path)
 		sqlite := owner != "" && layer == "adapters" && strings.Contains(source.path, "/internal/adapters/sqlite/")
-		check := func(sql string) {
-			if !looksLikeSQL(sql) {
+		check := func(sql string, called bool) {
+			if !called && !looksLikeSQL(sql) {
 				return
 			}
 			if !sqlite {
@@ -131,7 +188,22 @@ func inspectSQLSources(root string) ([]string, error) {
 				violations = append(violations, source.path+" "+err.Error())
 			}
 		}
+		calledMethods := map[*ast.SelectorExpr]bool{}
 		ast.Inspect(source.file, func(node ast.Node) bool {
+			if call, ok := node.(*ast.CallExpr); ok {
+				if selector, ok := call.Fun.(*ast.SelectorExpr); ok {
+					calledMethods[selector] = true
+				}
+			}
+			return true
+		})
+		ast.Inspect(source.file, func(node ast.Node) bool {
+			if selector, ok := node.(*ast.SelectorExpr); ok && !calledMethods[selector] {
+				switch selector.Sel.Name {
+				case "Query", "QueryRow", "Exec", "Prepare", "QueryContext", "QueryRowContext", "ExecContext", "PrepareContext", "QueryOne", "Execute":
+					violations = append(violations, source.path+" SQL method value escapes fixed statement analysis")
+				}
+			}
 			if call, ok := node.(*ast.CallExpr); ok {
 				if selector, ok := call.Fun.(*ast.SelectorExpr); ok {
 					index := -1
@@ -149,14 +221,14 @@ func inspectSQLSources(root string) ([]string, error) {
 						if !known {
 							violations = append(violations, source.path+" unresolved SQL expression")
 						} else {
-							check(sql)
+							check(sql, true)
 						}
 					}
 				}
 			}
 			if expr, ok := node.(ast.Expr); ok {
 				if sql, known := constantString(expr, source.constants, map[string]bool{}); known && looksLikeSQL(sql) {
-					check(sql)
+					check(sql, false)
 					return false
 				}
 			}
@@ -187,7 +259,21 @@ func constantString(expr ast.Expr, constants map[string]ast.Expr, seen map[strin
 			return "", false
 		}
 		seen[value.Name] = true
-		result, ok := constantString(constants[value.Name], constants, seen)
+		expression := constants[value.Name]
+		if value.Obj != nil {
+			if value.Obj.Kind != ast.Con {
+				delete(seen, value.Name)
+				return "", false
+			}
+			if declaration, ok := value.Obj.Decl.(*ast.ValueSpec); ok {
+				for index, name := range declaration.Names {
+					if name.Name == value.Name && index < len(declaration.Values) {
+						expression = declaration.Values[index]
+					}
+				}
+			}
+		}
+		result, ok := constantString(expression, constants, seen)
 		delete(seen, value.Name)
 		return result, ok
 	}
@@ -271,7 +357,7 @@ func approvedSQLForwarder(path string, file *ast.File, pos token.Pos) bool {
 		if !ok {
 			return false
 		}
-		return name.Name == "ReadHandle" && (function.Name.Name == "Query" || function.Name.Name == "QueryOne") || name.Name == "ImportHandle" && function.Name.Name == "Execute"
+		return name.Name == "ReadHandle" && (function.Name.Name == "Query" || function.Name.Name == "QueryContext" || function.Name.Name == "QueryOne") || name.Name == "ImportHandle" && function.Name.Name == "Execute"
 	}
 	return false
 }

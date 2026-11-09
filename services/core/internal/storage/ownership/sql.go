@@ -182,6 +182,10 @@ func sqlTableReferences(tokens []sqlToken) ([]string, bool, error) {
 				return nil, false, err
 			}
 			if next < len(tokens) && tokens[next].text == "(" && (token.text == "from" || token.text == "join" || token.text == ",") {
+				if name == "json_each" && next+4 < len(tokens) && (tokens[next+1].text == "new" || tokens[next+1].text == "old") && tokens[next+2].text == "." && tokens[next+4].text == ")" {
+					i = next + 4
+					continue
+				}
 				return nil, false, fmt.Errorf("unsupported table-valued function %s", name)
 			}
 			tables = append(tables, name)
@@ -192,9 +196,7 @@ func sqlTableReferences(tokens []sqlToken) ([]string, bool, error) {
 	if depth != 0 {
 		return nil, false, fmt.Errorf("unbalanced SQL")
 	}
-	if len(tables) == 0 {
-		return nil, false, fmt.Errorf("SQL has no attributable table")
-	}
+
 	return tables, write, nil
 }
 
@@ -203,9 +205,16 @@ func ValidateSQL(owner, source string, catalogObjects []string) error {
 	if err != nil {
 		return err
 	}
+	return validateSQLTokens(owner, tokens, catalogObjects, false)
+}
+
+func validateSQLTokens(owner string, tokens []sqlToken, catalogObjects []string, allowScalar bool) error {
 	tables, write, err := sqlTableReferences(tokens)
 	if err != nil {
 		return err
+	}
+	if len(tables) == 0 && (!allowScalar || len(tokens) == 0 || tokens[0].text != "select") {
+		return fmt.Errorf("SQL has no attributable table")
 	}
 	for _, table := range tables {
 		if IsCatalog(table) {
@@ -502,6 +511,31 @@ func ValidateSchema(source string) ([]string, error) {
 		}
 		if kind == "table" {
 			tables = append(tables, name)
+			for at := index + 1; at < len(tokens) && tokens[at].text != ";"; at++ {
+				if tokens[at].literal {
+					continue
+				}
+				if tokens[at].text == "references" {
+					table, _, err := tableAt(tokens, at+1)
+					if err != nil {
+						return nil, err
+					}
+					actual, known := Owner(table)
+					if !known || actual != expected {
+						return nil, fmt.Errorf("table %s references other owner object %s", name, table)
+					}
+				}
+				if tokens[at].text == "select" {
+					end := at
+					for end < len(tokens) && tokens[end].text != ";" {
+						end++
+					}
+					if err := validateSQLTokens(expected, tokens[at:end], nil, true); err != nil {
+						return nil, err
+					}
+					break
+				}
+			}
 			continue
 		}
 		if kind != "index" && kind != "trigger" {
@@ -524,31 +558,43 @@ func ValidateSchema(source string) ([]string, error) {
 			for body < len(tokens) && tokens[body].text != "begin" {
 				body++
 			}
-			end := body + 1
-			for end < len(tokens) && !(tokens[end].text == "end" && end+1 < len(tokens) && tokens[end+1].text == ";") {
-				end++
+			if body == len(tokens) {
+				return nil, fmt.Errorf("trigger %s lacks body", name)
 			}
-			for at := body + 1; at < end; at++ {
-				switch tokens[at].text {
-				case "from", "join", "into", "update":
-					if tokens[at].literal {
-						continue
+			header := append([]sqlToken{{text: "select"}}, tokens[on+2:body]...)
+			if err := validateSQLTokens(expected, header, nil, true); err != nil {
+				return nil, err
+			}
+			end := body + 1
+			cases := 0
+			for end < len(tokens) {
+				if !tokens[end].literal {
+					if tokens[end].text == "case" {
+						cases++
 					}
-					if at+1 < end && (tokens[at+1].text == "on" || tokens[at+1].text == "of") {
-						continue
-					}
-					table, next, err := tableAt(tokens, at+1)
-					if table == "json_each" && next+5 < end && tokens[next].text == "(" && (tokens[next+1].text == "new" || tokens[next+1].text == "old") && tokens[next+2].text == "." && tokens[next+4].text == ")" {
-						continue
-					}
-					if err != nil {
-						return nil, err
-					}
-					actual, known := Owner(table)
-					if !known || actual != expected {
-						return nil, fmt.Errorf("trigger %s accesses other owner object %s", name, table)
+					if tokens[end].text == "end" {
+						if cases == 0 {
+							break
+						}
+						cases--
 					}
 				}
+				end++
+			}
+			if end == len(tokens) {
+				return nil, fmt.Errorf("unterminated trigger %s", name)
+			}
+			for start := body + 1; start < end; {
+				stop := start
+				for stop < end && (tokens[stop].text != ";" || tokens[stop].literal) {
+					stop++
+				}
+				if stop > start {
+					if err := validateSQLTokens(expected, tokens[start:stop], nil, true); err != nil {
+						return nil, fmt.Errorf("trigger %s: %w", name, err)
+					}
+				}
+				start = stop + 1
 			}
 		}
 	}
