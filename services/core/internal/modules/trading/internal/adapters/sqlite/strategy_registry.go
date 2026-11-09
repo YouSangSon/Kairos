@@ -61,136 +61,15 @@ var readStrategyArtifact = files.ReadStrategyArtifact
 var readBoundedRegularFile = files.ReadBoundedRegularFile
 
 func (s *Store) registerStrategyEvidence(ctx context.Context, artifact []byte) (*StrategyEvidence, error) {
-	evidence, err := decodeStrategyArtifact(artifact)
-	if err != nil {
-		return nil, err
-	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, err
-	}
-	defer tx.Rollback()
-	if _, err := provePaperPerformancePolicyRecovery(ctx, tx); err != nil {
-		return nil, fmt.Errorf("strategy evidence policy recovery: %w", err)
-	}
-	var storedArtifact, recordedAt string
-	err = tx.QueryRowContext(ctx, `SELECT artifact_json,recorded_at FROM strategy_research_evidence WHERE result_sha256=?`, evidence.ResultSHA256).Scan(&storedArtifact, &recordedAt)
-	if err == nil {
-		if storedArtifact != evidence.ArtifactJSON {
-			return nil, errors.New("strategy result hash is already bound to different evidence")
-		}
-		evidence.RecordedAt = recordedAt
-		return evidence, nil
-	}
-	if !errors.Is(err, sql.ErrNoRows) {
-		return nil, err
-	}
-	evidence.RecordedAt = s.now().UTC().Format(time.RFC3339Nano)
-	if err := requirePaperPromotionAppendTime(ctx, tx, evidence.RecordedAt); err != nil {
-		return nil, err
-	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO strategy_research_evidence(
-		result_sha256,artifact_sha256,strategy_name,strategy_version,parameter_sha256,target,artifact_json,recorded_at
-	) VALUES(?,?,?,?,?,?,?,?)`, evidence.ResultSHA256, evidence.ArtifactSHA256, evidence.StrategyName,
-		evidence.StrategyVersion, evidence.ParameterSHA256, evidence.Target, evidence.ArtifactJSON, evidence.RecordedAt)
-	if err != nil {
-		return nil, err
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, err
-	}
-	return evidence, nil
+	return s.business().RegisterEvidenceRecord(ctx, artifact)
 }
 
 func (s *Store) SelectPaperCandidate(ctx context.Context, resultSHA256, expectedCurrentEventID string) (*StrategySelectionState, error) {
-	if !strategySHA256Pattern.MatchString(resultSHA256) || !safeOrderID(expectedCurrentEventID) {
-		return nil, errors.New("strategy selection identifiers are invalid")
-	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, err
-	}
-	defer tx.Rollback()
-	if _, err := provePaperPerformancePolicyRecovery(ctx, tx); err != nil {
-		return nil, fmt.Errorf("strategy selection policy recovery: %w", err)
-	}
-	now := s.now().UTC()
-	if err := rejectLivePaperRunnerLease(ctx, tx, now); err != nil {
-		return nil, err
-	}
-	state, err := replayStrategyRegistry(ctx, tx)
-	if err != nil {
-		return nil, err
-	}
-	if state.CurrentEventID != expectedCurrentEventID {
-		return nil, errors.New("stale strategy selection")
-	}
-	var target string
-	if err := tx.QueryRowContext(ctx, `SELECT target FROM strategy_research_evidence WHERE result_sha256=?`, resultSHA256).Scan(&target); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, errors.New("strategy evidence is not registered")
-		}
-		return nil, err
-	}
-	if target != "paper_candidate" {
-		return nil, errors.New("only paper_candidate evidence can be selected")
-	}
-	if state.SelectedResultSHA256 == resultSHA256 {
-		return nil, errors.New("strategy evidence is already selected")
-	}
-	event := StrategySelectionEvent{
-		EventID: s.id("strategy_selection"), EventType: "SELECT", CandidateResultSHA256: resultSHA256,
-		ExpectedCurrentEventID: expectedCurrentEventID, PreviousSelectedResultSHA256: state.SelectedResultSHA256,
-		SelectedResultSHA256: resultSHA256, ReasonCode: "manual_selection", RecordedAt: now.Format(time.RFC3339Nano),
-	}
-	sequence, err := latestPaperEvaluationSequence(ctx, tx)
-	if err != nil {
-		return nil, err
-	}
-	event.PaperEvaluationSequence = sequence
-	if err := insertStrategySelectionEvent(ctx, tx, event); err != nil {
-		return nil, err
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, err
-	}
-	return &StrategySelectionState{CurrentEventID: event.EventID, SelectedResultSHA256: resultSHA256}, nil
+	return s.business().SelectPaperCandidate(ctx, resultSHA256, expectedCurrentEventID)
 }
 
 func (s *Store) RollbackPaperCandidate(ctx context.Context, expectedCurrentEventID, sourceEventID string) (*StrategySelectionState, error) {
-	if !safeOrderID(expectedCurrentEventID) || !safeOrderID(sourceEventID) {
-		return nil, errors.New("strategy rollback identifiers are invalid")
-	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, err
-	}
-	defer tx.Rollback()
-	if _, err := provePaperPerformancePolicyRecovery(ctx, tx); err != nil {
-		return nil, fmt.Errorf("strategy rollback policy recovery: %w", err)
-	}
-	now := s.now().UTC()
-	if err := rejectLivePaperRunnerLease(ctx, tx, now); err != nil {
-		return nil, err
-	}
-	state, err := replayStrategyRegistry(ctx, tx)
-	if err != nil {
-		return nil, err
-	}
-	if state.CurrentEventID != expectedCurrentEventID || sourceEventID != state.CurrentEventID {
-		return nil, errors.New("stale or mismatched strategy rollback source")
-	}
-	if err := s.haltAllSyntheticExecutionTx(ctx, tx, now); err != nil {
-		return nil, err
-	}
-	returned, err := s.rollbackPaperCandidateTx(ctx, tx, state, expectedCurrentEventID, sourceEventID, "manual_rollback", "", s.id("strategy_selection"), now)
-	if err != nil {
-		return nil, err
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, err
-	}
-	return returned, nil
+	return s.business().RollbackPaperCandidate(ctx, expectedCurrentEventID, sourceEventID)
 }
 
 func (s *Store) rollbackPaperCandidateTx(ctx context.Context, tx *transaction, state strategyRegistryRecoveryProof, expectedCurrentEventID, sourceEventID, reasonCode, policyEventID, eventID string, now time.Time) (*StrategySelectionState, error) {

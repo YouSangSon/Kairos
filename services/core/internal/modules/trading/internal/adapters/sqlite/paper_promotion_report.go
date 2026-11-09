@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"omni-folio/services/core/internal/modules/trading/contracts"
-	"omni-folio/services/core/internal/researchdomain"
+	researchdomain "omni-folio/services/core/internal/modules/trading/internal/domain/research"
 	"strings"
 	"time"
 )
@@ -124,7 +124,7 @@ func projectPaperPromotionReport(claim paperPromotionClaim, decision *paperPromo
 	return report, nil
 }
 
-func projectPaperPromotionReportMetrics(value researchdomain.Metrics) (PaperPromotionReportMetrics, error) {
+func projectPaperPromotionReportMetrics(value contracts.PromotionMetrics) (PaperPromotionReportMetrics, error) {
 	returns, returnOK := researchReportDecimal(value.AfterCostReturn, -1)
 	drawdown, drawdownOK := researchReportDecimal(value.MaxDrawdown, 0)
 	trips, tripsOK := researchReportDecimal(value.TradeCount, 0)

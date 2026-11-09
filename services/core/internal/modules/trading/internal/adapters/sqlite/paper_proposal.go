@@ -7,7 +7,7 @@ import (
 
 	"encoding/json"
 	"errors"
-	"omni-folio/services/core/internal/strategydomain"
+	strategydomain "omni-folio/services/core/internal/modules/trading/internal/domain/strategy"
 	"time"
 )
 

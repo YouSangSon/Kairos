@@ -9,7 +9,7 @@ import (
 	"omni-folio/services/core/internal/codec"
 	"omni-folio/services/core/internal/exact"
 	"omni-folio/services/core/internal/modules/trading/internal/domain"
-	"omni-folio/services/core/internal/paperdomain"
+	paperdomain "omni-folio/services/core/internal/modules/trading/internal/domain/paper"
 
 	"regexp"
 	"strconv"

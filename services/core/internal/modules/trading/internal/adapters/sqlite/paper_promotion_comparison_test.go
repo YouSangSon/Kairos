@@ -8,8 +8,8 @@ import (
 	"encoding/json"
 	"errors"
 	"omni-folio/services/core/internal/modules/trading/contracts"
-	"omni-folio/services/core/internal/paperdomain"
-	"omni-folio/services/core/internal/researchdomain"
+	paperdomain "omni-folio/services/core/internal/modules/trading/internal/domain/paper"
+	researchdomain "omni-folio/services/core/internal/modules/trading/internal/domain/research"
 	"reflect"
 	"strconv"
 	"strings"
@@ -203,9 +203,9 @@ func paperPromotionPolicyWindowsForTest() []paperPromotionWindow {
 	windows := make([]paperPromotionWindow, 3)
 	for index := range windows {
 		windows[index] = paperPromotionWindow{
-			Candidate:  researchdomain.Metrics{AfterCostReturn: "0.01", MaxDrawdown: "0.02", Turnover: "0.1", TradeCount: "1"},
-			Incumbent:  researchdomain.Metrics{AfterCostReturn: "0.01", MaxDrawdown: "0.02", Turnover: "0.1", TradeCount: "1"},
-			BuyAndHold: researchdomain.Metrics{AfterCostReturn: "0"},
+			Candidate:  contracts.PromotionMetrics{AfterCostReturn: "0.01", MaxDrawdown: "0.02", Turnover: "0.1", TradeCount: "1"},
+			Incumbent:  contracts.PromotionMetrics{AfterCostReturn: "0.01", MaxDrawdown: "0.02", Turnover: "0.1", TradeCount: "1"},
+			BuyAndHold: contracts.PromotionMetrics{AfterCostReturn: "0"},
 		}
 	}
 	windows[2].Candidate.AfterCostReturn = "0.02"

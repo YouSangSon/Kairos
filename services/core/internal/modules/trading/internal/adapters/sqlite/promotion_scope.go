@@ -4,7 +4,7 @@ import (
 	"context"
 	"omni-folio/services/core/internal/modules/trading/contracts"
 	"omni-folio/services/core/internal/modules/trading/internal/application"
-	"omni-folio/services/core/internal/researchdomain"
+	researchdomain "omni-folio/services/core/internal/modules/trading/internal/domain/research"
 	"time"
 )
 

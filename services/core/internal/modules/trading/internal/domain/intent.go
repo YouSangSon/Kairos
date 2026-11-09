@@ -3,7 +3,7 @@ package domain
 import (
 	"errors"
 	"omni-folio/services/core/internal/exact"
-	"omni-folio/services/core/internal/paperdomain"
+	paperdomain "omni-folio/services/core/internal/modules/trading/internal/domain/paper"
 	"regexp"
 	"time"
 )

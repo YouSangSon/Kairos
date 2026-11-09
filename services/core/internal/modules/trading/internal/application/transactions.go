@@ -7,8 +7,8 @@ import (
 	"math"
 	"math/big"
 	"omni-folio/services/core/internal/modules/trading/internal/domain"
-	"omni-folio/services/core/internal/paperdomain"
-	"omni-folio/services/core/internal/riskdomain"
+	paperdomain "omni-folio/services/core/internal/modules/trading/internal/domain/paper"
+	riskdomain "omni-folio/services/core/internal/modules/trading/internal/domain/risk"
 
 	"time"
 )
@@ -51,7 +51,7 @@ func (s *UseCases) AdmitPaperSignalTx(ctx context.Context, tx WriteScope, accoun
 		return event, nil, nil
 	}
 	intent := CapitalizedPaperOrderIntent(*event, change.Side, change.Quantity)
-	state, err := tx.Orders().RecordOrderIntentTx(ctx, intent)
+	state, err := s.RecordOrderIntentTx(ctx, tx, intent)
 	if err != nil {
 		return nil, nil, err
 	}

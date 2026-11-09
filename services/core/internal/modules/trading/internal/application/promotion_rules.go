@@ -13,8 +13,8 @@ import (
 	"math/big"
 	"omni-folio/services/core/internal/modules/trading/contracts"
 	"omni-folio/services/core/internal/modules/trading/internal/domain"
-	"omni-folio/services/core/internal/paperdomain"
-	"omni-folio/services/core/internal/researchdomain"
+	paperdomain "omni-folio/services/core/internal/modules/trading/internal/domain/paper"
+	researchdomain "omni-folio/services/core/internal/modules/trading/internal/domain/research"
 	"regexp"
 	"slices"
 	"strconv"
@@ -331,18 +331,22 @@ func ComparePaperPromotion(ctx context.Context, bars []researchdomain.Bar, candi
 		windowBars, warmup := bars[start:start+30], bars[start-commonWarmup:start]
 		window := paperPromotionWindow{Start: windowBars[0].At, End: windowBars[len(windowBars)-1].At}
 		var err error
-		window.Candidate, _, err = researchdomain.SimulateFold(ctx, windowBars, warmup, candidate, execution, false)
+		var metrics researchdomain.Metrics
+		metrics, _, err = researchdomain.SimulateFold(ctx, windowBars, warmup, candidate, execution, false)
 		if err != nil {
 			return paperPromotionComparison{}, fmt.Errorf("paper promotion window %d candidate: %w", index+1, err)
 		}
-		window.Incumbent, _, err = researchdomain.SimulateFold(ctx, windowBars, warmup, incumbent, execution, false)
+		window.Candidate = contracts.PromotionMetrics(metrics)
+		metrics, _, err = researchdomain.SimulateFold(ctx, windowBars, warmup, incumbent, execution, false)
 		if err != nil {
 			return paperPromotionComparison{}, fmt.Errorf("paper promotion window %d incumbent: %w", index+1, err)
 		}
-		window.BuyAndHold, _, err = researchdomain.SimulateFold(ctx, windowBars, warmup, candidate, execution, true)
+		window.Incumbent = contracts.PromotionMetrics(metrics)
+		metrics, _, err = researchdomain.SimulateFold(ctx, windowBars, warmup, candidate, execution, true)
 		if err != nil {
 			return paperPromotionComparison{}, fmt.Errorf("paper promotion window %d buy-and-hold: %w", index+1, err)
 		}
+		window.BuyAndHold = contracts.PromotionMetrics(metrics)
 		comparison.Windows = append(comparison.Windows, window)
 	}
 	var err error

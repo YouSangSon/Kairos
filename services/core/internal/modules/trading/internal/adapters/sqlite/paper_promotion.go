@@ -10,7 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"omni-folio/services/core/internal/modules/trading/contracts"
-	"omni-folio/services/core/internal/researchdomain"
+	researchdomain "omni-folio/services/core/internal/modules/trading/internal/domain/research"
 )
 
 const paperPromotionClaimSchema = "paper-promotion-claim.v1"

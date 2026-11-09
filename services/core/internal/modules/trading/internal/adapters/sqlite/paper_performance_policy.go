@@ -10,7 +10,7 @@ import (
 	"fmt"
 	"omni-folio/services/core/internal/modules/trading/contracts"
 	"omni-folio/services/core/internal/modules/trading/internal/application"
-	"omni-folio/services/core/internal/riskdomain"
+	riskdomain "omni-folio/services/core/internal/modules/trading/internal/domain/risk"
 	"sort"
 )
 

@@ -12,10 +12,10 @@ import (
 	"omni-folio/services/core/internal/modules/trading/contracts"
 	"omni-folio/services/core/internal/modules/trading/internal/application"
 	"omni-folio/services/core/internal/modules/trading/internal/domain"
-	"omni-folio/services/core/internal/orderdomain"
+	orderdomain "omni-folio/services/core/internal/modules/trading/internal/domain/order"
 	"regexp"
 	"strings"
-	"time"
+
 	"unicode"
 	"unicode/utf8"
 )
@@ -191,90 +191,15 @@ func proveOrderRecovery(ctx context.Context, q orderQuerier) (orderRecoveryProof
 }
 
 func (s *Store) RecordOrderIntent(ctx context.Context, intent OrderIntent) (*OrderState, error) {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, err
-	}
-	defer tx.Rollback()
-	state, err := s.recordOrderIntentTx(ctx, tx, intent)
-	if err != nil {
-		return nil, err
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, err
-	}
-	return state, nil
+	return s.business().RecordOrderIntent(ctx, intent)
 }
 
 func (s *Store) recordOrderIntentTx(ctx context.Context, tx *transaction, intent OrderIntent) (*OrderState, error) {
-	if err := validateOrderIntent(intent); err != nil {
-		return nil, err
-	}
-	intentJSON, requestSHA, err := orderJSONHash(intent)
-	if err != nil {
-		return nil, err
-	}
-
-	var priorSHA, priorOrderID string
-	err = tx.QueryRowContext(ctx, `SELECT request_sha256, order_id FROM order_idempotency WHERE provider=? AND mode=? AND account_ref=? AND client_order_id=?`,
-		intent.Provider, intent.Mode, intent.AccountRef, intent.ClientOrderID).Scan(&priorSHA, &priorOrderID)
-	if err == nil {
-		if priorSHA != requestSHA {
-			return nil, errors.New("client_order_id was already used with a different intent")
-		}
-		return loadOrderStateFrom(ctx, tx, priorOrderID)
-	}
-	if !errors.Is(err, sql.ErrNoRows) {
-		return nil, err
-	}
-	if intent.Mode == "paper" && intent.SignalSchemaVersion != capitalizedPaperSignalSchema {
-		var schemaVersion int
-		if err := tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(version),0) FROM schema_migrations`).Scan(&schemaVersion); err != nil {
-			return nil, err
-		}
-		if schemaVersion >= 17 {
-			return nil, errors.New("new paper orders require the target-based signal schema")
-		}
-	}
-	if err := validateStrategyOrderSelection(ctx, tx, intent); err != nil {
-		return nil, err
-	}
-
-	orderID := s.id("order")
-	recordedAt := s.now().UTC().Format(time.RFC3339Nano)
-	if _, err := tx.ExecContext(ctx, `INSERT INTO order_idempotency(provider,mode,account_ref,client_order_id,request_sha256,order_id,intent_json,recorded_at) VALUES(?,?,?,?,?,?,?,?)`,
-		intent.Provider, intent.Mode, intent.AccountRef, intent.ClientOrderID, requestSHA, orderID, string(intentJSON), recordedAt); err != nil {
-		return nil, err
-	}
-	event := OrderEvent{EventID: s.id("order_event"), OrderID: orderID, Type: "INTENT_RECORDED", Source: "synthetic"}
-	if err := insertOrderEvent(ctx, tx, event, recordedAt); err != nil {
-		return nil, err
-	}
-	state := newOrderState(orderID, intent)
-	state, err = applyOrderEvent(state, event)
-	if err != nil {
-		return nil, err
-	}
-	return state, nil
+	return s.business().RecordOrderIntentTx(ctx, &writeScope{store: s, tx: tx}, intent)
 }
 
 func (s *Store) AppendOrderEvent(ctx context.Context, event OrderEvent) (*OrderState, error) {
-	if err := validateOrderEvent(event); err != nil {
-		return nil, err
-	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, err
-	}
-	defer tx.Rollback()
-	next, err := appendOrderEventTx(ctx, tx, event, s.now().UTC().Format(time.RFC3339Nano))
-	if err != nil {
-		return nil, err
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, err
-	}
-	return next, nil
+	return s.business().AppendOrderEvent(ctx, event)
 }
 
 func appendOrderEventTx(ctx context.Context, tx *transaction, event OrderEvent, recordedAt string) (*OrderState, error) {
@@ -423,14 +348,8 @@ func loadOrderIntentFrom(ctx context.Context, q orderQuerier, orderID string) (O
 	return intent, nil
 }
 
-func newOrderState(orderID string, intent OrderIntent) *OrderState {
-	return (*OrderState)(orderdomain.NewState(orderID, intent.ClientOrderID, intent.AccountRef, intent.Quantity, intent.LimitPrice))
-}
-
-func applyOrderEvent(current *OrderState, event OrderEvent) (*OrderState, error) {
-	next, err := orderdomain.Transition((*orderdomain.State)(current), event)
-	return (*OrderState)(next), err
-}
+var newOrderState = application.NewOrderState
+var applyOrderEvent = application.ApplyOrderEvent
 
 func validateOrderIntent(intent OrderIntent) error {
 	return domain.ValidateOrderIntent(domain.OrderIntent(intent))
@@ -491,7 +410,7 @@ func accountHasUnresolvedOrder(ctx context.Context, q orderQuerier, accountRef s
 }
 
 func sameProviderExecution(left, right OrderEvent) bool {
-	return orderdomain.SameProviderExecution(left, right)
+	return orderdomain.SameProviderExecution(orderdomain.Event(left), orderdomain.Event(right))
 }
 
 var orderJSONHash = codec.JSONHash

@@ -9,7 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"omni-folio/services/core/internal/modules/trading/contracts"
-	"omni-folio/services/core/internal/paperdomain"
+	paperdomain "omni-folio/services/core/internal/modules/trading/internal/domain/paper"
 	"strings"
 )
 

@@ -31,60 +31,11 @@ type executionAuthoritySnapshot = application.AuthoritySnapshot
 type riskReservationRecord = application.RiskReservation
 
 func (s *Store) SetSyntheticExecutionArmed(ctx context.Context, accountRef string, armed bool) (*ExecutionAuthorityState, error) {
-	if !orderAlias(accountRef, "account") {
-		return nil, errors.New("execution account reference is invalid")
-	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, err
-	}
-	defer tx.Rollback()
-	if _, err := provePaperPerformancePolicyRecovery(ctx, tx); err != nil {
-		return nil, fmt.Errorf("execution authority policy recovery: %w", err)
-	}
-	current, err := loadExecutionAuthoritySnapshot(ctx, tx, accountRef)
-	if err != nil {
-		return nil, err
-	}
-	if current.Armed == armed {
-		state := current.ExecutionAuthorityState
-		return &state, nil
-	}
-	now := s.now().UTC()
-	reason := "manual_halt"
-	if armed {
-		reason = "manual_arm"
-	}
-	record := executionAuthorityRecord{
-		EventID: s.id("execution_authority"), AccountRef: accountRef, Armed: armed,
-		FencingToken: current.FencingToken + 1, ReasonCode: reason, RecordedAt: now.Format(time.RFC3339Nano),
-	}
-	if err := insertExecutionAuthorityRecord(ctx, tx, record); err != nil {
-		return nil, err
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, err
-	}
-	return authorityState(record), nil
+	return s.business().SetSyntheticExecutionArmed(ctx, accountRef, armed)
 }
 
 func (s *Store) AcquireSyntheticExecutionLease(ctx context.Context, accountRef string) (*ExecutionAuthorityState, error) {
-	if !orderAlias(accountRef, "account") {
-		return nil, errors.New("execution account reference is invalid")
-	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, err
-	}
-	defer tx.Rollback()
-	state, err := s.acquireSyntheticExecutionLeaseTx(ctx, tx, accountRef)
-	if err != nil {
-		return nil, err
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, err
-	}
-	return state, nil
+	return s.business().AcquireSyntheticExecutionLease(ctx, accountRef)
 }
 
 func (s *Store) acquireSyntheticExecutionLeaseTx(ctx context.Context, tx *transaction, accountRef string) (*ExecutionAuthorityState, error) {
@@ -97,22 +48,7 @@ func (s *Store) AuthorizeSyntheticDispatch(ctx context.Context, orderID string, 
 }
 
 func (s *Store) authorizeSyntheticDispatchOnce(ctx context.Context, orderID string, fencingToken int64) (*OrderState, bool, error) {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, false, err
-	}
-	defer tx.Rollback()
-	if _, _, err := proveExecutionAuthorityRecovery(ctx, tx); err != nil {
-		return nil, false, fmt.Errorf("execution authority recovery: %w", err)
-	}
-	state, dispatched, err := s.authorizeSyntheticDispatchOnceTx(ctx, tx, orderID, fencingToken)
-	if err != nil {
-		return nil, false, err
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, false, err
-	}
-	return state, dispatched, nil
+	return s.business().AuthorizeSyntheticDispatchOnce(ctx, orderID, fencingToken)
 }
 
 func (s *Store) authorizeSyntheticDispatchOnceTx(ctx context.Context, tx *transaction, orderID string, fencingToken int64) (*OrderState, bool, error) {

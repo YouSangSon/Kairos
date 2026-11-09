@@ -43,3 +43,8 @@ func PaperProviderAlias(kind string, parts ...string) string {
 }
 
 var orderAliasPattern = regexp.MustCompile(`^kiwoom_(account|order|execution)_[A-Za-z0-9_-]{24}$`)
+
+func AccountingSessionID(accountRef, resultSHA256, selectionEventID, policySHA256 string) string {
+	hash := sha256.Sum256([]byte(strings.Join([]string{accountRef, resultSHA256, selectionEventID, policySHA256}, "\x00")))
+	return "paper_accounting_session_" + hex.EncodeToString(hash[:16])
+}

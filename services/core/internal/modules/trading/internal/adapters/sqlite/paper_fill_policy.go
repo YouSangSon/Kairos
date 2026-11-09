@@ -2,7 +2,7 @@ package sqlite
 
 import (
 	"omni-folio/services/core/internal/modules/trading/internal/application"
-	"omni-folio/services/core/internal/paperdomain"
+	paperdomain "omni-folio/services/core/internal/modules/trading/internal/domain/paper"
 )
 
 const (

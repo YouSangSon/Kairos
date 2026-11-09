@@ -4,8 +4,8 @@ import (
 	"context"
 	"math/big"
 	"omni-folio/services/core/internal/modules/trading/contracts"
-	"omni-folio/services/core/internal/paperdomain"
-	"omni-folio/services/core/internal/researchdomain"
+	paperdomain "omni-folio/services/core/internal/modules/trading/internal/domain/paper"
+	researchdomain "omni-folio/services/core/internal/modules/trading/internal/domain/research"
 	"time"
 )
 
@@ -31,10 +31,10 @@ type WriteScope interface {
 }
 
 type OrdersJournal interface {
+	OrderRecords
 	AccountOrderIDs(context.Context, string) ([]string, error)
 	LoadOrderIntentFrom(ctx context.Context, orderID string) (OrderIntent, error)
 	LoadOrderStateFrom(ctx context.Context, orderID string) (*OrderState, error)
-	RecordOrderIntentTx(ctx context.Context, intent OrderIntent) (*OrderState, error)
 	AccountHasUnresolvedOrder(ctx context.Context, accountRef string) (bool, error)
 	AppendOrderEventTx(ctx context.Context, event OrderEvent, recordedAt string) (*OrderState, error)
 	EventSequence(context.Context, string) (int64, error)
@@ -57,6 +57,7 @@ type ReservationsJournal interface {
 }
 
 type SelectionsJournal interface {
+	EvidenceRecords
 	LoadCurrentStrategyExecutionPolicy(ctx context.Context, resultSHA256, eventID string) (StrategyExecutionPolicy, error)
 	ReplayStrategyRegistry(ctx context.Context) (StrategyRegistryProof, error)
 	SelectionSequence(context.Context) (int64, error)
@@ -66,6 +67,7 @@ type SelectionsJournal interface {
 }
 
 type PaperJournal interface {
+	SessionRecords
 	SessionCount(context.Context) (int, error)
 	ReplayAccountsWithoutRegistry(context.Context) (map[string]PaperAccountState, error)
 	RecordPaperSignalEventTx(ctx context.Context, accountRef string, signal PaperSignal) (*PaperSignalEvent, error)
@@ -116,6 +118,7 @@ type PolicyJournal interface {
 }
 
 type RecoveryJournal interface {
+	SchemaReader
 	ProveOrderRecovery(context.Context) (contracts.OrderRecovery, error)
 	ProveAuthorityRecovery(context.Context) (string, int, error)
 	RequireSchema(context.Context) error

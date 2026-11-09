@@ -1,10 +1,5 @@
 package contracts
 
-import (
-	"omni-folio/services/core/internal/orderdomain"
-	"omni-folio/services/core/internal/researchdomain"
-)
-
 type ExecutionAuthorityState struct {
 	AccountRef     string `json:"account_ref"`
 	Armed          bool   `json:"armed"`
@@ -96,9 +91,42 @@ type OrderIntent struct {
 	ExecutionPolicySHA256        string `json:"execution_policy_sha256,omitempty"`
 }
 
-type OrderEvent = orderdomain.Event
+type OrderEvent struct {
+	EventID                   string `json:"event_id"`
+	OrderID                   string `json:"order_id"`
+	Type                      string `json:"type"`
+	Source                    string `json:"source"`
+	ProviderOrderRef          string `json:"provider_order_ref,omitempty"`
+	ProviderExecutionRef      string `json:"provider_execution_ref,omitempty"`
+	Quantity                  string `json:"quantity,omitempty"`
+	Price                     string `json:"price,omitempty"`
+	OccurredAt                string `json:"occurred_at,omitempty"`
+	RiskReservationID         string `json:"risk_reservation_id,omitempty"`
+	PaperAuthorizationID      string `json:"paper_authorization_id,omitempty"`
+	RiskPolicyVersion         string `json:"risk_policy_version,omitempty"`
+	FencingToken              int64  `json:"fencing_token,omitempty"`
+	PaperAccountingSessionID  string `json:"paper_accounting_session_id,omitempty"`
+	PaperSignalEventID        string `json:"paper_signal_event_id,omitempty"`
+	PaperBarObservationID     string `json:"paper_bar_observation_id,omitempty"`
+	PaperFillPolicyVersion    string `json:"paper_fill_policy_version,omitempty"`
+	ExecutionAuthorityEventID string `json:"execution_authority_event_id,omitempty"`
+	ReferencePrice            string `json:"reference_price,omitempty"`
+	Fee                       string `json:"fee,omitempty"`
+	Tax                       string `json:"tax,omitempty"`
+	Slippage                  string `json:"slippage,omitempty"`
+}
 
-type OrderState orderdomain.State
+type OrderState struct {
+	OrderID           string   `json:"order_id"`
+	ClientOrderID     string   `json:"client_order_id"`
+	AccountRef        string   `json:"account_ref"`
+	Status            string   `json:"status"`
+	Quantity          string   `json:"quantity"`
+	LimitPrice        string   `json:"limit_price"`
+	FilledQuantity    string   `json:"filled_quantity"`
+	ProviderOrderRefs []string `json:"provider_order_refs"`
+	PendingAction     string   `json:"pending_action,omitempty"`
+}
 
 type PaperAccountingSession struct {
 	SessionID                string `json:"session_id"`
@@ -309,11 +337,11 @@ type PaperPromotionComparison struct {
 }
 
 type PaperPromotionWindow struct {
-	Start      string                 `json:"start"`
-	End        string                 `json:"end"`
-	Candidate  researchdomain.Metrics `json:"candidate"`
-	Incumbent  researchdomain.Metrics `json:"incumbent"`
-	BuyAndHold researchdomain.Metrics `json:"buy_and_hold"`
+	Start      string           `json:"start"`
+	End        string           `json:"end"`
+	Candidate  PromotionMetrics `json:"candidate"`
+	Incumbent  PromotionMetrics `json:"incumbent"`
+	BuyAndHold PromotionMetrics `json:"buy_and_hold"`
 }
 
 type PaperPromotionReportView struct {
@@ -460,4 +488,18 @@ type StrategySelectionEvent struct {
 type StrategySelectionState struct {
 	CurrentEventID       string `json:"current_event_id"`
 	SelectedResultSHA256 string `json:"selected_result_sha256"`
+}
+
+type PromotionMetrics struct {
+	AfterCostReturn      string `json:"after_cost_return"`
+	MaxDrawdown          string `json:"max_drawdown"`
+	TradeCount           string `json:"trade_count"`
+	TradeCountDefinition string `json:"trade_count_definition"`
+	FillCount            string `json:"fill_count"`
+	Turnover             string `json:"turnover"`
+	Fees                 string `json:"fees"`
+	Taxes                string `json:"taxes"`
+	SlippageCost         string `json:"slippage_cost"`
+	PartialFillCount     string `json:"partial_fill_count"`
+	LookaheadViolations  string `json:"lookahead_violations"`
 }

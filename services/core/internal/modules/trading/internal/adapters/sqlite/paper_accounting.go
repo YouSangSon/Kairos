@@ -11,7 +11,7 @@ import (
 	"math/big"
 	"omni-folio/services/core/internal/modules/trading/contracts"
 	"omni-folio/services/core/internal/modules/trading/internal/application"
-	"omni-folio/services/core/internal/paperdomain"
+	paperdomain "omni-folio/services/core/internal/modules/trading/internal/domain/paper"
 	"strings"
 	"time"
 )
@@ -36,67 +36,10 @@ func (s *Store) OpenPaperAccountingSession(ctx context.Context, accountRef, resu
 }
 
 func (s *Store) openPaperAccountingSessionChecked(ctx context.Context, accountRef, resultSHA256, selectionEventID string, isolated bool) (*PaperAccountingSession, error) {
-	if s == nil || s.db == nil || !orderAlias(accountRef, "account") ||
-		!strategySHA256Pattern.MatchString(resultSHA256) || !safeOrderID(selectionEventID) {
-		return nil, errors.New("paper accounting session identity is invalid")
-	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, err
-	}
-	defer tx.Rollback()
-	if _, err := proveOrderRecovery(ctx, tx); err != nil {
-		return nil, fmt.Errorf("paper accounting order recovery: %w", err)
-	}
-	if _, err := replayStrategyRegistry(ctx, tx); err != nil {
-		return nil, fmt.Errorf("paper accounting strategy recovery: %w", err)
-	}
-	if isolated {
-		if err := requireIsolatedPaperAccount(ctx, tx, accountRef); err != nil {
-			return nil, err
-		}
-	}
-	existing, found, err := loadPaperAccountingSession(ctx, tx, accountRef)
-	if err != nil {
-		return nil, err
-	}
-	if found {
-		if existing.StrategyResultSHA256 != resultSHA256 || existing.StrategySelectionEventID != selectionEventID {
-			return nil, errors.New("paper accounting session is already bound to different initial evidence")
-		}
-		return existing, nil
-	}
-	policy, err := loadCurrentStrategyExecutionPolicy(ctx, tx, resultSHA256, selectionEventID)
-	if err != nil {
-		return nil, err
-	}
-	var priorPaperOrders int
-	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM order_idempotency WHERE mode='paper' AND account_ref=?`, accountRef).Scan(&priorPaperOrders); err != nil {
-		return nil, err
-	}
-	if priorPaperOrders != 0 {
-		return nil, errors.New("paper accounting session cannot follow a paper order")
-	}
-	session := PaperAccountingSession{
-		SchemaVersion: paperAccountingSessionSchema, AccountRef: accountRef,
-		StrategyResultSHA256: resultSHA256, StrategySelectionEventID: selectionEventID,
-		ExecutionPolicySHA256: policy.SHA256, ExecutionPolicyJSON: policy.CanonicalJSON,
-		StartingCash: policy.StartingCash, Currency: "KRW", RecordedAt: s.now().UTC().Format(time.RFC3339Nano),
-	}
-	session.SessionID = paperAccountingSessionID(session.AccountRef, session.StrategyResultSHA256, session.StrategySelectionEventID, session.ExecutionPolicySHA256)
-	if err := insertPaperAccountingSession(ctx, tx, session); err != nil {
-		return nil, err
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, err
-	}
-	return &session, nil
+	return s.business().OpenPaperAccountingSessionChecked(ctx, accountRef, resultSHA256, selectionEventID, isolated)
 }
 
-func paperAccountingSessionID(accountRef, resultSHA256, selectionEventID, policySHA256 string) string {
-	hash := sha256.Sum256([]byte(strings.Join([]string{accountRef, resultSHA256, selectionEventID, policySHA256}, "\x00")))
-	return "paper_accounting_session_" + hex.EncodeToString(hash[:16])
-}
+var paperAccountingSessionID = application.PaperAccountingSessionID
 
 func insertPaperAccountingSession(ctx context.Context, tx *transaction, session PaperAccountingSession) error {
 	if _, err := validatePaperAccountingSession(session); err != nil {

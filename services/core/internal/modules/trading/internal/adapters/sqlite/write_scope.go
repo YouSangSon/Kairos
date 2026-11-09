@@ -50,10 +50,6 @@ func (j *writeScope) ReplayPaperProjectionFrom(ctx context.Context, accountRef, 
 	return replayPaperProjectionFrom(ctx, j.tx, accountRef, symbol)
 }
 
-func (j *writeScope) RecordOrderIntentTx(ctx context.Context, intent OrderIntent) (*OrderState, error) {
-	return j.store.recordOrderIntentTx(ctx, j.tx, intent)
-}
-
 func (j *writeScope) LoadPaperExecutionAuthorizationByOrder(ctx context.Context, orderID string) (application.PaperAuthorization, bool, error) {
 	return loadPaperExecutionAuthorizationByOrder(ctx, j.tx, orderID)
 }

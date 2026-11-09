@@ -5,7 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
-	"omni-folio/services/core/internal/researchdomain"
+	researchdomain "omni-folio/services/core/internal/modules/trading/internal/domain/research"
 	"reflect"
 	"time"
 )
