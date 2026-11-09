@@ -31,9 +31,10 @@ func Canonical(table string) (string, bool) {
 		table = "events"
 	case "order_idempotency_v7":
 		table = "order_idempotency"
-	}
-	if len(table) > 4 && table[len(table)-4:] == "_new" {
-		table = table[:len(table)-4]
+	case "execution_authority_events_new":
+		table = "execution_authority_events"
+	case "strategy_selection_events_new":
+		table = "strategy_selection_events"
 	}
 	_, ok := owners[table]
 	return table, ok
