@@ -30,7 +30,14 @@ type Strategies interface {
 	RollbackPaperCandidate(ctx context.Context, expectedCurrentEventID, sourceEventID string) (*StrategySelectionState, error)
 }
 
+type LocalPaperRun interface {
+	AcceptBundle(context.Context, []byte) (*LocalPaperStepResult, error)
+	Heartbeat(context.Context) error
+	Close() error
+}
+
 type Paper interface {
+	BeginLocalPaperRun(account, selection string) LocalPaperRun
 	OpenPaperAccountingSession(ctx context.Context, accountRef, resultSHA256, selectionEventID string) (*PaperAccountingSession, error)
 	EvaluatePaperOperations(ctx context.Context, accountRef, resultSHA256, selectionEventID string) (*PaperEvaluationEvent, error)
 	ImportPaperSnapshot(ctx context.Context, raw []byte) (*PaperSnapshotImport, error)

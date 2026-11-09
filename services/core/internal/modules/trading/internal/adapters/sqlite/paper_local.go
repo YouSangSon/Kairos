@@ -14,7 +14,7 @@ type LocalPaperStepResult = contracts.LocalPaperStepResult
 
 func (s *Store) ExecuteLocalPaper(ctx context.Context, account, selection string, proposalRaw, barsRaw, researchRaw []byte) (result *LocalPaperStepResult, resultErr error) {
 	run := &localPaperRun{service: s, account: account, selection: selection}
-	defer func() { resultErr = errors.Join(resultErr, ctx.Err(), run.close()) }()
+	defer func() { resultErr = errors.Join(resultErr, ctx.Err(), run.Close()) }()
 	return run.step(ctx, proposalRaw, barsRaw, researchRaw)
 }
 
@@ -25,7 +25,7 @@ type localPaperRun struct {
 	lease              *ExecutionAuthorityState
 }
 
-func (r *localPaperRun) close() error {
+func (r *localPaperRun) Close() error {
 	var err error
 	if r.lease != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), paperRunnerLoopReleaseTimeout)
@@ -40,7 +40,7 @@ func (r *localPaperRun) close() error {
 	return err
 }
 
-func (r *localPaperRun) refresh(ctx context.Context) error {
+func (r *localPaperRun) Heartbeat(ctx context.Context) error {
 	if r.lease == nil {
 		return nil
 	}
@@ -78,7 +78,7 @@ func (r *localPaperRun) step(ctx context.Context, proposalRaw, barsRaw, research
 		r.claim = claim
 	}
 	if r.lease != nil {
-		if err := r.refresh(ctx); err != nil {
+		if err := r.Heartbeat(ctx); err != nil {
 			return nil, err
 		}
 		if _, err := s.requireCurrentSyntheticExecutionLease(ctx, s.db, account, r.lease.FencingToken, s.now()); err != nil {
@@ -131,7 +131,7 @@ func (r *localPaperRun) step(ctx context.Context, proposalRaw, barsRaw, research
 	}
 	result := &LocalPaperStepResult{Mode: "paper_fixture_only", Snapshot: snapshot}
 	for _, asOf := range closes {
-		if err := r.refresh(ctx); err != nil {
+		if err := r.Heartbeat(ctx); err != nil {
 			return nil, err
 		}
 		// A committed valuation is a durable phase boundary. On restart,
@@ -151,7 +151,7 @@ func (r *localPaperRun) step(ctx context.Context, proposalRaw, barsRaw, research
 				// ponytail: full replay per fill/close grows with history;
 				// optimize only with measured, equivalent recovery proof.
 				for state.Status == "OPEN" || state.Status == "PARTIALLY_FILLED" {
-					if err := r.refresh(ctx); err != nil {
+					if err := r.Heartbeat(ctx); err != nil {
 						return nil, err
 					}
 					filled := state.FilledQuantity
@@ -165,7 +165,7 @@ func (r *localPaperRun) step(ctx context.Context, proposalRaw, barsRaw, research
 				}
 			}
 		}
-		if err := r.refresh(ctx); err != nil {
+		if err := r.Heartbeat(ctx); err != nil {
 			return nil, err
 		}
 		// Even a cached policy must pass the current-selection C3 guard.
@@ -177,7 +177,7 @@ func (r *localPaperRun) step(ctx context.Context, proposalRaw, barsRaw, research
 			return result, nil
 		}
 	}
-	if err := r.refresh(ctx); err != nil {
+	if err := r.Heartbeat(ctx); err != nil {
 		return nil, err
 	}
 	_, order, err := s.processPaperProposal(ctx, account, selection, proposalRaw, snapshot.SignalBarObservationID, r.lease.FencingToken, true, r.claim)
@@ -407,4 +407,15 @@ func requireIsolatedPaperAccount(ctx context.Context, q orderQuerier, account st
 		return errors.New("local paper requires an isolated paper account")
 	}
 	return nil
+}
+
+func (s *Store) BeginLocalPaperRun(account, selection string) contracts.LocalPaperRun {
+	return &localPaperRun{service: s, account: account, selection: selection}
+}
+func (r *localPaperRun) AcceptBundle(ctx context.Context, raw []byte) (*LocalPaperStepResult, error) {
+	proposal, bars, research, err := decodePaperInputBundle(raw)
+	if err != nil {
+		return nil, err
+	}
+	return r.step(ctx, proposal, bars, research)
 }
