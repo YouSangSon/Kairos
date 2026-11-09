@@ -10,6 +10,7 @@ type BackupQuery struct {
 	Archival bool
 }
 type Recovery interface {
+	VerifyStartup(context.Context, storage.ObservationRef) error
 	VerifyRecovery(context.Context) (*RecoverySnapshot, error)
 	MigrationFacts(context.Context, storage.ObservationRef, MigrationQuery) (*MigrationSnapshot, error)
 	VerifyBackup(context.Context, storage.ObservationRef, BackupQuery) (*RecoverySnapshot, error)

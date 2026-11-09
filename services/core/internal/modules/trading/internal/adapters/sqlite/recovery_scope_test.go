@@ -40,6 +40,9 @@ func TestScopedBackupRecoveryRejectsUnavailableAndWrongPurposeReferences(t *test
 	var saved storage.ObservationRef
 	if err := registry.VerifyBackup(ctx, func(ref storage.ObservationRef, _ time.Time) error {
 		saved = ref
+		if err := svc.VerifyStartup(ctx, ref); err != nil {
+			return err
+		}
 		actual, err := svc.VerifyBackup(ctx, ref, query)
 		if err != nil {
 			return err

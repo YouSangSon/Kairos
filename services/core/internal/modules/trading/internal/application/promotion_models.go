@@ -38,6 +38,6 @@ type PromotionDecision struct {
 }
 type Evidence struct {
 	contracts.StrategyEvidence
-	ArtifactJSON    string
-	ExecutionPolicy StrategyExecutionPolicy
+	ArtifactJSON    string                  `json:"-"`
+	ExecutionPolicy StrategyExecutionPolicy `json:"-"`
 }

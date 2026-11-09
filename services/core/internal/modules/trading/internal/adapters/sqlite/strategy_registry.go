@@ -8,14 +8,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
+	"omni-folio/services/core/internal/modules/trading/internal/adapters/files"
 
 	"omni-folio/services/core/internal/modules/trading/contracts"
 	"omni-folio/services/core/internal/modules/trading/internal/application"
-	"os"
+
 	"regexp"
-	"strings"
-	"syscall"
+
 	"time"
 )
 
@@ -57,34 +56,9 @@ func sameStrategyRegistryProof(left, right strategyRegistryRecoveryProof) bool {
 		left.SelectedResultSHA256 == right.SelectedResultSHA256 && left.CurrentEventID == right.CurrentEventID
 }
 
-func readStrategyArtifact(path string) ([]byte, error) {
-	return readBoundedRegularFile(path, maxBodyBytes)
-}
+var readStrategyArtifact = files.ReadStrategyArtifact
 
-func readBoundedRegularFile(path string, limit int64) ([]byte, error) {
-	// Open first without waiting for a FIFO writer, then validate the actual
-	// descriptor. A path-only Stat check would race a regular-file replacement.
-	file, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
-	if err != nil {
-		return nil, err
-	}
-	defer file.Close()
-	info, err := file.Stat()
-	if err != nil {
-		return nil, err
-	}
-	if !info.Mode().IsRegular() {
-		return nil, errors.New("strategy evidence path must be a regular file")
-	}
-	artifact, err := io.ReadAll(io.LimitReader(file, limit+1))
-	if err != nil {
-		return nil, err
-	}
-	if int64(len(artifact)) > limit {
-		return nil, errors.New("input exceeds the byte limit")
-	}
-	return artifact, nil
-}
+var readBoundedRegularFile = files.ReadBoundedRegularFile
 
 func (s *Store) registerStrategyEvidence(ctx context.Context, artifact []byte) (*StrategyEvidence, error) {
 	evidence, err := decodeStrategyArtifact(artifact)
@@ -333,7 +307,9 @@ func replayStrategyRegistry(ctx context.Context, q orderQuerier) (strategyRegist
 		FROM strategy_selection_events ORDER BY sequence`
 	}
 	if schemaVersion >= 27 {
-		selectionQuery = strings.Replace(selectionQuery, "paper_performance_policy_event_id,NULL,record_sha256", "paper_performance_policy_event_id,paper_promotion_attempt_id,record_sha256", 1)
+		selectionQuery = `SELECT sequence,event_id,event_type,candidate_result_sha256,expected_current_event_id,
+		 source_event_id,previous_selected_result_sha256,selected_result_sha256,reason_code,paper_evaluation_sequence,paper_performance_policy_event_id,paper_promotion_attempt_id,record_sha256,record_json,recorded_at
+		FROM strategy_selection_events ORDER BY sequence`
 	}
 	rows, err = q.QueryContext(ctx, selectionQuery)
 	if err != nil {

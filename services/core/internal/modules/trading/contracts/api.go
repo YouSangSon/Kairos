@@ -25,6 +25,8 @@ type Orders interface {
 }
 
 type Strategies interface {
+	StrategyStatus(context.Context) (*StrategySelectionState, error)
+	ResearchReport(context.Context) (*ResearchReportView, error)
 	RegisterEvidence(context.Context, []byte) (*StrategyEvidence, error)
 	SelectPaperCandidate(ctx context.Context, resultSHA256, expectedCurrentEventID string) (*StrategySelectionState, error)
 	RollbackPaperCandidate(ctx context.Context, expectedCurrentEventID, sourceEventID string) (*StrategySelectionState, error)
@@ -37,6 +39,7 @@ type LocalPaperRun interface {
 }
 
 type Paper interface {
+	InitializePaperAccount(context.Context, string, string, string) (*PaperAccountingSession, error)
 	BeginLocalPaperRun(account, selection string) LocalPaperRun
 	OpenPaperAccountingSession(ctx context.Context, accountRef, resultSHA256, selectionEventID string) (*PaperAccountingSession, error)
 	EvaluatePaperOperations(ctx context.Context, accountRef, resultSHA256, selectionEventID string) (*PaperEvaluationEvent, error)

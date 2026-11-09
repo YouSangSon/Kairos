@@ -11,8 +11,6 @@ import (
 	"fmt"
 	"omni-folio/services/core/internal/modules/trading/contracts"
 	"omni-folio/services/core/internal/researchdomain"
-
-	"time"
 )
 
 const paperPromotionClaimSchema = "paper-promotion-claim.v1"
@@ -72,101 +70,6 @@ func scorePaperPromotionClaim(ctx context.Context, q orderQuerier, claim paperPr
 		return paperPromotionComparison{}, err
 	}
 	return comparePaperPromotion(ctx, bars, candidate, incumbent, execution)
-}
-
-func capturePaperPromotionState(ctx context.Context, q orderQuerier, account string, now time.Time) (string, *PaperAccountingSession, string, strategyRegistryRecoveryProof, error) {
-	var empty strategyRegistryRecoveryProof
-	policyProof, err := provePaperPerformancePolicyRecovery(ctx, q)
-	if err != nil {
-		return "", nil, "", empty, err
-	}
-	if err := rejectLivePaperRunnerLease(ctx, q, now); err != nil {
-		return "", nil, "", empty, err
-	}
-	selection, err := replayStrategyRegistry(ctx, q)
-	if err != nil {
-		return "", nil, "", empty, err
-	}
-	if err := requireIsolatedPaperAccount(ctx, q, account); err != nil {
-		return "", nil, "", empty, err
-	}
-	var count int
-	if err := q.QueryRowContext(ctx, `SELECT COUNT(*) FROM paper_accounting_sessions`).Scan(&count); err != nil {
-		return "", nil, "", empty, err
-	}
-	if count != 1 {
-		return "", nil, "", empty, errors.New("paper promotion requires exactly one existing paper account session")
-	}
-	session, found, err := loadPaperAccountingSession(ctx, q, account)
-	if err != nil || !found {
-		return "", nil, "", empty, errors.New("paper promotion account session is missing")
-	}
-	if _, err := validatePaperAccountingSession(*session); err != nil {
-		return "", nil, "", empty, err
-	}
-	accounts, err := replayPaperAccountingWithoutRegistry(ctx, q, nil)
-	if err != nil {
-		return "", nil, "", empty, err
-	}
-	state := accounts[account]
-	for _, lots := range state.Lots {
-		if len(lots) != 0 {
-			return "", nil, "", empty, errors.New("paper promotion requires a flat paper account")
-		}
-	}
-	armed, err := armedExecutionAccounts(ctx, q)
-	if err != nil {
-		return "", nil, "", empty, err
-	}
-	if len(armed) != 0 {
-		return "", nil, "", empty, errors.New("paper promotion requires all execution authorities halted")
-	}
-	if err := rejectIncompletePaperRunForExpiredClaim(ctx, q, paperRunnerLeaseRecord{AccountRef: account, StrategySelectionEventID: selection.CurrentEventID}); err != nil {
-		return "", nil, "", empty, err
-	}
-	rows, err := q.QueryContext(ctx, `SELECT order_id FROM order_idempotency WHERE account_ref=?`, account)
-	if err != nil {
-		return "", nil, "", empty, err
-	}
-	var ids []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			rows.Close()
-			return "", nil, "", empty, err
-		}
-		ids = append(ids, id)
-	}
-	if err := closeRows(rows); err != nil {
-		return "", nil, "", empty, err
-	}
-	for _, id := range ids {
-		order, err := loadOrderStateFrom(ctx, q, id)
-		if err != nil {
-			return "", nil, "", empty, err
-		}
-		if order.PendingAction != "" || (order.Status != "FILLED" && order.Status != "CANCELED" && order.Status != "REJECTED" && order.Status != "RISK_REJECTED") {
-			return "", nil, "", empty, errors.New("paper promotion requires every account order terminal")
-		}
-	}
-	orderProof, err := proveOrderRecovery(ctx, q)
-	if err != nil {
-		return "", nil, "", empty, err
-	}
-	authoritySHA, _, err := proveExecutionAuthorityRecovery(ctx, q)
-	if err != nil {
-		return "", nil, "", empty, err
-	}
-	runner, err := provePaperRunnerLeaseRecovery(ctx, q)
-	if err != nil {
-		return "", nil, "", empty, err
-	}
-	var researchSequence int64
-	if err := q.QueryRowContext(ctx, `SELECT COALESCE(MAX(sequence),0) FROM strategy_research_evidence`).Scan(&researchSequence); err != nil {
-		return "", nil, "", empty, err
-	}
-	_, stateSHA, err := orderJSONHash([]any{selection.CurrentEventID, selection.SelectedResultSHA256, session, state, orderProof, authoritySHA, policyProof, runner, researchSequence})
-	return stateSHA, session, state.Cash, selection, err
 }
 
 func (s *Store) finishPaperPromotion(ctx context.Context, claim paperPromotionClaim, comparison paperPromotionComparison, scoreErr error, abort bool) (*PaperPromotionReceipt, error) {

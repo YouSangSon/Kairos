@@ -57,7 +57,7 @@ func (s *UseCases) claimPaperPromotionInScope(ctx context.Context, tx WriteScope
 		return nil, nil, errors.New("a paper comparison is pending; inspect or explicitly abort it first")
 	}
 	now := s.now().UTC()
-	stateSHA, session, cash, selection, err := tx.Promotions().CapturePromotionState(ctx, account, now)
+	stateSHA, session, cash, selection, err := CapturePromotionState(ctx, tx, account, now)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -158,7 +158,7 @@ func (s *UseCases) finishPaperPromotionInScope(ctx context.Context, tx WriteScop
 	default:
 		decision.Comparison = &comparison
 		decision.Decision, decision.Reason = comparison.Decision, comparison.Reason
-		stateSHA, _, _, selection, stateErr := tx.Promotions().CapturePromotionState(ctx, claim.AccountRef, now)
+		stateSHA, _, _, selection, stateErr := CapturePromotionState(ctx, tx, claim.AccountRef, now)
 		if stateErr != nil || stateSHA != claim.StateSHA256 || selection.CurrentEventID != claim.ExpectedCurrentEventID {
 			decision.Decision, decision.Reason = "STALE", "account_or_selection_changed"
 		}

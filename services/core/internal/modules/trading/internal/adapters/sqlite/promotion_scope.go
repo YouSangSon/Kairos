@@ -69,6 +69,44 @@ func (j *writeScope) InsertPromotionDecision(ctx context.Context, decision appli
 	_, err = j.tx.ExecContext(ctx, `INSERT INTO paper_promotion_decisions(attempt_id,selection_event_id,record_sha256,record_json,recorded_at) VALUES(?,?,?,?,?)`, decision.AttemptID, nullable(decision.SelectionEventID), sha, string(canonical), decision.RecordedAt)
 	return err
 }
-func (j *writeScope) CapturePromotionState(ctx context.Context, account string, now time.Time) (string, *PaperAccountingSession, string, application.StrategyRegistryProof, error) {
-	return capturePaperPromotionState(ctx, j.tx, account, now)
+
+func (j *writeScope) SessionCount(ctx context.Context) (int, error) {
+	var n int
+	err := j.tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM paper_accounting_sessions`).Scan(&n)
+	return n, err
+}
+func (j *writeScope) ReplayAccountsWithoutRegistry(ctx context.Context) (map[string]application.PaperAccountState, error) {
+	return replayPaperAccountingWithoutRegistry(ctx, j.tx, nil)
+}
+func (j *writeScope) RejectLiveLease(ctx context.Context, now time.Time) error {
+	return rejectLivePaperRunnerLease(ctx, j.tx, now)
+}
+func (j *writeScope) RejectIncompleteRun(ctx context.Context, account, selection string) error {
+	return rejectIncompletePaperRunForExpiredClaim(ctx, j.tx, paperRunnerLeaseRecord{AccountRef: account, StrategySelectionEventID: selection})
+}
+func (j *writeScope) ProveOrderRecovery(ctx context.Context) (contracts.OrderRecovery, error) {
+	p, e := proveOrderRecovery(ctx, j.tx)
+	return contracts.OrderRecovery(p), e
+}
+func (j *writeScope) ProveAuthorityRecovery(ctx context.Context) (string, int, error) {
+	return proveExecutionAuthorityRecovery(ctx, j.tx)
+}
+func (j *writeScope) AccountOrderIDs(ctx context.Context, account string) ([]string, error) {
+	rows, err := j.tx.QueryContext(ctx, `SELECT order_id FROM order_idempotency WHERE account_ref=?`, account)
+	if err != nil {
+		return nil, err
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	if err := closeRows(rows); err != nil {
+		return nil, err
+	}
+	return ids, nil
 }

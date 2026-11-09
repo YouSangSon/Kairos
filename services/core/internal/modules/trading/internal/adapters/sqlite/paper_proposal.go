@@ -3,8 +3,8 @@ package sqlite
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
+	"omni-folio/services/core/internal/modules/trading/internal/adapters/files"
+
 	"encoding/json"
 	"errors"
 	"omni-folio/services/core/internal/strategydomain"
@@ -175,82 +175,4 @@ func (s *Store) processPaperProposal(ctx context.Context, accountRef, selectionE
 	return event, state, nil
 }
 
-func decodePaperProposal(raw []byte) (map[string]any, error) {
-	invalid := errors.New("paper proposal contract is invalid")
-	if len(raw) == 0 || len(raw) > maxBodyBytes {
-		return nil, invalid
-	}
-	d := json.NewDecoder(bytes.NewReader(raw))
-	d.UseNumber()
-	start, err := d.Token()
-	if err != nil || start != json.Delim('{') {
-		return nil, invalid
-	}
-	p := make(map[string]any)
-	for d.More() {
-		key, err := d.Token()
-		if err != nil {
-			return nil, invalid
-		}
-		name, ok := key.(string)
-		if _, exists := p[name]; !ok || exists {
-			return nil, invalid
-		}
-		var value any
-		if err := d.Decode(&value); err != nil {
-			return nil, invalid
-		}
-		if _, ok := value.(string); !ok && !(name == "target_quantity" && value == nil) {
-			return nil, invalid
-		}
-		p[name] = value
-	}
-	if end, err := d.Token(); err != nil || end != json.Delim('}') {
-		return nil, invalid
-	}
-	if err := ensureJSONEOF(d); err != nil {
-		return nil, invalid
-	}
-	if !exactKeys(p, "schema_version", "mode", "strategy_result_sha256", "strategy_parameter_sha256", "input_sha256", "symbol", "data_as_of", "signal", "target_quantity", "proposal_sha256") ||
-		stringField(p, "schema_version") != "paper-signal-proposal.v1" || stringField(p, "mode") != "paper_proposal_only" || !kiwoomStockPattern.MatchString(stringField(p, "symbol")) {
-		return nil, invalid
-	}
-	for _, field := range []string{"strategy_result_sha256", "strategy_parameter_sha256", "input_sha256", "proposal_sha256"} {
-		if !strategySHA256Pattern.MatchString(stringField(p, field)) {
-			return nil, invalid
-		}
-	}
-	at := stringField(p, "data_as_of")
-	if parsed, err := time.Parse(time.RFC3339, at); err != nil || parsed.UTC().Format(time.RFC3339) != at {
-		return nil, invalid
-	}
-	target := stringField(p, "target_quantity")
-	switch stringField(p, "signal") {
-	case "golden_cross":
-		if len(target) > 64 || !orderIntegerPattern.MatchString(target) {
-			return nil, invalid
-		}
-	case "death_cross":
-		if target != "0" {
-			return nil, invalid
-		}
-	case "none":
-		if p["target_quantity"] != nil {
-			return nil, invalid
-		}
-	default:
-		return nil, invalid
-	}
-	claimed := stringField(p, "proposal_sha256")
-	delete(p, "proposal_sha256")
-	body, err := strategyCanonicalJSON(p)
-	if err != nil {
-		return nil, invalid
-	}
-	hash := sha256.Sum256(body)
-	if hex.EncodeToString(hash[:]) != claimed {
-		return nil, invalid
-	}
-	p["proposal_sha256"] = claimed
-	return p, nil
-}
+var decodePaperProposal = files.DecodePaperProposal

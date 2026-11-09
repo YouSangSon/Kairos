@@ -63,7 +63,8 @@ type PaperAuthorization struct {
 type StrategyExecutionPolicy struct {
 	StartingCash, Fee, Tax, SlippageBPS, MaxParticipation string
 	DelayBars                                             int64
-	SignalPrice, FillPrice, SHA256, CanonicalJSON         string
+	SignalPrice, FillPrice, SHA256                        string
+	CanonicalJSON                                         string `json:"-"`
 }
 
 type StrategyRegistryProof struct {
@@ -73,7 +74,7 @@ type StrategyRegistryProof struct {
 	Evaluations          int
 	SelectedResultSHA256 string
 	CurrentEventID       string
-	Stack                []string
+	Stack                []string `json:"-"`
 }
 
 type Projection = domain.Projection
@@ -81,7 +82,7 @@ type Projection = domain.Projection
 type AuthoritySnapshot struct {
 	contracts.ExecutionAuthorityState
 	EventID string
-	Count   int
+	Count   int `json:"-"`
 }
 
 type paperRunnerClaim = RunnerClaim

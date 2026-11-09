@@ -31,6 +31,7 @@ type WriteScope interface {
 }
 
 type OrdersJournal interface {
+	AccountOrderIDs(context.Context, string) ([]string, error)
 	LoadOrderIntentFrom(ctx context.Context, orderID string) (OrderIntent, error)
 	LoadOrderStateFrom(ctx context.Context, orderID string) (*OrderState, error)
 	RecordOrderIntentTx(ctx context.Context, intent OrderIntent) (*OrderState, error)
@@ -65,6 +66,8 @@ type SelectionsJournal interface {
 }
 
 type PaperJournal interface {
+	SessionCount(context.Context) (int, error)
+	ReplayAccountsWithoutRegistry(context.Context) (map[string]PaperAccountState, error)
 	RecordPaperSignalEventTx(ctx context.Context, accountRef string, signal PaperSignal) (*PaperSignalEvent, error)
 	PaperOrderBySignalFrom(ctx context.Context, accountRef, signalID string) (string, bool, error)
 	ValidateCapitalizedPaperOrderBindings(ctx context.Context, intent OrderIntent) (*PaperAccountingSession, *PaperSignalEvent, error)
@@ -93,10 +96,11 @@ type PromotionsJournal interface {
 	ValidatePromotionClaim(context.Context, PromotionClaim, int64) error
 	InsertPromotionClaim(context.Context, PromotionClaim) error
 	InsertPromotionDecision(context.Context, PromotionDecision) error
-	CapturePromotionState(context.Context, string, time.Time) (string, *PaperAccountingSession, string, StrategyRegistryProof, error)
 }
 
 type RunnerJournal interface {
+	RejectLiveLease(context.Context, time.Time) error
+	RejectIncompleteRun(context.Context, string, string) error
 	ValidatePaperRunnerLeaseTx(ctx context.Context, claim *RunnerClaim, accountRef, ownerID string, now time.Time) error
 	RenewPaperRunnerLeaseTx(ctx context.Context, claim *RunnerClaim, ownerID string, now time.Time) (*RunnerClaim, error)
 	RenewPaperRunnerLeaseAfterPolicyRollbackTx(ctx context.Context, claim *RunnerClaim, policyEventID, rollbackEventID, ownerID string, now time.Time) (*RunnerClaim, error)
@@ -112,6 +116,8 @@ type PolicyJournal interface {
 }
 
 type RecoveryJournal interface {
+	ProveOrderRecovery(context.Context) (contracts.OrderRecovery, error)
+	ProveAuthorityRecovery(context.Context) (string, int, error)
 	RequireSchema(context.Context) error
 	ProvePaperPromotionRecovery(context.Context) (contracts.PromotionRecovery, error)
 	ProvePaperAccountingRecovery(ctx context.Context) (PaperAccountingRecoveryProof, error)

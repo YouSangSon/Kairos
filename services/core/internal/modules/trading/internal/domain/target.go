@@ -6,8 +6,8 @@ import (
 )
 
 type Projection struct {
-	Quantity *big.Int
-	Active   bool
+	Quantity *big.Int `json:"-"`
+	Active   bool     `json:"-"`
 }
 
 type TargetChange struct {

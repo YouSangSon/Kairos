@@ -168,3 +168,24 @@ func (q observedQueries) QueryContext(ctx context.Context, query string, args ..
 func (q observedQueries) QueryRowContext(ctx context.Context, query string, args ...any) rowScanner {
 	return q.handle.QueryOne(ctx, query, args...)
 }
+
+func (s *Store) VerifyStartup(ctx context.Context, ref storage.ObservationRef) error {
+	if s.backupReader == nil {
+		return observation.ErrReference
+	}
+	handle, err := s.backupReader.Resolve(ref)
+	if err != nil {
+		return err
+	}
+	q := observedQueries{handle}
+	if _, err := provePaperPerformancePolicyRecovery(ctx, q); err != nil {
+		return fmt.Errorf("paper performance policy startup recovery: %w", err)
+	}
+	if _, err := provePaperRunnerLeaseRecovery(ctx, q); err != nil {
+		return fmt.Errorf("paper runner lease startup recovery: %w", err)
+	}
+	if _, err := provePaperPromotionRecovery(ctx, q); err != nil {
+		return fmt.Errorf("paper promotion startup recovery: %w", err)
+	}
+	return nil
+}
