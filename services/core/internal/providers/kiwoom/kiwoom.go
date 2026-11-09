@@ -11,6 +11,7 @@ import (
 	"io"
 	"math/big"
 	"net/http"
+	ledger "omni-folio/services/core/internal/modules/ledger/contracts"
 	"regexp"
 	"sort"
 	"strings"
@@ -20,7 +21,7 @@ import (
 	"unicode/utf8"
 )
 
-type KiwoomEnvironment string
+type KiwoomEnvironment = ledger.BrokerEnvironment
 
 const (
 	KiwoomProduction KiwoomEnvironment = "production"
@@ -39,7 +40,7 @@ const (
 	kiwoomMaxPages = 32
 )
 
-type KiwoomExchange string
+type KiwoomExchange = ledger.BrokerExchange
 
 const (
 	KiwoomKRX KiwoomExchange = "KRX"
@@ -105,57 +106,13 @@ func NewClient(environment KiwoomEnvironment, appKey, secretKey string, aliasKey
 	}, nil
 }
 
-type KiwoomTotals struct {
-	PurchaseAmount      string `json:"purchase_amount"`
-	EvaluationAmount    string `json:"evaluation_amount"`
-	UnrealizedPnL       string `json:"unrealized_pnl"`
-	ReturnRatePercent   string `json:"return_rate_percent"`
-	EstimatedAssets     string `json:"estimated_assets"`
-	LoanAmount          string `json:"loan_amount"`
-	CreditLoanAmount    string `json:"credit_loan_amount"`
-	CreditLendingAmount string `json:"credit_lending_amount"`
-}
+type KiwoomTotals = ledger.BrokerTotals
 
-type KiwoomPosition struct {
-	Symbol               string `json:"symbol"`
-	Name                 string `json:"name"`
-	Quantity             string `json:"quantity"`
-	TradableQuantity     string `json:"tradable_quantity"`
-	AveragePurchasePrice string `json:"average_purchase_price"`
-	CurrentPrice         string `json:"current_price"`
-	PurchaseAmount       string `json:"purchase_amount"`
-	EvaluationAmount     string `json:"evaluation_amount"`
-	UnrealizedPnL        string `json:"unrealized_pnl"`
-	ReturnRatePercent    string `json:"return_rate_percent"`
-	WeightPercent        string `json:"weight_percent"`
-}
+type KiwoomPosition = ledger.BrokerPosition
 
-type KiwoomOpenOrder struct {
-	OrderRef          string `json:"order_ref"`
-	Symbol            string `json:"symbol"`
-	Name              string `json:"name"`
-	Status            string `json:"status"`
-	Side              string `json:"side"`
-	Quantity          string `json:"quantity"`
-	Price             string `json:"price"`
-	RemainingQuantity string `json:"remaining_quantity"`
-	Time              string `json:"time"`
-	Exchange          string `json:"exchange"`
-}
+type KiwoomOpenOrder = ledger.BrokerOpenOrder
 
-type KiwoomSnapshot struct {
-	Source        string            `json:"source"`
-	Environment   KiwoomEnvironment `json:"environment"`
-	Exchange      KiwoomExchange    `json:"exchange"`
-	AccountRef    string            `json:"account_ref"`
-	MaskedAccount string            `json:"masked_account"`
-	FetchedAt     string            `json:"fetched_at"`
-	Complete      bool              `json:"complete"`
-	Currency      string            `json:"currency"`
-	Totals        KiwoomTotals      `json:"totals"`
-	Positions     []KiwoomPosition  `json:"positions"`
-	OpenOrders    []KiwoomOpenOrder `json:"open_orders"`
-}
+type KiwoomSnapshot = ledger.BrokerSnapshot
 
 func (c *Client) Snapshot(ctx context.Context, exchange KiwoomExchange) (*KiwoomSnapshot, error) {
 	if c == nil {
