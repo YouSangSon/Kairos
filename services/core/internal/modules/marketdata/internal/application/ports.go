@@ -36,7 +36,7 @@ type BenchmarkRecord struct {
 	DataSHA256, RecordedAt string
 }
 
-type Scope interface {
+type Reader interface {
 	Schema(context.Context) error
 	FXBySource(context.Context, string, string) (*c.FXObservation, error)
 	PriceBySource(context.Context, string, string) (*c.SecurityPriceObservation, error)
@@ -50,20 +50,24 @@ type Scope interface {
 	Benchmark(context.Context, string, string) (*BenchmarkRecord, SeriesProof, error)
 	LatestBenchmark(context.Context, string) (*c.BenchmarkSeriesInput, error)
 	LastRecorded(context.Context, string) (string, error)
-	InsertFX(context.Context, c.FXObservation, string) error
-	InsertPrice(context.Context, c.SecurityPriceObservation, string) error
-	InsertListing(context.Context, c.InstrumentListingEvent, string) error
-	InsertOwnerFX(context.Context, OwnerFXRecord, []byte, string) error
-	InsertOwnerPrice(context.Context, OwnerPriceRecord, []byte, string) error
-	InsertBenchmark(context.Context, BenchmarkRecord, []byte, string) error
+}
+
+type Scope interface {
+	Reader
+	InsertFX(context.Context, c.FXObservation) error
+	InsertPrice(context.Context, c.SecurityPriceObservation) error
+	InsertListing(context.Context, c.InstrumentListingEvent) error
+	InsertOwnerFX(context.Context, OwnerFXRecord, []byte) error
+	InsertOwnerPrice(context.Context, OwnerPriceRecord, []byte) error
+	InsertBenchmark(context.Context, BenchmarkRecord, []byte) error
 }
 
 type Repository interface {
 	Write(context.Context, func(Scope) error) error
-	Read(context.Context, func(Scope) error) error
+	Read(context.Context, func(Reader) error) error
 	ReadInputs(context.Context, storage.ObservationRef, map[string]struct{}, c.ValuationQuery) (c.ValuationInputs, error)
 	HasOwnerPrices(context.Context, storage.ObservationRef) (bool, error)
-	Verify(context.Context, storage.ObservationRef, map[string]struct{}) (c.RecoveryProof, error)
+	Verify(context.Context, storage.ObservationRef, map[string]struct{}, c.BackupQuery) (c.RecoveryProof, error)
 }
 
 type Decoder interface {
@@ -91,15 +95,21 @@ func New(store Repository, decode Decoder, ledger Ledger, now func() time.Time, 
 	return &Service{store, decode, ledger, now, id}
 }
 
+type ScopedPriceScope interface {
+	Schema(context.Context) error
+	PriceObservations(context.Context) ([]c.SecurityPriceObservation, ObservationProof, error)
+	OwnerPrice(context.Context, map[string]struct{}, string, string, string) (*OwnerPriceRecord, SeriesProof, error)
+	LastRecorded(context.Context, string) (string, error)
+	InsertOwnerPrice(context.Context, OwnerPriceRecord, []byte) error
+}
 type ScopedStore interface {
-	ScopedImport(context.Context, storage.ObservationRef, func(Scope) error) error
+	ScopedImport(context.Context, storage.ObservationRef, func(ScopedPriceScope) error) error
 }
 type ScopedImporter struct {
-	store  ScopedStore
-	decode Decoder
-	now    func() time.Time
+	store ScopedStore
+	now   func() time.Time
 }
 
-func NewScopedImporter(store ScopedStore, decode Decoder, now func() time.Time) *ScopedImporter {
-	return &ScopedImporter{store, decode, now}
+func NewScopedImporter(store ScopedStore, now func() time.Time) *ScopedImporter {
+	return &ScopedImporter{store, now}
 }

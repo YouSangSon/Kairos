@@ -76,7 +76,7 @@ func TestOwnerPriceAtomicPublicModulePreservesRetryAndProof(t *testing.T) {
 	if _, issue := l.ApplyImport(ctx, lc.ApplyRequest{PreviewID: preview.PreviewID, IdempotencyKey: "seed"}); issue != nil {
 		t.Fatal(issue)
 	}
-	api := market.ComposeOwnerPrice(&observations.OwnerPrice{Registry: registry, Ledger: l, Scoped: m.ScopedPrice})
+	api := market.ComposeOwnerPrice(&observations.OwnerPrice{Registry: registry, Ledger: l, Scoped: m.ScopedPrice}, l.CanonicalInstrumentID)
 	first, err := api.ImportOwnerPrice(ctx, []byte(priceInput))
 	if err != nil {
 		t.Fatal(err)
@@ -131,5 +131,43 @@ func TestMarketProofRejectsForeignAndExpiredObservation(t *testing.T) {
 		return nil
 	}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestBackupProofKeepsLegacyMarketAreasAbsent(t *testing.T) {
+	m, _, db, registry := marketFixture(t)
+	if _, err := db.Exec(`DROP TABLE owner_price_series_versions; DROP TABLE owner_fx_series_versions; DROP TABLE benchmark_series_versions; DELETE FROM schema_migrations WHERE version>17`); err != nil {
+		t.Fatal(err)
+	}
+	err := registry.VerifyBackup(context.Background(), func(ref storage.ObservationRef, _ time.Time) error {
+		proof, err := m.Recovery.VerifyBackup(context.Background(), ref, c.BackupQuery{Schema: 17})
+		if err != nil {
+			return err
+		}
+		if proof.FXSHA256 == "" || proof.PricesSHA256 == "" || proof.ListingsSHA256 == "" || proof.OwnerPriceSHA256 != "" || proof.BenchmarkSHA256 != "" {
+			t.Fatalf("legacy proof changed %+v", proof)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestOwnerPriceDecodePrecedesCorruptLedgerProof(t *testing.T) {
+	m, l, db, registry := marketFixture(t)
+	if _, err := db.Exec(`UPDATE ledger_meta SET revision=7 WHERE singleton=1`); err != nil {
+		t.Fatal(err)
+	}
+	api := market.ComposeOwnerPrice(&observations.OwnerPrice{Registry: registry, Ledger: l, Scoped: m.ScopedPrice}, l.CanonicalInstrumentID)
+	if _, err := api.ImportOwnerPrice(context.Background(), []byte(`{"invalid":true}`)); !errors.Is(err, c.ErrOwnerPriceInput) {
+		t.Fatalf("decode error lost precedence: %v", err)
+	}
+	if _, err := api.ImportOwnerPrice(context.Background(), []byte(priceInput)); err == nil {
+		t.Fatal("corrupt ledger admitted price")
+	}
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM owner_price_series_versions`).Scan(&count); err != nil || count != 0 {
+		t.Fatalf("failed proof persisted price: %d %v", count, err)
 	}
 }

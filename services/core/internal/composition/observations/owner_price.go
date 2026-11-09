@@ -21,7 +21,7 @@ type OwnerPrice struct {
 
 type ownerPriceContextKey struct{}
 
-func (c *OwnerPrice) ImportOwnerPrice(ctx context.Context, raw []byte) (*market.OwnerPriceSeriesReceipt, error) {
+func (c *OwnerPrice) ImportOwnerPriceAtomic(ctx context.Context, command market.OwnerPriceCommand) (*market.OwnerPriceSeriesReceipt, error) {
 	if ctx.Value(ownerPriceContextKey{}) != nil {
 		return nil, errors.New("owner price import cannot reenter its atomic coordinator")
 	}
@@ -36,7 +36,7 @@ func (c *OwnerPrice) ImportOwnerPrice(ctx context.Context, raw []byte) (*market.
 		for _, value := range admitted.Identities {
 			identities.Identities[value.InstrumentID+"\x00"+value.Currency] = struct{}{}
 		}
-		result, err = c.Scoped.ImportOwnerPriceScoped(ctx, ref, raw, identities)
+		result, err = c.Scoped.ImportOwnerPriceScoped(ctx, ref, command, identities)
 		return err
 	})
 	if err != nil {

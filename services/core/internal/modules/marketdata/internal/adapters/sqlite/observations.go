@@ -72,42 +72,54 @@ func (s *Store) ReadInputs(ctx context.Context, ref storage.ObservationRef, admi
 	return result, nil
 }
 
-func (s *Store) Verify(ctx context.Context, ref storage.ObservationRef, admitted map[string]struct{}) (c.RecoveryProof, error) {
+func (s *Store) Verify(ctx context.Context, ref storage.ObservationRef, admitted map[string]struct{}, query c.BackupQuery) (c.RecoveryProof, error) {
 	var result c.RecoveryProof
 	handle, err := s.reader.Resolve(ref)
 	if err != nil {
 		return result, err
 	}
 	q := scopedReader{handle, s.canonical}
-	fx, err := proveFXObservationRecovery(ctx, q)
-	if err != nil {
-		return result, err
+	if query.Schema >= 10 {
+		proof, err := proveFXObservationRecovery(ctx, q)
+		if err != nil {
+			return result, err
+		}
+		result.FXSHA256, result.FXObservations = proof.SHA256, proof.Observations
 	}
-	price, err := proveSecurityPriceObservationRecovery(ctx, q)
-	if err != nil {
-		return result, err
+	if query.Schema >= 11 {
+		proof, err := proveSecurityPriceObservationRecovery(ctx, q)
+		if err != nil {
+			return result, err
+		}
+		result.PricesSHA256, result.PriceObservations = proof.SHA256, proof.Observations
 	}
-	listing, err := proveInstrumentListingRecovery(ctx, q)
-	if err != nil {
-		return result, err
+	if query.Schema >= 13 {
+		proof, err := proveInstrumentListingRecovery(ctx, q)
+		if err != nil {
+			return result, err
+		}
+		result.ListingsSHA256, result.ListingEvents, result.ActiveListings = proof.SHA256, proof.Events, proof.Active
 	}
-	benchmark, err := proveBenchmarkSeriesRecovery(ctx, q)
-	if err != nil {
-		return result, err
+	if query.Schema >= 23 {
+		proof, err := proveBenchmarkSeriesRecovery(ctx, q)
+		if err != nil {
+			return result, err
+		}
+		result.BenchmarkSHA256, result.BenchmarkVersions, result.BenchmarkPoints = proof.SHA256, proof.Versions, proof.Points
 	}
-	ownerFX, err := proveOwnerFXSeriesRecovery(ctx, q)
-	if err != nil {
-		return result, err
+	if query.Schema >= 24 {
+		proof, err := proveOwnerFXSeriesRecovery(ctx, q)
+		if err != nil {
+			return result, err
+		}
+		result.OwnerFXSHA256, result.OwnerFXVersions, result.OwnerFXPoints = proof.SHA256, proof.Versions, proof.Points
 	}
-	ownerPrice, err := proveOwnerPriceSeriesRecovery(ctx, q, admitted)
-	if err != nil {
-		return result, err
+	if query.Schema >= 25 {
+		proof, err := proveOwnerPriceSeriesRecovery(ctx, q, admitted)
+		if err != nil {
+			return result, err
+		}
+		result.OwnerPriceSHA256, result.OwnerPriceVersions, result.OwnerPricePoints = proof.SHA256, proof.Versions, proof.Points
 	}
-	result.FXSHA256, result.FXObservations = fx.SHA256, fx.Observations
-	result.PricesSHA256, result.PriceObservations = price.SHA256, price.Observations
-	result.ListingsSHA256, result.ListingEvents, result.ActiveListings = listing.SHA256, listing.Events, listing.Active
-	result.BenchmarkSHA256, result.BenchmarkVersions, result.BenchmarkPoints = benchmark.SHA256, benchmark.Versions, benchmark.Points
-	result.OwnerFXSHA256, result.OwnerFXVersions, result.OwnerFXPoints = ownerFX.SHA256, ownerFX.Versions, ownerFX.Points
-	result.OwnerPriceSHA256, result.OwnerPriceVersions, result.OwnerPricePoints = ownerPrice.SHA256, ownerPrice.Versions, ownerPrice.Points
 	return result, nil
 }

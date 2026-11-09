@@ -1,7 +1,6 @@
 package marketdata
 
 import (
-	"context"
 	"database/sql"
 	"errors"
 	"time"
@@ -9,9 +8,9 @@ import (
 	ledger "omni-folio/services/core/internal/modules/ledger/contracts"
 	c "omni-folio/services/core/internal/modules/marketdata/contracts"
 	"omni-folio/services/core/internal/modules/marketdata/internal/adapters/codec"
+	identity "omni-folio/services/core/internal/modules/marketdata/internal/adapters/ledger"
 	"omni-folio/services/core/internal/modules/marketdata/internal/adapters/sqlite"
 	"omni-folio/services/core/internal/modules/marketdata/internal/application"
-	storage "omni-folio/services/core/internal/storage/contracts"
 	"omni-folio/services/core/internal/storage/observation"
 )
 
@@ -45,25 +44,11 @@ func Compose(config Config) (Module, error) {
 	}
 	store := sqlite.New(config.DB, reader, writer, config.Ledger.CanonicalInstrumentID)
 	decoder := codec.New(config.Ledger.CanonicalInstrumentID)
-	service := application.New(store, decoder, ledgerAdapter{config.Ledger}, config.Now, config.ID)
-	scoped := application.NewScopedImporter(store, decoder, config.Now)
+	service := application.New(store, decoder, identity.New(config.Ledger), config.Now, config.ID)
+	scoped := application.NewScopedImporter(store, config.Now)
 	return Module{Queries: service, Imports: service, Observations: service, ScopedPrice: scoped, Recovery: service}, nil
 }
 
-func ComposeOwnerPrice(atomic c.AtomicOwnerPriceImport) c.AtomicOwnerPriceImport {
-	return application.NewOwnerPriceImporter(atomic)
-}
-
-type ledgerAdapter struct{ ledger.Queries }
-
-func (a ledgerAdapter) AdmittedPriceIdentities(ctx context.Context, ref storage.ObservationRef) (c.PriceIdentities, error) {
-	values, err := a.Queries.AdmittedPriceIdentities(ctx, ref)
-	if err != nil {
-		return c.PriceIdentities{}, err
-	}
-	result := c.PriceIdentities{LedgerRevision: values.LedgerRevision, Identities: make(map[string]struct{}, len(values.Identities))}
-	for _, value := range values.Identities {
-		result.Identities[value.InstrumentID+"\x00"+value.Currency] = struct{}{}
-	}
-	return result, nil
+func ComposeOwnerPrice(atomic c.AtomicOwnerPriceImport, canonical func(string) string) c.OwnerPriceImports {
+	return application.NewOwnerPriceImporter(atomic, codec.New(canonical))
 }

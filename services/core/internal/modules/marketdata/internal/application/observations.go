@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"omni-folio/services/core/internal/codec"
 	c "omni-folio/services/core/internal/modules/marketdata/contracts"
+	"omni-folio/services/core/internal/modules/marketdata/internal/domain"
 	storage "omni-folio/services/core/internal/storage/contracts"
 )
 
@@ -20,12 +20,15 @@ func (s *Service) ReadValuationInputs(ctx context.Context, ref storage.Observati
 	return s.store.ReadInputs(ctx, ref, admitted, query)
 }
 
-func (s *Service) VerifyBackup(ctx context.Context, ref storage.ObservationRef) (c.RecoveryProof, error) {
-	admitted, err := s.admitted(ctx, ref, true)
+func (s *Service) VerifyBackup(ctx context.Context, ref storage.ObservationRef, query c.BackupQuery) (c.RecoveryProof, error) {
+	if query.Schema == 0 {
+		query.Schema = 27
+	}
+	admitted, err := s.admitted(ctx, ref, query.Schema >= 25)
 	if err != nil {
 		return c.RecoveryProof{}, err
 	}
-	return s.store.Verify(ctx, ref, admitted)
+	return s.store.Verify(ctx, ref, admitted, query)
 }
 
 func (s *Service) admitted(ctx context.Context, ref storage.ObservationRef, prices bool) (map[string]struct{}, error) {
@@ -58,14 +61,10 @@ func (s *Service) RecordFX(ctx context.Context, input c.FXObservationInput) (*c.
 			return err
 		}
 		value := c.FXObservation{ObservationID: s.id("fx_observation"), Source: input.Source, SourceObservationID: input.SourceObservationID, BaseCurrency: input.BaseCurrency, QuoteCurrency: input.QuoteCurrency, Rate: input.Rate, ObservedAt: input.ObservedAt, FetchedAt: input.FetchedAt, RecordedAt: s.now().UTC().Format(time.RFC3339Nano)}
-		if !codec.SafeID(value.ObservationID) || !codec.CanonicalUTC(value.RecordedAt) {
+		if !domain.SafeID(value.ObservationID) || !domain.CanonicalUTC(value.RecordedAt) {
 			return errors.New("FX observation durable metadata is invalid")
 		}
-		_, hash, err := codec.JSONHash(value)
-		if err != nil {
-			return err
-		}
-		if err := scope.InsertFX(ctx, value, hash); err != nil {
+		if err := scope.InsertFX(ctx, value); err != nil {
 			return fmt.Errorf("store FX observation: %w", err)
 		}
 		result = &value
@@ -105,7 +104,7 @@ func (s *Service) RecordPrice(ctx context.Context, input c.SecurityPriceObservat
 			}
 		}
 		value := c.SecurityPriceObservation{ObservationID: s.id("security_price_observation"), Source: input.Source, SourceObservationID: input.SourceObservationID, InstrumentID: input.InstrumentID, Symbol: input.Symbol, Venue: input.Venue, Currency: input.Currency, Price: input.Price, PriceAdjustment: input.PriceAdjustment, ObservedAt: input.ObservedAt, FetchedAt: input.FetchedAt, RecordedAt: s.now().UTC().Format(time.RFC3339Nano)}
-		if !codec.SafeID(value.ObservationID) || !codec.CanonicalUTC(value.RecordedAt) {
+		if !domain.SafeID(value.ObservationID) || !domain.CanonicalUTC(value.RecordedAt) {
 			return errors.New("security price observation durable metadata is invalid")
 		}
 		fetched, _ := time.Parse(time.RFC3339Nano, value.FetchedAt)
@@ -113,11 +112,7 @@ func (s *Service) RecordPrice(ctx context.Context, input c.SecurityPriceObservat
 		if recorded.Before(fetched) {
 			return errors.New("security price observation recorded_at precedes fetched_at")
 		}
-		_, hash, err := codec.JSONHash(value)
-		if err != nil {
-			return err
-		}
-		if err := scope.InsertPrice(ctx, value, hash); err != nil {
+		if err := scope.InsertPrice(ctx, value); err != nil {
 			return fmt.Errorf("store security price observation: %w", err)
 		}
 		result = &value
@@ -131,7 +126,7 @@ func (s *Service) RecordPrice(ctx context.Context, input c.SecurityPriceObservat
 
 func (s *Service) ResolveListing(ctx context.Context, venue, symbol, currency string) (*c.InstrumentListingEvent, error) {
 	var result *c.InstrumentListingEvent
-	err := s.store.Read(ctx, func(scope Scope) error {
+	err := s.store.Read(ctx, func(scope Reader) error {
 		var err error
 		result, err = scope.ResolveListing(ctx, venue, symbol, currency)
 		return err
@@ -175,14 +170,10 @@ func (s *Service) recordListing(ctx context.Context, eventType string, input c.I
 			return err
 		}
 		value := c.InstrumentListingEvent{EventID: s.id("instrument_listing"), EventType: eventType, Authority: "owner_declared", InstrumentID: input.InstrumentID, Venue: input.Venue, Symbol: input.Symbol, Currency: input.Currency, ExpectedPreviousEventID: previous, RecordedAt: s.now().UTC().Format(time.RFC3339Nano)}
-		if !codec.SafeID(value.EventID) || !codec.CanonicalUTC(value.RecordedAt) {
+		if !domain.SafeID(value.EventID) || !domain.CanonicalUTC(value.RecordedAt) {
 			return errors.New("instrument listing durable metadata is invalid")
 		}
-		_, hash, err := codec.JSONHash(value)
-		if err != nil {
-			return err
-		}
-		if err := scope.InsertListing(ctx, value, hash); err != nil {
+		if err := scope.InsertListing(ctx, value); err != nil {
 			return fmt.Errorf("store instrument listing event: %w", err)
 		}
 		result = &value

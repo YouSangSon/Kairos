@@ -34,11 +34,21 @@ type PriceIdentities struct {
 }
 
 type ScopedOwnerPriceImport interface {
-	ImportOwnerPriceScoped(context.Context, storage.ObservationRef, []byte, PriceIdentities) (*OwnerPriceSeriesReceipt, error)
+	ImportOwnerPriceScoped(context.Context, storage.ObservationRef, OwnerPriceCommand, PriceIdentities) (*OwnerPriceSeriesReceipt, error)
+}
+
+type OwnerPriceCommand struct {
+	Input      OwnerPriceSeriesInput
+	Canonical  []byte
+	DataSHA256 string
+}
+
+type OwnerPriceImports interface {
+	ImportOwnerPrice(context.Context, []byte) (*OwnerPriceSeriesReceipt, error)
 }
 
 type AtomicOwnerPriceImport interface {
-	ImportOwnerPrice(context.Context, []byte) (*OwnerPriceSeriesReceipt, error)
+	ImportOwnerPriceAtomic(context.Context, OwnerPriceCommand) (*OwnerPriceSeriesReceipt, error)
 }
 
 type Imports interface {
@@ -74,6 +84,8 @@ type RecoveryProof struct {
 	OwnerPricePoints   int
 }
 
+type BackupQuery struct{ Schema int }
+
 type Recovery interface {
-	VerifyBackup(context.Context, storage.ObservationRef) (RecoveryProof, error)
+	VerifyBackup(context.Context, storage.ObservationRef, BackupQuery) (RecoveryProof, error)
 }

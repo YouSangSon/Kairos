@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"regexp"
-	"time"
 
 	"omni-folio/services/core/internal/codec"
 	"omni-folio/services/core/internal/storage/observation"
@@ -75,44 +74,6 @@ func requireSchemaContext(ctx context.Context, q queryer) error {
 		return errors.New("database schema is not current")
 	}
 	return nil
-}
-
-func ownerDataRecordTime(ctx context.Context, q queryer, kind string, clock func() time.Time, fetched string) (string, error) {
-	var query string
-	switch kind {
-	case ownerDataPriceKind:
-		query = `SELECT recorded_at FROM owner_price_series_versions ORDER BY sequence DESC LIMIT 1`
-	case ownerDataFXKind:
-		query = `SELECT recorded_at FROM owner_fx_series_versions ORDER BY sequence DESC LIMIT 1`
-	case ownerDataBenchmarkKind:
-		query = `SELECT recorded_at FROM benchmark_series_versions ORDER BY sequence DESC LIMIT 1`
-	default:
-		return "", errors.New("owner data clock kind is invalid")
-	}
-	var previous string
-	err := q.QueryRowContext(ctx, query).Scan(&previous)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return "", err
-	}
-	now := clock().UTC()
-	recorded := now.Format(time.RFC3339Nano)
-	if !canonicalUTCString(recorded) {
-		return "", errors.New("owner data record clock is invalid")
-	}
-	if previous != "" {
-		last, err := time.Parse(time.RFC3339Nano, previous)
-		if err != nil || !canonicalUTCString(previous) || now.Before(last) {
-			return "", errors.New("owner data record clock moved backwards")
-		}
-	}
-	captured, err := time.Parse(time.RFC3339Nano, fetched)
-	if err != nil || !canonicalUTCString(fetched) {
-		return "", errors.New("owner data capture time is invalid")
-	}
-	if now.Before(captured) {
-		return "", errOwnerDataRejected
-	}
-	return recorded, nil
 }
 
 const marketDataAdjustmentUnspecified = "unspecified"

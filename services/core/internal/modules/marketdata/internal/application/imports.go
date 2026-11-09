@@ -5,30 +5,31 @@ import (
 	"errors"
 	"time"
 
-	"omni-folio/services/core/internal/codec"
 	c "omni-folio/services/core/internal/modules/marketdata/contracts"
 	"omni-folio/services/core/internal/modules/marketdata/internal/domain"
 	storage "omni-folio/services/core/internal/storage/contracts"
 )
 
-func recordedAt(ctx context.Context, scope Scope, kind, fetched string, clock func() time.Time) (string, error) {
+func recordedAt(ctx context.Context, scope interface {
+	LastRecorded(context.Context, string) (string, error)
+}, kind, fetched string, clock func() time.Time) (string, error) {
 	previous, err := scope.LastRecorded(ctx, kind)
 	if err != nil {
 		return "", err
 	}
 	now := clock().UTC()
 	recorded := now.Format(time.RFC3339Nano)
-	if !codec.CanonicalUTC(recorded) {
+	if !domain.CanonicalUTC(recorded) {
 		return "", errors.New("owner data record clock is invalid")
 	}
 	if previous != "" {
 		last, err := time.Parse(time.RFC3339Nano, previous)
-		if err != nil || !codec.CanonicalUTC(previous) || now.Before(last) {
+		if err != nil || !domain.CanonicalUTC(previous) || now.Before(last) {
 			return "", errors.New("owner data record clock moved backwards")
 		}
 	}
 	captured, err := time.Parse(time.RFC3339Nano, fetched)
-	if err != nil || !codec.CanonicalUTC(fetched) {
+	if err != nil || !domain.CanonicalUTC(fetched) {
 		return "", errors.New("owner data capture time is invalid")
 	}
 	if now.Before(captured) {
@@ -72,11 +73,7 @@ func (s *Service) ImportOwnerFX(ctx context.Context, raw []byte) (*c.OwnerFXSeri
 			return err
 		}
 		record := OwnerFXRecord{Sequence: int64(proof.Versions + 1), Input: *input, DataSHA256: sha, RecordedAt: recorded}
-		_, hash, err := codec.JSONHash([]any{record.Sequence, input.BaseCurrency, input.QuoteCurrency, input.SourceVersion, sha, recorded})
-		if err != nil {
-			return err
-		}
-		if err := scope.InsertOwnerFX(ctx, record, canonical, hash); err != nil {
+		if err := scope.InsertOwnerFX(ctx, record, canonical); err != nil {
 			return errors.New("owner FX series could not be stored")
 		}
 		result = ownerFXReceipt(&record)
@@ -121,11 +118,7 @@ func (s *Service) ImportBenchmark(ctx context.Context, raw []byte) (*c.Benchmark
 			return err
 		}
 		record := BenchmarkRecord{Sequence: int64(proof.Versions + 1), Input: *input, DataSHA256: sha, RecordedAt: recorded}
-		_, hash, err := codec.JSONHash([]any{record.Sequence, input.BenchmarkID, input.SourceVersion, sha, recorded})
-		if err != nil {
-			return err
-		}
-		if err := scope.InsertBenchmark(ctx, record, canonical, hash); err != nil {
+		if err := scope.InsertBenchmark(ctx, record, canonical); err != nil {
 			return errors.New("benchmark series could not be stored")
 		}
 		result = benchmarkReceipt(&record)
@@ -138,11 +131,11 @@ func (s *Service) ImportBenchmark(ctx context.Context, raw []byte) (*c.Benchmark
 }
 
 func (s *Service) BenchmarkStatus(ctx context.Context, id, version string) (*c.BenchmarkSeriesReceipt, error) {
-	if !codec.SafeID(id) || (version != "" && !codec.SafeID(version)) {
+	if !domain.SafeID(id) || (version != "" && !domain.SafeID(version)) {
 		return nil, errors.New("benchmark query is invalid")
 	}
 	var result *c.BenchmarkSeriesReceipt
-	err := s.store.Read(ctx, func(scope Scope) error {
+	err := s.store.Read(ctx, func(scope Reader) error {
 		if err := scope.Schema(ctx); err != nil {
 			return err
 		}
@@ -162,13 +155,11 @@ func (s *Service) BenchmarkStatus(ctx context.Context, id, version string) (*c.B
 	return result, nil
 }
 
-func (s *ScopedImporter) ImportOwnerPriceScoped(ctx context.Context, ref storage.ObservationRef, raw []byte, identities c.PriceIdentities) (*c.OwnerPriceSeriesReceipt, error) {
-	input, canonical, sha, err := s.decode.OwnerPrice(ctx, raw)
-	if err != nil {
-		return nil, err
-	}
+func (s *ScopedImporter) ImportOwnerPriceScoped(ctx context.Context, ref storage.ObservationRef, command c.OwnerPriceCommand, identities c.PriceIdentities) (*c.OwnerPriceSeriesReceipt, error) {
+	input, canonical, sha := &command.Input, command.Canonical, command.DataSHA256
+
 	var result *c.OwnerPriceSeriesReceipt
-	err = s.store.ScopedImport(ctx, ref, func(scope Scope) error {
+	err := s.store.ScopedImport(ctx, ref, func(scope ScopedPriceScope) error {
 		if err := scope.Schema(ctx); err != nil {
 			return err
 		}
@@ -200,11 +191,7 @@ func (s *ScopedImporter) ImportOwnerPriceScoped(ctx context.Context, ref storage
 			return err
 		}
 		record := OwnerPriceRecord{Sequence: int64(proof.Versions + 1), Input: *input, DataSHA256: sha, RecordedAt: recorded}
-		_, hash, err := codec.JSONHash([]any{record.Sequence, input.InstrumentID, input.Currency, input.SourceVersion, sha, recorded})
-		if err != nil {
-			return err
-		}
-		if err := scope.InsertOwnerPrice(ctx, record, canonical, hash); err != nil {
+		if err := scope.InsertOwnerPrice(ctx, record, canonical); err != nil {
 			return errors.New("owner price series could not be stored")
 		}
 		result = ownerPriceReceipt(&record)
@@ -216,11 +203,18 @@ func (s *ScopedImporter) ImportOwnerPriceScoped(ctx context.Context, ref storage
 	return result, nil
 }
 
-type OwnerPriceImporter struct{ atomic c.AtomicOwnerPriceImport }
+type OwnerPriceImporter struct {
+	atomic c.AtomicOwnerPriceImport
+	decode Decoder
+}
 
-func NewOwnerPriceImporter(atomic c.AtomicOwnerPriceImport) *OwnerPriceImporter {
-	return &OwnerPriceImporter{atomic}
+func NewOwnerPriceImporter(atomic c.AtomicOwnerPriceImport, decode Decoder) *OwnerPriceImporter {
+	return &OwnerPriceImporter{atomic, decode}
 }
 func (s *OwnerPriceImporter) ImportOwnerPrice(ctx context.Context, raw []byte) (*c.OwnerPriceSeriesReceipt, error) {
-	return s.atomic.ImportOwnerPrice(ctx, raw)
+	input, canonical, sha, err := s.decode.OwnerPrice(ctx, raw)
+	if err != nil {
+		return nil, err
+	}
+	return s.atomic.ImportOwnerPriceAtomic(ctx, c.OwnerPriceCommand{Input: *input, Canonical: canonical, DataSHA256: sha})
 }

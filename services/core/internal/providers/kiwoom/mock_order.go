@@ -3,9 +3,11 @@ package kiwoom
 import (
 	"context"
 	"errors"
+	"regexp"
 )
 
 var ErrMockOrderRejected = errors.New("limit order rejected")
+var mockQuantity = regexp.MustCompile(`^[1-9][0-9]*$`)
 
 type MockLimitOrder struct {
 	AccountRef string
@@ -39,7 +41,7 @@ func (c *Client) submitMockLimitOrder(ctx context.Context, request MockLimitOrde
 	if !c.isMock() {
 		return MockLimitOrderResult{}, errors.New("limit order dispatch configuration is invalid")
 	}
-	if !kiwoomStockPattern.MatchString(request.Symbol) || (request.Side != "BUY" && request.Side != "SELL") || !positiveCanonicalDecimal(request.Quantity) || !positiveCanonicalDecimal(request.LimitPrice) || request.AccountRef == "" {
+	if !kiwoomStockPattern.MatchString(request.Symbol) || (request.Side != "BUY" && request.Side != "SELL") || len(request.Quantity) > 64 || !mockQuantity.MatchString(request.Quantity) || !positiveCanonicalDecimal(request.LimitPrice) || request.AccountRef == "" {
 		return MockLimitOrderResult{}, errors.New("limit order dispatch request is invalid")
 	}
 	apiID := "kt10000"
