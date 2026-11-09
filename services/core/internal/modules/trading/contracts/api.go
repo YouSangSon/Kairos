@@ -13,6 +13,7 @@ type Trading interface {
 }
 
 type Orders interface {
+	SubmitSyntheticLimit(context.Context, string, int64) (*OrderState, error)
 	RecordOrderIntent(ctx context.Context, intent OrderIntent) (*OrderState, error)
 	AppendOrderEvent(ctx context.Context, event OrderEvent) (*OrderState, error)
 	LoadOrderState(ctx context.Context, orderID string) (*OrderState, error)

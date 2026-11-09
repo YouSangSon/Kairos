@@ -6,8 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"omni-folio/services/core/internal/codec"
 	"omni-folio/services/core/internal/exact"
-	"omni-folio/services/core/internal/modules/trading/internal/codec"
 	"omni-folio/services/core/internal/modules/trading/internal/domain"
 	"omni-folio/services/core/internal/paperdomain"
 
