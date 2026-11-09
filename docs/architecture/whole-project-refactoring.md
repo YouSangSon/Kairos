@@ -464,8 +464,8 @@ Flutter의 새 `data/` 소스는 전역 ignore 패턴에 걸려 정확한 파일
 
 | 모듈 | 숨기는 업무 책임 | 공개 명령·조회 예 | 소유 테이블/영속 상태 |
 | --- | --- | --- | --- |
-| ledger | 원장 정규화·중복·정정·revision·FIFO·증권사 잔고 대조 | PreviewImport, ApplyImport, Snapshot, Activity, InstrumentActivity, RecordBrokerSnapshot, Reconciliation | events, ledger_meta, previews, receipts, ledger_replay_state, ledger_replay_transition, broker_snapshots, broker_snapshot_reconciliations |
-| marketdata | 상장·가격·환율·입력 버전·출처·시간 | ResolveListing, CapturePrice, ImportOwnerSeries, PriceSnapshot, FXSnapshot, BenchmarkSnapshot | fx_observations, security_price_observations, instrument_listing_events, owner_fx_series_versions, owner_price_series_versions, benchmark_series_versions |
+| ledger | 원장 정규화·중복·정정·revision·FIFO·증권사 잔고 대조 | PreviewImport, ApplyImport, Snapshot, ValuationFacts, AdmittedPriceIdentities, Activity, InstrumentActivity, RecordBrokerSnapshot, Reconciliation | events, ledger_meta, previews, receipts, ledger_replay_state, ledger_replay_transition, broker_snapshots, broker_snapshot_reconciliations |
+| marketdata | 상장·가격·환율·입력 버전·출처·시간, ledger 공개 자격에 근거한 사용자 가격 등록 | ResolveListing, CapturePrice, ImportOwnerSeries, PriceSnapshot, FXSnapshot, BenchmarkSnapshot | fx_observations, security_price_observations, instrument_listing_events, owner_fx_series_versions, owner_price_series_versions, benchmark_series_versions |
 | watchlist | 관심 종목 설정과 revision CAS | Read, Replace(expectedRevision, items) | watchlist_state |
 | trading | 주문·authority·예약·runner·전략 채택·paper 회계·성과·승격 | RegisterEvidence, SelectStrategy, AdmitPaperSignal, RecordPaperFill, SubmitSyntheticLimit, ReconcileKnownOrder, ApplyPerformancePolicy, PromotePaperCandidate, Halt, Monitor | order_idempotency, order_events, execution_authority_events, risk_reservations, strategy_research_evidence, strategy_selection_events, paper_evaluation_events, paper_accounting_sessions, paper_market_bar_observations, paper_signal_events, paper_execution_authorizations, paper_performance_events, paper_strategy_performance_events, paper_performance_policy_events, paper_runner_leases, paper_promotion_claims, paper_promotion_decisions |
 | portfolio | 평가 가능성·현금/보유 평가·XIRR/TWR·비교 | CurrentValuation, XIRR, TWR, CompareBenchmarks | 권위 테이블 없음. 입력 revision이 포함된 계산 결과만 소유 |
@@ -479,15 +479,15 @@ watchlist는 시장 관측 사실과 변경 이유가 다르고 독립 CAS로 �
 
 ### 15.5 배치와 의존 방향
 
-목표 Go 구조는 `internal/modules/<owner>/api.go`, `internal/modules/<owner>/internal/domain/`, `internal/modules/<owner>/internal/application/`, `internal/modules/<owner>/internal/adapters/{sqlite,http,cli,provider,files}/`다. 공개 DTO와 작은 업무 capability 계약은 `internal/modules/<owner>/contracts/`에 둔다. private application은 자신의 contracts만 import하고 domain은 contracts/transport에 의존하지 않는다. module root의 `api.go`/`compose.go`는 구성 진입점을 제공하고 private application이 구현한 contracts의 업무 capability를 반환한다. contracts는 DB/HTTP/private 타입을 import하지 않으며 root를 역으로 import하지 않는다. 모든 함수를 감싸는 facade는 만들지 않는다. `internal/composition/`이 설정·생성·주입·기동·close를 조율하고 main은 인자와 종료 결과를 처리한다.
+목표 Go 구조는 `internal/modules/<owner>/api.go`, `internal/modules/<owner>/internal/domain/`, `internal/modules/<owner>/internal/application/`, `internal/modules/<owner>/internal/adapters/{sqlite,http,cli,provider,files}/`다. 공개 DTO와 작은 업무 capability 계약은 `internal/modules/<owner>/contracts/`에 둔다. private application은 공개 입출력 타입으로 자신의 contracts를 사용하고, 외부 업무 의존은 소비자 port로 선언하며 domain은 contracts/transport에 의존하지 않는다. module root의 `api.go`/`compose.go`는 구성 진입점을 제공하고 private application이 구현한 contracts의 업무 capability를 반환한다. contracts는 DB/HTTP/private 타입을 import하지 않으며 root를 역으로 import하지 않는다. 모든 함수를 감싸는 facade는 만들지 않는다. `internal/composition/`이 설정·생성·주입·기동·close를 조율하고 main은 인자와 종료 결과를 처리한다.
 
 Go의 nested `internal` 규칙으로 다른 module의 `<owner>/internal/...` import를 컴파일 단계에서 차단한다. composition도 비공개 구현을 직접 import하지 않는다. 각 module의 공개 `Compose` 진입점이 비공개 adapter를 생성하고 composition에서 받은 설정·의존 포트를 연결한다. Compose는 배선만 담당하며 업무 규칙을 갖지 않는다. application/domain에서 Compose 또는 module root로 역방향 import하는 것은 금지한다.
 
-아래 화살표의 실제 업무 import 대상은 상대 owner의 `contracts` package이며 root Compose는 composition에서만 사용한다. 공개 계약의 import 방향은 `portfolio → ledger, marketdata`, `trading → marketdata`, `watchlist → marketdata`다. 마지막 연결은 기존 동작에 listing 검증이 필요한 경우에만 사용하며 새로운 검증 정책을 추가하지 않는다. ledger/marketdata는 다른 업무 module을 import하지 않는다. research와 trading은 기존 version이 붙은 artifact로 연결하고 연구 측은 trading 내부를 import하지 않는다. maintenance는 각 owner의 공개 정합성/backup 계약을 호출한다. owner에서 maintenance로의 의존은 금지한다. shared에는 exact 계산과 작은 계약값만 두며 공통 Service/범용 Repository는 두지 않는다.
+아래 화살표의 실제 업무 import 대상은 상대 owner의 `contracts` package이며 root Compose는 composition에서만 사용한다. 공개 계약의 import 방향은 `portfolio → ledger, marketdata`, `marketdata → ledger`, `trading → marketdata`, `watchlist → marketdata`다. watchlist→marketdata는 기존 관심 종목 quote 조회에 필요하다. listing 검증을 새로 추가하는 연결로 해석하지 않는다. ledger는 다른 업무 module을 import하지 않는다. marketdata는 사용자 가격의 원장 종목 자격 검증에 한해 ledger의 공개 조회 계약을 소비한다. ledger→marketdata 역방향 의존은 금지한다. research와 trading은 기존 version이 붙은 artifact로 연결하고 연구 측은 trading 내부를 import하지 않는다. maintenance는 각 owner의 공개 정합성/backup 계약을 호출한다. owner에서 maintenance로의 의존은 금지한다. shared에는 exact 계산과 작은 계약값만 두며 공통 Service/범용 Repository는 두지 않는다.
 
 composition은 DB pool의 수명을 소유하고 각 module의 Compose에 같은 pool을 주입할 수 있다. pool 공유가 테이블 접근권 공유를 뜻하지는 않는다. DB handle은 module의 비공개 adapter 안에 두고 application에 노출하지 않는다. SQLite 단일 writer/접속 설정을 유지한다. trading transaction 안에서 다른 module의 Repository나 DB 호출을 하지 않는다.
 
-portfolio는 ledger의 공개 snapshot을 한 번 받아 revision으로 고정한 뒤 marketdata에서 필요한 가격/FX의 immutable 버전을 받는다. 모든 module에 걸친 동일 시점 snapshot을 새로 약속하지 않는다. 결과에는 ledger revision, 각 입력 ID/as_of, 계산 version과 부족 사유를 남긴다. 최신 가격 조회 실패 시 이전 값과 새로운 revision을 섞어 새 관측처럼 표시하지 않는다. 기존 history/cutoff 요구가 있는 경로는 같은 cutoff를 명시적으로 전달한다.
+portfolio의 원장·가격·환율·분할 정보는 **하나의 SQLite 읽기 transaction에서 얻은 관측 묶음**으로 받는다. owner별 공개 조회는 15.12의 관측 참조로 같은 transaction에 결합하며 각각 별도의 transaction을 열지 않는다. 동일한 시각 문자열이나 각자 최신 revision만으로 일관성을 대체하지 않는다. 결과에는 기존 wire 계약의 ledger revision·as_of·상태를 보존하고 내부 입력 묶음에는 각 입력 ID/버전·계산 version을 기록한다. 외부 응답에 새 필드를 임의로 추가하지 않는다. 가격 조회 실패 시 이전 관측의 일부와 새 revision을 섞지 않는다.
 
 Flutter는 기존 7 feature 설계를 유지한다. domain/application은 Flutter/HTTP에 의존하지 않고 data가 endpoint codec을 구현하며 app이 navigation/session을 연결한다. 다른 feature의 data/presentation import는 금지한다. Python research는 하나의 module이며 기존 facade/CLI는 호환 진입점으로 제한한다. 언어 사이는 계약 파일과 artifact로 연결하며 내부 모델을 공통 라이브러리에 밀어 넣지 않는다.
 
@@ -527,7 +527,7 @@ Flutter는 기존 7 feature 설계를 유지한다. domain/application은 Flutte
 | layer graph | domain은 순수 계산, application은 domain/consumer port만 사용. SQL/HTTP/fs/process/환경/clock 생성은 adapter, 생성 배선은 composition에 제한 | application→sqlite, domain→clock.Now, HTTP DTO를 domain에서 반환 |
 | public contract | 업무 공개 함수 인자/결과에서 비공개 row/DB/HTTP/provider 타입 누출 거부. `compose.go`의 construction 설정과 Compose만 DB 주입 예외이며 application/domain에서 호출 금지. scope/iterator가 callback 밖으로 탈출하지 않는 계약 검사 | DB handle을 가진 DTO, 내부 package 타입 alias 재export |
 | table ownership | 단일 owner registry에서 schema inventory와 SQL access 기대값 생성. SQL은 private owner adapter에만 허용. 고정 SQL/승인된 상수를 해석하고 미해결 동적 table 지정은 실패 | 다른 owner SELECT/JOIN/INSERT, 미등록 table/view/trigger, 동적 table 우회 |
-| maintenance 예외 | migration/restore/물리 backup을 path+작업으로 제한하고 일반 command에서 import/실행 금지. 정합성 검사는 owner 계약으로 집계 | maintenance 범용 Query를 application에서 호출, 일반 갱신을 restore로 위장 |
+| maintenance 예외 | migration/restore/물리 backup을 path+작업으로 제한하고 일반 command에서 import/실행 금지. 정합성 검사는 owner 계약으로 집계. 시스템 카탈로그 읽기는 별도 제한 규칙 적용 | maintenance 범용 Query를 application에서 호출, 일반 갱신을 restore로 위장 |
 | Dart/Python | import/export/part/conditional import와 상대/절대 import를 정규화해 production 전체 조사 | feature private 참조, application→file adapter, facade 역방향 import |
 
 SQL 정적 검사만으로 동적 SQL이나 SQLite 공유 pool의 실행 시 접근 통제를 완전히 증명했다고 말하지 않는다. 먼저 SQL 구성 방식을 유한한 literal/const로 제한하고 해석할 수 없으면 거부한다. 금융 계산·선택·복구 증명을 SQL gate로 옮기지 않는다. 이 검사를 위해 공통 SQL broker나 생성 DSL을 도입하지 않는다.
@@ -552,7 +552,7 @@ SQL 정적 검사만으로 동적 SQL이나 SQLite 공유 pool의 실행 시 접
 ### 15.9 안정 상태를 유지하는 구현 순서와 완료 조건
 
 1. **경계 고정**: owner registry·현행 table inventory·공개 DTO·의존 graph를 고정한다. 기존 root 예외는 path+symbol+이유를 열거하고 증가를 금지한다. migration 이력과 wire bytes는 보존한다.
-2. **원자적으로 완결되는 작은 module부터**: watchlist→marketdata→ledger→portfolio 순으로 비공개 구현·공개 계약·모든 caller·fixture를 함께 옮긴다. 시작 파일은 `watchlist*.go`, `owner_{fx,price}_series*.go`, `fx_observation.go`, `security_price_observation.go`, `instrument_listing*.go`, `market_data.go`, 기존 ledger 분리 파일, `portfolio_*.go`와 대응 HTTP/CLI/test다. 각 단위에서 실재 파일 전체를 열거한 수정 허용 목록을 확정한 뒤 편집한다.
+2. **원자적으로 완결되는 작은 module부터**: watchlist를 독립 이식하고, ledger의 공개 자격/분할 조회 → marketdata → portfolio 순서로 옮긴다. 세 module의 공통 관측 배선은 15.12의 동일 transaction 계약을 먼저 확정한다. 비공개 구현·공개 계약·모든 caller·fixture를 함께 옮긴다. 시작 파일은 `watchlist*.go`, `owner_{fx,price}_series*.go`, `fx_observation.go`, `security_price_observation.go`, `instrument_listing*.go`, `market_data.go`, 기존 ledger 분리 파일, `portfolio_*.go`와 대응 HTTP/CLI/test다. 각 단위에서 실재 파일 전체를 열거한 수정 허용 목록을 확정한 뒤 편집한다.
 3. **trading은 하나의 owner로 내부 이식**: order/authority/reservation→paper accounting/fill→strategy registry/selection/policy→promotion/runner 순서다. `order_*.go`, `execution_authority.go`, `paper_*.go`, `strategy_*.go`, `kiwoom_order_{transport,reconciliation}.go`와 caller/test를 추적한다. 이 순서는 trading 내부의 정리 순서이며 각각을 독립 이동 commit으로 강제하지 않는다. 같은 transaction을 호출하는 전체 closure를 한 이동 단위로 옮긴다. root policy/paper가 private journal에 의존한다면 trading transaction kernel과 그 전체 호출 closure를 먼저 함께 옮기고 내부에서 순차 정리한다. 외부 `*sql.Tx`/callback bridge를 임시 공개하지 않는다. 매 단계는 빌드 가능해야 하며 기존 transaction 일부만 다른 module로 옮기지 않는다.
 4. **client/research/maintenance 통합**: Flutter checkpoint의 두 실패와 helper 소유권을 수정하고 7 feature로 이식한다. Python의 기존 public facade/4 CLI/byte 호환을 유지한다. migration/restore/proof를 owner 계약에 연결해 root Service와 공유 DB 직접 의존을 해소한다. 목표 `internal/modules/<owner>/api.go`와 비공개 domain/application/adapter로 옮기면서 기존 경로를 같은 단위에서 삭제한다.
 5. **최종 gate**: 최종 diff에서 `make check` 한 번, 이후 `make smoke`, 필요한 Podman runtime/Flutter release 검사와 독립 리뷰를 수행하고 작업 전용 자원을 청소한다. CI·배포·credential이 필요한 broker 검증은 별도 상태다. 이번 설계에서는 실행하지 않는다.
@@ -572,7 +572,7 @@ SQL 정적 검사만으로 동적 SQL이나 SQLite 공유 pool의 실행 시 접
 #### 경계 예외를 좁히는 구체 계약
 
 - `broker_snapshot.go:appendKiwoomSnapshot`은 snapshot 저장과 같은 transaction에서 원장 수량을 읽고 reconciliation을 기록한다. 두 테이블을 ledger의 내부 reconciliation 영역에 귀속시켜 이 원자성을 유지한다. broker 조회는 consumer port로 transaction 밖에서 수행하고, 공개 RecordBrokerSnapshot은 검증된 관측값을 받아 원장 revision과 함께 저장·대조한다. raw Kiwoom wire 타입은 private provider adapter에서 해석한다. trading은 이 테이블을 직접 읽지 않는다.
-- `schema_migrations`는 업무 데이터가 아닌 저장소 제어 metadata다. maintenance만 수정하며 각 owner의 SQLite adapter는 기동·proof에 필요한 version/schema 확인을 읽기 전용으로 수행할 수 있다. owner registry에 이 한 테이블의 읽기 예외와 용도를 기록한다. metadata가 일치한다는 사실만으로 업무 proof를 통과시키지 않는다. maintenance의 public API를 역으로 호출할 필요는 없다.
+- `schema_migrations`는 업무 데이터가 아닌 저장소 제어 metadata다. maintenance만 수정하며 각 owner의 SQLite adapter는 기동·proof에 필요한 version/schema 확인을 읽기 전용으로 수행할 수 있다. owner registry에 이 제어 테이블과 15.12의 제한된 SQLite 시스템 카탈로그 읽기 예외를 별도 분류한다. metadata가 일치한다는 사실만으로 업무 proof를 통과시키지 않는다. maintenance의 public API를 역으로 호출할 필요는 없다.
 - 현행 `createBackup`의 `VACUUM INTO`는 storage 전용 maintenance adapter가 수행한다. 현행 source owner proof → VACUUM INTO → candidate proof → source/candidate 비교의 순서를 보존하며 불일치하면 실패시킨다. 생성된 candidate DB를 변경 불가능한 검증 대상으로 두고, owner별 공개 VerifyBackup이 각자의 상태와 cross-record 증거를 검사한다. 별도 live DB들을 순서대로 읽고 같은 시점 백업이라고 주장하지 않는다. restore는 staging DB에 수행하고 모든 owner proof·기존 manifest/hash 비교가 끝난 뒤 기존 배타적 복구 절차로 전환한다. 업무 테이블을 직접 읽는 범용 maintenance Query API는 노출하지 않는다.
 - 공개 DTO는 owner의 `contracts` package가 소유한다. private application이 contracts를 import해 공개 command/result를 사용하고 domain의 비공개 값으로 변환한다. module root는 private application 생성자를 연결해 contracts의 작은 업무 capability를 반환한다. 다른 module과 inbound adapter는 contracts만 업무 의존성으로 사용한다. 함수마다 interface를 만들거나 root에 같은 메서드의 전달 wrapper를 반복하지 않는다. Serialize/Deserialize나 type alias로 private 타입을 재공개하는 우회는 금지한다. `compose.go`는 설정·pool을 받는 construction 전용 예외이고 업무 API와 별도로 검사한다.
 - composition은 종료 시 신규 요청을 막고 owner별 worker를 취소한 뒤 종료를 기다리며 마지막에 pool/client를 닫는다. worker/child process/stream은 생성 owner가 cancel·join·강제 종료와 남은 자원 회수를 책임진다. 공유 pool을 빌린 module은 pool을 닫지 않는다. scope는 callback 안에서만 유효하며 외부 호출을 transaction 안에 넣지 않는다.
@@ -580,6 +580,75 @@ SQL 정적 검사만으로 동적 SQL이나 SQLite 공유 pool의 실행 시 접
 
 ### 15.11 이번 설계의 검증 범위
 
-2026-11-09에 새 대화 맥락의 Astra 독립 reviewer가 EGM Design Critic 기준으로 최신 15절과 기존 3·5·14절, ledger port/adapter, broker reconciliation, policy/promotion, backup proof 원본을 대조했다. 지적된 잔고 대조 테이블 누락, construction 타입 예외, schema metadata 읽기, 공개 contracts 위치, transaction 전체 호출 묶음 이식, source/candidate backup 동등 비교를 보완했다. 보완본 재검토에서 남은 Blocker/Major를 발견하지 못했다. 이는 설계 검토 결과이며 실행 검증이 아니다. 대화 맥락 분리는 `fork_turns=none`으로 설정했으며 host 지침 파일까지 제외된다고 주장하지 않는다.
+2026-11-09에 새 대화 맥락의 Astra 독립 reviewer가 EGM Design Critic 기준으로 최신 15절과 기존 3·5·14절, ledger port/adapter, broker reconciliation, policy/promotion, backup proof 원본을 대조했다. 지적된 잔고 대조 테이블 누락, construction 타입 예외, schema metadata 읽기, 공개 contracts 위치, transaction 전체 호출 묶음 이식, source/candidate backup 동등 비교를 보완했다. 당시 보완본 재검토에서는 남은 Blocker/Major를 발견하지 못했다. 이후 재검토에서 동일 관측 보존, 원장 종목/분할 조회 계약, 시스템 카탈로그 예외의 공백을 추가로 확인했으며 이를 15.12에서 보완한다. 당시 판정을 현재의 완전성 보장으로 사용하지 않는다. 이는 설계 검토 결과이며 실행 검증이 아니다. 대화 맥락 분리는 `fork_turns=none`으로 설정했으며 host 지침 파일까지 제외된다고 주장하지 않는다.
 
 문서 상대 파일 링크·코드 fence·한국어 문체와 `git diff --check`를 검사했다. migration 001–027에서 교체용 이름을 제외한 현재 테이블 이름 33개가 소유권 표/예외 설명에 포함됐는지 기계적으로 대조했다. 이 이름 대조가 SQL 호출 경로 전체의 소유권 검증을 뜻하지는 않는다. 이번 변경은 이 설계 문서 하나뿐이며 production 코드·계약·schema·의존성·설정을 변경하지 않았다. 테스트·빌드·배포와 새 임시 자원 생성은 수행하지 않았다.
+
+
+### 15.12 재검토 보완: 동일 관측과 원장 의존의 보존
+
+이 절은 2026-11-09의 두 번째 검토에서 발견한 세 공백을 수정한다. 15.5의 별도 순차 snapshot 조회안은 폐기한다. module 소유권·공개 계약은 유지하되, **하나의 DB에 있는 기존 일관성 경계를 유지하는 전용 저장소 배선**을 다음과 같이 한정한다. 새 DB·전역 이벤트 버스·일반 분산 transaction은 도입하지 않는다.
+
+#### A. 관측 묶음의 구성과 수명
+
+`current_portfolio_valuation.go:currentPortfolioValuation`은 같은 `*sql.Tx`에서 FX·가격·원장 proof를 얻고 입력의 tx/cutoff 동일성까지 검사한다. holding/XIRR/TWR/benchmark 경로도 같은 입력 구성에 의존한다. 이 보장은 동작 보존 refactor의 필수 계약이다.
+
+목표 저장소 배선은 `internal/storage/observation`의 SQLite session 구현과 `internal/storage/contracts`의 불투명 `ObservationRef` 값으로 구성한다. `internal/storage/contracts`는 IO/DB 타입이 없는 순수 계약값만 갖고 domain에서는 사용하지 않는다. session 구현과 resolver는 바깥 인프라다. 이 패키지는 업무 테이블 SQL을 소유하지 않는다. composition에서 module별 private SQLite adapter에 같은 session registry에 연결된 제한별 resolver를 주입한다. resolver는 실제 transaction에 묶인 제한된 handle을 private adapter에만 제공하며 DB/Tx를 domain/application/업무 contracts에 노출하지 않는다. 읽기 resolver와 marketdata owner-price 전용 쓰기 resolver는 composition이 서로 다른 타입과 인스턴스로 주입한다. caller가 owner/purpose 문자열을 바꿔 쓰기 resolver를 선택하는 API는 없다. construction 전용 DB 주입 예외와 동일하게 검사한다.
+
+- portfolio application의 입력 port는 `ReadValuationInputs(ctx, query) → ValuationInputs/error`다. 구현은 composition에 연결한 관측 coordinator adapter다. 이 adapter는 전용 읽기 transaction을 한 번 시작하고 server cutoff를 한 번 정한 뒤 해당 transaction에 묶인 ObservationRef를 발급한다.
+- coordinator는 ledger와 marketdata의 **공개 읽기 계약**에 같은 참조를 명시적으로 전달한다. ledger가 원장 proof·잔고·종목 자격·분할 정보를 읽고 marketdata가 가격/FX/benchmark 버전을 읽는다. 각 owner adapter가 읽기 resolver로 동일 transaction을 사용하고 자기 테이블만 조회한다. domain에는 ref를 전달하지 않는다.
+- `ObservationRef`는 revision/시간 문자열이 아니라 생성 instance·용도·scope·활성 session에 묶인 위조 불가능한 capability다. 외부 HTTP/CLI 입력으로 받을 수 없고 serialization·DB handle 추출·다른 요청 재사용을 허용하지 않는다. 로그에는 비밀이나 raw transaction을 남기지 않는다.
+- owner의 관측 조회는 ref가 없거나 잘못됐거나 이미 종료됐거나 다른 resolver/DB에 속하면 실패한다. 별도 DB 조회나 새로운 transaction으로 fallback하지 않는다. module 내부에서 같은 관측 중 다시 일반 Repository를 호출하는 것도 금지한다. SQLite 단일 연결의 중첩 획득을 막는다.
+- coordinator는 모든 입력/proof가 성공한 뒤 읽기 transaction을 정상 종료하고, 참조를 폐기한 다음 immutable 입력값만 application으로 반환한다. 오류·취소·panic은 rollback과 참조 폐기를 보장한다. scope·row·iterator·lazy loader·ObservationRef는 반환하는 입력 묶음에 포함하지 않는다. 외부 API/파일/연구 process 호출을 session 안에 넣지 않는다.
+- 관심 종목의 `ReadWatchlistInputs` coordinator도 같은 방식을 사용한다. watchlist 상태/revision·가격/시각·필요한 ledger 자격 proof를 하나의 session과 cutoff로 읽고, 기존 watchlistQuote 규칙으로 missing/ambiguous/stale 결과를 계산한다. 현재 `watchlist.go:watchlist`의 동일 transaction 관측을 보존하며, watchlist module이 시장/원장 table을 직접 읽지 않는다. 이 경로에서 marketdata의 owner-price proof가 ledger를 조회할 때도 같은 읽기 참조를 사용한다.
+- 기존 응답의 부족/오래됨/미검증 상태와 시각 의미를 유지한다. 모든 module의 최신값을 다시 받으며 부분 retry하지 않는다. 재시도하면 관측 묶음 전체를 새로 얻는다. 미래에 DB가 분리되면 이 adapter는 지원할 수 없으며, 단일 snapshot 보장을 낮추기 전에 별도의 버전 벡터/읽기 모델 계약과 정책 변경 검토가 필요하다.
+
+이는 **명명된 평가 입력·관심 종목 quote 조회, 다음 사용자 가격 등록과 기존 owner-price proof 검증만을 위한 인프라 배선**이다. 업무 application이 임의 owner의 SQL을 실행하거나 callback을 조립하는 범용 UoW가 아니다. trading의 write transaction 밖에 있는 module Repository 호출을 끼워 넣는 예외로 확대하지 않는다.
+
+#### B. 원장 종목 자격·분할 규칙과 사용자 가격 등록
+
+`owner_price_valuation.go:admittedOwnerPriceIdentities`의 원장 replay/proof 및 canonical instrument ID 검증은 ledger가 소유한다. 공개 `AdmittedPriceIdentities(ctx, observation)`는 검증한 `(instrument_id, currency)`와 ledger revision을 반환하며 원본 event/receipt의 불필요한 필드를 노출하지 않는다. 모듈 내부 table 조회와 replay는 ledger에 남긴다.
+
+`readValuationPriceInputs`의 SPLIT 조회는 ledger 공개 `ValuationFacts(ctx, observation)`로 옮긴다. 결과는 해당 관측의 원장 snapshot·시각 검증 정보·종목/통화별 마지막 분할 시각을 포함한다. 시장 관측의 해석·출처·canonical 가격은 marketdata가, 가격과 분할의 시간 관계에 따른 평가 가능성은 portfolio domain이 소유한다. 현재의 `afterLastSplit` 동작과 거부 결과를 그대로 이식한다. `marketdata → ledger`만 허용하고 ledger가 가격 공급자를 호출하는 역방향 의존은 만들지 않는다.
+
+사용자 가격 등록은 기존 `owner_price_series.go`에서 자격 검증·기존 가격 출처 충돌·버전 멱등성·삽입을 **같은 쓰기 transaction**에서 수행한다. 자격만 먼저 조회한 뒤 별도 transaction에서 저장하도록 바꾸지 않는다.
+
+- 명명된 `ImportOwnerPrice` storage coordinator adapter가 transaction 하나와 용도가 제한된 관측 참조를 만든다. 참조를 받는 ledger 공개 조회는 읽기 전용이다. marketdata는 자기 transaction-local adapter로 기존 가격 출처·schema·버전을 검증하고 자기 테이블만 쓴다.
+- 이 작업은 marketdata application이 소비하는 전용 atomic import port로 연결한다. coordinator는 ledger 공개 자격 조회와 marketdata 공개 scoped-import 계약만 조합한다. scoped-import는 resolver가 허용한 **marketdata owner-price import 용도**일 때만 쓰기 handle을 사용할 수 있다. ledger와 나머지 owner에는 읽기 resolver만 주입한다. 이 resolver는 원본 `*sql.Tx`를 반환하지 않는 비공개 wrapper를 제공한다. Exec/Commit/Rollback/RawTx 또는 원본 transaction으로의 type assertion 경로를 노출하지 않는다. Query 계열만 제공해도 쓰기 SQL 실행이 가능하므로, wrapper는 registry에 고정한 owner별 읽기 전용 statement 전체와 인자 계약만 허용하고 INSERT/UPDATE/DELETE/DDL/미승인 PRAGMA·쓰기 함수 등을 거부한다. 쓰기 resolver는 marketdata의 해당 작업 adapter에만 주입하며 owner-price 관련 허용 statement 밖의 실행을 거부한다. public 범용 transaction/callback/Query/Exec/commit 메서드는 제공하지 않는다.
+- 동일 source version/동일 hash는 기존 receipt, 불일치는 기존 충돌 오류로 처리한다. 자격/proof/출처 혼합/쓰기/commit 실패는 전체 실패다. 결과는 commit 확인 후에만 반환한다. 참조는 성공·실패 모두 폐기하고 session 밖으로 내보내지 않는다.
+- 현재 candidate backup DB의 owner-price proof도 원장 자격에 의존한다. marketdata의 공개 VerifyBackup이 ledger의 공개 자격 조회를 같은 immutable candidate 관측으로 소비하게 한다. 경로 문자열만 받고 다른 live DB로 연결하는 fallback은 금지한다. maintenance는 proof를 집계할 뿐 원장 table SQL을 대신 소유하지 않는다.
+
+외부 ImportOwnerPrice → marketdata application의 atomic import port → coordinator → 별도 scoped validation/persist use case 순서다. scoped 진입은 같은 ImportOwnerPrice 또는 atomic import port를 다시 호출하지 않는다. outer ImportOwnerPrice 유스케이스는 atomic import port만 호출한다. 별도 scoped handler는 transaction 시작기·일반 Repository·atomic import port를 의존하지 않으며 주입된 session-bound store만 사용한다. Compose는 scoped handler 생성 → coordinator에 scoped capability 주입 → outer use case 생성 순서로 연결한다. 동일 Service 인스턴스를 서로 주입하는 객체 cycle은 금지하고 정적 호출/배선 검사와 재진입 실패 fixture를 둔다. 실제 업무 규칙은 marketdata domain/application에 두고 coordinator에는 신규 자격·가격 규칙을 복제하지 않는다.
+
+이 제한된 read-ledger/write-marketdata 결합은 기존 코드에서 확인한 동작을 보존하기 위한 예외다. 여러 업무 module에 동시에 쓰는 분산 transaction 계약이 아니며, 이 결합을 제거하기 위한 증명 가능한 대안이 나오기 전까지 유지한다. 추후 ledger 의미가 수정·삭제 가능한 자격으로 바뀌어도 별도 사전 조회로 임의 약화하지 않는다.
+
+#### C. SQLite 시스템 카탈로그 읽기 예외
+
+owner registry는 **업무 테이블**, **공유 제어 metadata**, **SQLite 시스템 카탈로그**를 구분한다. `sqlite_master`·`sqlite_temp_master`는 새로운 업무 owner를 배정할 테이블이 아니다. 현재 watchlist/owner-price 등의 물리 schema 검증에 필요한 읽기만 허용한다.
+
+- owner의 private SQLite schema/proof adapter는 자신의 테이블·인덱스·trigger 정의와 임시 shadow object 존재 여부를 확인하는 고정 카탈로그 SELECT만 사용할 수 있다. 이름 인자는 registry에 등록된 owner 객체에서만 얻는다. 임의 table명과 전체 SQL text를 반환하는 공용 API는 금지한다.
+- 자기 객체와 충돌하는 temp shadow를 탐지하는 조회는 허용하되 다른 owner의 데이터를 읽는 SQL로 이어지지 않게 한다. 객체 개수/정의/hash 대조를 생략하지 않는다. 전역 schema inventory는 maintenance의 기동/복구 전용 adapter가 관리한다.
+- `schema_migrations`는 기존처럼 maintenance만 쓰고 owner는 version/schema 확인에 한해 읽는다. 카탈로그 UPDATE/DELETE/INSERT, `writable_schema` 활성화, 미승인 PRAGMA/ATTACH, 해석 불가능한 동적 SQL은 허용하지 않는다. migration의 정해진 DDL 예외를 일반 command에 재사용하지 않는다.
+- 카탈로그 SQL도 경로·연산·대상 객체·용도로 제한한 검사의 대상이다. 단순히 시스템 테이블 이름이 포함됐다는 이유로 쿼리 전체를 allow하지 않는다.
+
+#### D. 추가 수용 시나리오와 구현 순서
+
+| 시나리오 | 기대 결과 | 검사 계층 |
+| --- | --- | --- |
+| MOD-11 평가 중 원장·가격·FX 갱신 경합 | 현재/holding/XIRR/TWR/benchmark가 같은 DB snapshot과 cutoff의 입력만 사용. 서로 다른 session/cutoff 결합은 거부 | 실제 SQLite 독립 접속+barrier, 기존 tx 동일성 검사 이식 |
+| MOD-12 사용자 가격 자격·등록 | 원장 자격 proof와 시장 출처/버전 검증·삽입은 한 transaction. 중간 실패/취소/commit 실패는 신규 버전 없음 | 실제 SQLite+실패 주입. 기존 owner-price 멱등성/미등록 종목/출처 혼합 검사 유지 |
+| MOD-13 관측 참조 수명·권한 | 종료/다른 instance/다른 용도/위조 ref 거부. 읽기 wrapper의 쓰기 SQL/원본 Tx 반환·쓰기 resolver 주입·별도 DB fallback 불가 | session adapter 계약+실제 DB, panic/cancel 종료 후 연결 재사용 검사 |
+| MOD-14 schema proof 예외 | 자기 카탈로그 정의/개수/임시 shadow 검사는 허용. 다른 owner/동적 객체/카탈로그 쓰기/미승인 PRAGMA는 거부 | architecture negative fixture+실제 schema 변조/복구 검사 |
+| MOD-15 candidate owner-price proof | 같은 candidate의 원장 자격·가격을 검증하고 source/candidate 동등성 유지. live 데이터 혼합 없음 | 실제 backup/restore 통합 |
+| MOD-16 관심 종목 관측 경합 | watchlist revision·quote·owner-price 자격 proof가 같은 session/cutoff를 사용하며 목록 갱신 중 이전/신규 입력을 섞지 않음 | 실제 SQLite 독립 접속+barrier, 기존 watchlist quote/CAS 계약 |
+
+15.9의 순서를 보정한다. 먼저 관측 session과 owner별 공개 읽기 계약의 RED/수명 검사를 정의한다. ledger 자격/분할 조회를 추출한 다음, marketdata의 관측 조회·atomic owner-price import를 함께 이식하고 portfolio 조회를 이전한다. SQL/transaction을 public callback으로 임시 노출해 중간 단계를 통과시키지 않는다. 각 단위에서 실제 caller·test·fixture의 수정 허용 목록을 확정하고 동작이 보존된 완전한 묶음으로 이동한다. 이 절은 설계 변경이며 검사 구현·실행 완료 기록은 아니다.
+
+
+관측 연결의 대안도 대조했다. process-local lock만으로는 다른 process의 writer를 막지 못한다. 같은 cutoff만 넘기거나 각 module의 최신 version을 순서대로 읽는 방식은 기존 한 transaction의 관측을 보장하지 않는다. 전역 commit version과 모든 writer의 version stamping을 새로 도입하는 안은 schema·쓰기 경로 전체를 바꾸므로 이번 보존 refactor에서 채택하지 않는다. 기존 SQLite transaction을 유지하는 좁은 인프라 session이 현재 확인한 계약을 가장 직접적으로 보존한다.
+
+
+resolver의 쓰기 제한은 동적으로 해석한 SQL 전체에 대한 보안 증명으로 포장하지 않는다. 허용 statement의 완전 일치와 금지 우회 경로에 대한 정적 검사·실행 계약 검사를 함께 적용한다. 악성 in-process 코드가 reflection/unsafe로 메모리를 침범하는 상황의 격리 수단은 아니며, 그런 사용자 코드는 15.7의 별도 격리 gate를 따른다. 관측 session의 lifecycle 조율과 owner별 statement 제한은 storage 인프라에 두고 업무 규칙을 복제하지 않는다.
+
+
+보완본은 독립 Astra reviewer가 최신 15.12 및 관련 15.5·15.8·예외 문장을 위 원본 코드와 다시 대조했다. 이 검토 범위에서 남은 Blocker/Major는 발견하지 못했다. 문서의 상대 파일 링크·fence·문체, 폐기한 순차 조회/단일 metadata 예외 문장의 제거, MOD-11–16 시나리오 연결과 `git diff --check`를 확인했다. 이번에는 설계 문서 하나만 수정했으며 runtime 검사·빌드·배포·새 캐시/리소스 생성은 수행하지 않았다. 실제 resolver의 권한 제한, transaction 경합·취소·복구는 구현 후 검증할 항목이다.
