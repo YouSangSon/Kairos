@@ -1,6 +1,12 @@
 package main
 
 import (
+	watchmodule "omni-folio/services/core/internal/modules/watchlist"
+	watchapi "omni-folio/services/core/internal/modules/watchlist/contracts"
+	storage "omni-folio/services/core/internal/storage/contracts"
+	"omni-folio/services/core/internal/storage/observation"
+	"time"
+
 	"bytes"
 	"context"
 	"database/sql"
@@ -19,7 +25,7 @@ func dropWatchlistSchemaForLegacy(t testing.TB, db *sql.DB) {
 		t.Fatal(err)
 	}
 	if present != 0 {
-		state, _, err := readWatchlistState(context.Background(), db)
+		state, _, err := watchlistStateForTest(t, context.Background(), db)
 		if err != nil || state.Revision != 0 || len(state.Entries) != 0 {
 			t.Fatal("legacy fixture cannot discard watchlist state", err)
 		}
@@ -68,7 +74,7 @@ func TestWatchlistBackupRestoresCurrentStateAndRejectsUnprovedFields(t *testing.
 		t.Fatal(err)
 	}
 	defer db.Close()
-	restored, proof, err := readWatchlistState(context.Background(), db)
+	restored, proof, err := watchlistStateForTest(t, context.Background(), db)
 	if err != nil || !reflect.DeepEqual(restored, saved) || !watchlistManifestMatches(*manifest, proof) {
 		t.Fatal("saved state changed during restore", err)
 	}
@@ -196,4 +202,25 @@ func TestWatchlistLegacyV19CannotHideActiveLease(t *testing.T) {
 	if err := verifyManifest(backup, golden, mp); err == nil {
 		t.Fatal("active legacy runner became eligible")
 	}
+}
+
+func watchlistStateForTest(t testing.TB, ctx context.Context, db *sql.DB) (*watchapi.WatchlistState, watchapi.RecoveryProof, error) {
+	t.Helper()
+	registry := observation.New(db, time.Now)
+	module, err := watchmodule.Compose(db, registry, nil, time.Now)
+	if err != nil {
+		return nil, watchapi.RecoveryProof{}, err
+	}
+	var state watchapi.WatchlistState
+	var proof watchapi.RecoveryProof
+	err = registry.VerifyBackup(ctx, func(ref storage.ObservationRef, _ time.Time) error {
+		var err error
+		state, err = module.States.ReadState(ctx, ref)
+		if err != nil {
+			return err
+		}
+		proof, err = module.Recovery.VerifyBackup(ctx, ref)
+		return err
+	})
+	return &state, proof, err
 }

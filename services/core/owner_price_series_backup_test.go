@@ -1,6 +1,7 @@
 package main
 
 import (
+ portfolioapi "omni-folio/services/core/internal/modules/portfolio/contracts"
 	"bytes"
 	"context"
 	"database/sql"
@@ -90,7 +91,7 @@ func TestOwnerPriceBackupWholeVersionsProofAndWithdrawal(t *testing.T) {
 	if err != nil || stored == nil || ownerPriceReceipt(stored).DataSHA256 != first.DataSHA256 {
 		t.Fatal("original price version lost")
 	}
-	value, appErr := newService(db, svc.now, svc.id).holdingValuation(context.Background(), "2026-01-01T00:00:00Z")
+	value, appErr := newService(db, svc.now, svc.id).portfolio.portfolioapi.HoldingValuation(context.Background(), "2026-01-01T00:00:00Z")
 	if appErr != nil || value.Status != "complete" || value.Lines[0].MarketValue == nil || *value.Lines[0].MarketValue != "300" || !usesOwnerPrice(value.Issues) {
 		t.Fatalf("restored latest price drift: %+v %v", value, appErr)
 	}

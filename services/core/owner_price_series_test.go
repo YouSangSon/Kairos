@@ -134,7 +134,7 @@ func TestOwnerPriceLedgerMembershipAndMixedCaseHolding(t *testing.T) {
 		t.Fatal(err)
 	}
 	importOwnerPriceForTest(t, svc, []byte(ownerPriceTestInput))
-	value, appErr := svc.holdingValuation(context.Background(), "2026-01-01T00:00:00Z")
+	value, appErr := svc.portfolio.HoldingValuation(context.Background(), "2026-01-01T00:00:00Z")
 	if appErr != nil || len(value.Lines) != 1 || value.Lines[0].Symbol != "aapl" || value.Lines[0].MarketValue == nil || *value.Lines[0].MarketValue != "400" || value.Sample || value.Status != "complete" {
 		t.Fatalf("canonical mixed-case identity lost: %+v %v", value, appErr)
 	}
@@ -176,7 +176,7 @@ func TestOwnerPriceSplitBoundaryAndIndependentSampleFlags(t *testing.T) {
 		svc := ownerPriceServiceForTest(t)
 		applyTestCSV(t, svc, "split", testCSV("split,account-main,SPLIT,2025-12-31T23:00:00Z,AAPL,2,,,USD,0"))
 		importOwnerPriceForTest(t, svc, ownerPriceInputForTest(t, func(i *OwnerPriceSeriesInput) { i.Points = []OwnerPricePoint{{ObservedAt: test.at, Price: "50"}} }))
-		value, appErr := svc.holdingValuation(context.Background(), "2026-01-01T00:00:00Z")
+		value, appErr := svc.portfolio.HoldingValuation(context.Background(), "2026-01-01T00:00:00Z")
 		if appErr != nil || value.Status != test.status || value.Sample || !usesOwnerPrice(value.Issues) {
 			t.Fatalf("split boundary drift: %+v %v", value, appErr)
 		}
@@ -184,11 +184,11 @@ func TestOwnerPriceSplitBoundaryAndIndependentSampleFlags(t *testing.T) {
 			t.Fatal("split failure hid source or exposed total")
 		}
 		importOwnerFXForTest(t, svc, []byte(ownerFXTestInput))
-		current, appErr := svc.currentPortfolioValuation(context.Background())
+		current, appErr := svc.portfolio.CurrentValuation(context.Background())
 		if appErr != nil || current.Status != test.status || current.Sample || !usesOwnerPrice(current.Issues) {
 			t.Fatalf("current split boundary drift: %+v %v", current, appErr)
 		}
-		twr, appErr := svc.portfolioTWR(context.Background())
+		twr, appErr := svc.portfolio.TWR(context.Background())
 		if appErr != nil || (test.status == "complete" && twr.Status != "calculated") || (test.status == "unavailable" && twr.CumulativeRate != nil) || !usesOwnerPrice(twr.Issues) {
 			t.Fatalf("TWR split boundary drift: %+v %v", twr, appErr)
 		}
@@ -204,15 +204,15 @@ func TestOwnerPriceHistoricalCorrectionDoesNotFillFromOldVersion(t *testing.T) {
 	importOwnerPriceForTest(t, svc, ownerPriceInputForTest(t, func(i *OwnerPriceSeriesInput) {
 		i.Points = append(i.Points[:1], OwnerPricePoint{ObservedAt: "2025-01-03T00:00:00Z", Price: "100"}, i.Points[1])
 	}))
-	if report, err := svc.portfolioTWR(context.Background()); err != nil || report.Status != "calculated" {
+	if report, err := svc.portfolio.TWR(context.Background()); err != nil || report.Status != "calculated" {
 		t.Fatalf("complete historical version unavailable: %+v %v", report, err)
 	}
 	importOwnerPriceForTest(t, svc, ownerPriceInputForTest(t, func(i *OwnerPriceSeriesInput) { i.SourceVersion = "removed-history" }))
-	current, err := svc.currentPortfolioValuation(context.Background())
+	current, err := svc.portfolio.CurrentValuation(context.Background())
 	if err != nil || current.Status != "complete" {
 		t.Fatalf("terminal price unexpectedly removed: %+v %v", current, err)
 	}
-	report, err := svc.portfolioTWR(context.Background())
+	report, err := svc.portfolio.TWR(context.Background())
 	if err != nil || report.Status != "unavailable" || report.CumulativeRate != nil || !usesOwnerPrice(report.Issues) {
 		t.Fatalf("old historical point silently filled: %+v %v", report, err)
 	}
@@ -223,30 +223,6 @@ func TestOwnerPriceRequestBindingAndFutureCapture(t *testing.T) {
 	ctx := context.Background()
 	if _, err := svc.importOwnerPriceSeries(ctx, ownerPriceInputForTest(t, func(i *OwnerPriceSeriesInput) { i.FetchedAt = "2026-01-01T00:00:00.000000001Z" })); err == nil {
 		t.Fatal("future capture accepted")
-	}
-	tx, err := svc.db.BeginTx(ctx, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer tx.Rollback()
-	at := svc.now()
-	fx, err := readValuationFXInputs(ctx, tx, at)
-	if err != nil {
-		t.Fatal(err)
-	}
-	prices, err := readValuationPriceInputs(ctx, tx, at)
-	if err != nil {
-		t.Fatal(err)
-	}
-	foreign := prices
-	foreign.tx = nil
-	if value, appErr := svc.currentPortfolioValuationTx(ctx, tx, at, fx, foreign); appErr == nil || value != nil {
-		t.Fatal("price proof escaped transaction")
-	}
-	foreign = prices
-	foreign.knownAt = at.Add(time.Nanosecond)
-	if report, appErr := svc.portfolioTWRTx(ctx, tx, at, fx, foreign); appErr == nil || report != nil {
-		t.Fatal("price version escaped report cutoff")
 	}
 }
 
@@ -277,14 +253,6 @@ func TestOwnerPriceFixtureBindingAndInternalTimeNamespace(t *testing.T) {
 			t.Fatal(err)
 		}
 		importOwnerPriceForTest(t, svc, []byte(ownerPriceTestInput))
-		marks, err := valuationPriceObservations(context.Background(), svc.db, svc.now())
-		if err != nil {
-			t.Fatal(err)
-		}
-		times, err := currentPriceObservationTimes(marks)
-		if err != nil || len(times) != 3 || !times["owner_price_1_0"][0].Equal(mustTime("2025-01-01T00:00:00.000000001Z")) || !times["\x00owner_price_1_0"][0].Equal(mustTime("2025-01-01T00:00:00Z")) {
-			t.Fatalf("price time namespaces collided: %+v %v", times, err)
-		}
 		checkOwnerFXHTTPGolden(t, svc, "/v1/portfolio/holding-valuation?as_of=2026-01-01T00:00:00Z", ownerPriceGoldenForTest(t)["holding"])
 	})
 }

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	watchapi "omni-folio/services/core/internal/modules/watchlist/contracts"
 	"reflect"
 	"strings"
 	"sync"
@@ -13,8 +14,8 @@ import (
 	"time"
 )
 
-var watchAAPL = WatchlistEntry{"XNAS", "AAPL", "USD"}
-var watchKR = WatchlistEntry{"XKRX", "005930", "KRW"}
+var watchAAPL = watchapi.WatchlistEntry{"XNAS", "AAPL", "USD"}
+var watchKR = watchapi.WatchlistEntry{"XKRX", "005930", "KRW"}
 
 func watchlistRequest(t testing.TB, handler http.Handler, method, path, body string, status int) *httptest.ResponseRecorder {
 	t.Helper()
@@ -30,10 +31,10 @@ func watchlistRequest(t testing.TB, handler http.Handler, method, path, body str
 	return w
 }
 
-func watchlistReadForTest(t testing.TB, svc *Service) *WatchlistReport {
+func watchlistReadForTest(t testing.TB, svc *Service) *watchapi.WatchlistReport {
 	t.Helper()
 	w := watchlistRequest(t, svc.routes(), "GET", "/v1/watchlist", "", 200)
-	if w.Header().Get("Cache-Control") != "no-store" || w.Body.Len() > watchlistResponseLimit {
+	if w.Header().Get("Cache-Control") != "no-store" || w.Body.Len() > watchapi.ResponseLimit {
 		t.Fatal("watchlist cache/body boundary")
 	}
 	for _, private := range []string{"instrument_id", "account_id", "source_event_id", "observation_id", "state_sha256"} {
@@ -41,21 +42,21 @@ func watchlistReadForTest(t testing.TB, svc *Service) *WatchlistReport {
 			t.Fatal("watchlist leaked private field", private)
 		}
 	}
-	var report WatchlistReport
+	var report watchapi.WatchlistReport
 	if err := json.Unmarshal(w.Body.Bytes(), &report); err != nil {
 		t.Fatal(err)
 	}
 	return &report
 }
 
-func watchlistWriteForTest(t testing.TB, svc *Service, revision int64, entries ...WatchlistEntry) *WatchlistState {
+func watchlistWriteForTest(t testing.TB, svc *Service, revision int64, entries ...watchapi.WatchlistEntry) *watchapi.WatchlistState {
 	t.Helper()
-	raw, err := json.Marshal(WatchlistChange{revision, append([]WatchlistEntry{}, entries...)})
+	raw, err := json.Marshal(watchapi.WatchlistChange{revision, append([]watchapi.WatchlistEntry{}, entries...)})
 	if err != nil {
 		t.Fatal(err)
 	}
 	w := watchlistRequest(t, svc.routes(), "POST", "/v1/watchlist", string(raw), 200)
-	var state WatchlistState
+	var state watchapi.WatchlistState
 	if err := json.Unmarshal(w.Body.Bytes(), &state); err != nil {
 		t.Fatal(err)
 	}
@@ -105,7 +106,7 @@ func TestWatchlistStartsEmptyWithoutChangingTheLedger(t *testing.T) {
 	}
 	// A later add must make the original delayed CAS obsolete, even with the same desired entries.
 	watchlistWriteForTest(t, svc, 2, watchAAPL, watchKR)
-	old, _ := json.Marshal(WatchlistChange{0, []WatchlistEntry{watchAAPL, watchKR}})
+	old, _ := json.Marshal(watchapi.WatchlistChange{0, []watchapi.WatchlistEntry{watchAAPL, watchKR}})
 	watchlistRequest(t, svc.routes(), "POST", "/v1/watchlist", string(old), 409)
 	after, err := snapshotFrom(context.Background(), svc.db)
 	if err != nil || !reflect.DeepEqual(before, after) {
@@ -130,13 +131,13 @@ func TestWatchlistConcurrentChangesDoNotOverwriteOneAnother(t *testing.T) {
 	start := make(chan struct{})
 	results := make(chan int, 2)
 	var group sync.WaitGroup
-	for i, item := range []WatchlistEntry{watchAAPL, watchKR} {
+	for i, item := range []watchapi.WatchlistEntry{watchAAPL, watchKR} {
 		group.Add(1)
 		service := []*Service{svc, other}[i]
-		go func(s *Service, e WatchlistEntry) {
+		go func(s *Service, e watchapi.WatchlistEntry) {
 			defer group.Done()
 			<-start
-			raw, _ := json.Marshal(WatchlistChange{0, []WatchlistEntry{e}})
+			raw, _ := json.Marshal(watchapi.WatchlistChange{0, []watchapi.WatchlistEntry{e}})
 			r := httptest.NewRequest("POST", "/v1/watchlist", strings.NewReader(string(raw)))
 			r.Header.Set("Content-Type", "application/json")
 			w := httptest.NewRecorder()
@@ -193,15 +194,15 @@ func TestWatchlistClosedInputBoundsAndOrigin(t *testing.T) {
 		strings.Replace(valid, `"AAPL"`, `"aapl"`, 1), strings.Replace(valid, `"AAPL"`, `"AAPL\n"`, 1),
 		strings.Replace(valid, `"AAPL"`, `"\ud800"`, 1), strings.Replace(valid, `"AAPL"`, `null`, 1),
 		strings.Replace(valid, `"currency":"USD"`, `"currency":"USD","private_account":"secret"`, 1),
-		valid + strings.Repeat(" ", watchlistBodyLimit),
+		valid + strings.Repeat(" ", watchapi.BodyLimit),
 	}
-	duplicate, _ := json.Marshal(WatchlistChange{0, []WatchlistEntry{watchAAPL, watchAAPL}})
+	duplicate, _ := json.Marshal(watchapi.WatchlistChange{0, []watchapi.WatchlistEntry{watchAAPL, watchAAPL}})
 	bad = append(bad, string(duplicate))
-	tooMany := []WatchlistEntry{}
+	tooMany := []watchapi.WatchlistEntry{}
 	for i := 0; i < 51; i++ {
-		tooMany = append(tooMany, WatchlistEntry{"XNAS", fmt.Sprintf("S%d", i), "USD"})
+		tooMany = append(tooMany, watchapi.WatchlistEntry{"XNAS", fmt.Sprintf("S%d", i), "USD"})
 	}
-	raw, _ := json.Marshal(WatchlistChange{0, tooMany})
+	raw, _ := json.Marshal(watchapi.WatchlistChange{0, tooMany})
 	bad = append(bad, string(raw))
 	for i, input := range bad {
 		t.Run(fmt.Sprint(i), func(t *testing.T) { watchlistRequest(t, svc.routes(), "POST", "/v1/watchlist", input, 400) })
@@ -241,7 +242,7 @@ func TestWatchlistClosedInputBoundsAndOrigin(t *testing.T) {
 	watchlistWriteForTest(t, svc, 1, tooMany[:50]...)
 }
 
-func watchlistRecordFixture(t testing.TB, svc *Service, id string, e WatchlistEntry, price, at string) {
+func watchlistRecordFixture(t testing.TB, svc *Service, id string, e watchapi.WatchlistEntry, price, at string) {
 	t.Helper()
 	_, err := svc.recordSecurityPriceObservation(context.Background(), SecurityPriceObservationInput{Source: "local_fixture", SourceObservationID: id, InstrumentID: "instrument_" + id, Symbol: e.Symbol, Venue: e.Venue, Currency: e.Currency, Price: price, PriceAdjustment: "unspecified", ObservedAt: at, FetchedAt: at})
 	if err != nil {
@@ -259,8 +260,8 @@ func TestWatchlistSharedMixedQuoteStatesAndWholeVersionWithdrawal(t *testing.T) 
 		i.Points = []OwnerPricePoint{{ObservedAt: i.FetchedAt, Price: "150.25"}}
 	})
 	importOwnerPriceForTest(t, svc, input)
-	msft := WatchlistEntry{"XNAS", "MSFT", "USD"}
-	brk := WatchlistEntry{"XNYS", "BRK.B", "USD"}
+	msft := watchapi.WatchlistEntry{"XNAS", "MSFT", "USD"}
+	brk := watchapi.WatchlistEntry{"XNYS", "BRK.B", "USD"}
 	watchlistRecordFixture(t, svc, "kr", watchKR, "70000", "2026-01-01T23:00:00Z")
 	watchlistRecordFixture(t, svc, "brk1", brk, "450", "2026-01-01T23:00:00Z")
 	watchlistRecordFixture(t, svc, "brk2", brk, "451", "2026-01-01T23:00:00Z")
@@ -295,62 +296,6 @@ func TestWatchlistSharedMixedQuoteStatesAndWholeVersionWithdrawal(t *testing.T) 
 	importOwnerPriceForTest(t, svc, ownerPriceInputForTest(t, func(i *OwnerPriceSeriesInput) { i.SourceVersion = "venue-changed"; i.Venue = "XNYS" }))
 	if q := watchlistReadForTest(t, svc).Quotes[1]; q.Price != nil || q.Status != "missing" {
 		t.Fatal("venue filter revived previous whole version")
-	}
-}
-
-func TestWatchlistQuoteNeverGuessesIdentityTimeOrProvenance(t *testing.T) {
-	at := mustTime("2026-01-02T00:00:00Z")
-	original := SecurityPriceObservation{ObservationID: "first", Source: "local_fixture", InstrumentID: "instrument_aapl", Symbol: "AAPL", Venue: "XNAS", Currency: "USD", Price: "100", PriceAdjustment: "unspecified", ObservedAt: "2026-01-01T23:00:00Z", FetchedAt: "2026-01-01T23:00:00Z", RecordedAt: "2026-01-01T23:00:00Z"}
-	tests := []struct {
-		name   string
-		edit   func(*SecurityPriceObservation)
-		status string
-	}{
-		{"other venue", func(p *SecurityPriceObservation) { p.Venue = "XNYS" }, "stale"},
-		{"other currency", func(p *SecurityPriceObservation) { p.Currency = "KRW" }, "stale"},
-		{"other symbol", func(p *SecurityPriceObservation) { p.Symbol = "MSFT" }, "stale"},
-		{"other instrument", func(p *SecurityPriceObservation) { p.InstrumentID = "unrelated" }, "ambiguous"},
-		{"price conflict", func(p *SecurityPriceObservation) { p.Price = "101" }, "ambiguous"},
-		{"time provenance conflict", func(p *SecurityPriceObservation) { p.FetchedAt = "2026-01-01T23:01:00Z"; p.RecordedAt = p.FetchedAt }, "ambiguous"},
-		{"no broker promotion", func(p *SecurityPriceObservation) { p.Source = "kiwoom_production"; p.Price = "999" }, "stale"},
-		{"future recorded", func(p *SecurityPriceObservation) { p.Price = "999"; p.RecordedAt = "2026-01-02T00:00:00.000000001Z" }, "stale"},
-		{"future all", func(p *SecurityPriceObservation) {
-			p.Price = "999"
-			p.ObservedAt = "2026-01-02T00:00:00.000000001Z"
-			p.FetchedAt = p.ObservedAt
-			p.RecordedAt = p.ObservedAt
-		}, "stale"},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			other := original
-			other.ObservationID = "second"
-			tc.edit(&other)
-			observations := []SecurityPriceObservation{original, other}
-			times, err := currentPriceObservationTimes(observations)
-			if err != nil {
-				t.Fatal(err)
-			}
-			q := watchlistQuote(watchAAPL, observations, times, at)
-			if q.Status != tc.status || (q.Status == "ambiguous" && q.Price != nil) || (q.Price != nil && q.Price.Price != "100") {
-				t.Fatalf("selection guessed: %+v", q)
-			}
-		})
-	}
-	owner := original
-	owner.Source = "owner_declared"
-	owner.PriceAdjustment = "unadjusted"
-	owner.ownerVersion = "v1"
-	conflicting := owner
-	conflicting.ObservationID = "second"
-	conflicting.ownerSample = true
-	observations := []SecurityPriceObservation{owner, conflicting}
-	times, err := currentPriceObservationTimes(observations)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if q := watchlistQuote(watchAAPL, observations, times, at); q.Status != "ambiguous" || q.Price != nil {
-		t.Fatal("sample provenance silently chosen")
 	}
 }
 

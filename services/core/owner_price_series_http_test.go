@@ -42,11 +42,11 @@ func TestOwnerPriceImportFeedsCurrentAndPerformance(t *testing.T) {
 	if err := runContext(context.Background(), []string{"owner-price-import", "-db", dbPath, "-input", input}); err != nil {
 		t.Fatalf("owner price ingress unavailable: %v", err)
 	}
-	value, appErr := svc.currentPortfolioValuation(context.Background())
+	value, appErr := svc.portfolio.CurrentValuation(context.Background())
 	if appErr != nil || value.TotalValue == nil || value.TotalValue.Amount != "200" || value.Sample || value.Status != "complete" {
 		t.Fatalf("owner price did not reach current value: %+v %v", value, appErr)
 	}
-	report, appErr := svc.portfolioTWR(context.Background())
+	report, appErr := svc.portfolio.TWR(context.Background())
 	if appErr != nil || report.CumulativeRate == nil || *report.CumulativeRate != "1" || report.Sample {
 		t.Fatalf("owner price did not reach TWR: %+v %v", report, appErr)
 	}

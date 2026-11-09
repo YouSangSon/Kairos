@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	portfolioapi "omni-folio/services/core/internal/modules/portfolio/contracts"
 	"os"
 	"reflect"
 	"strings"
@@ -47,7 +48,7 @@ func TestPortfolioTWRNeutralizesAdditionalCapital(t *testing.T) {
 	}
 }
 
-func twrHTTPReport(t *testing.T, svc *Service) *PortfolioTWR {
+func twrHTTPReport(t *testing.T, svc *Service) *portfolioapi.PortfolioTWR {
 	t.Helper()
 	w := httptest.NewRecorder()
 	svc.routes().ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/v1/portfolio/twr", nil))
@@ -62,14 +63,14 @@ func twrHTTPReport(t *testing.T, svc *Service) *PortfolioTWR {
 			t.Fatalf("private field leaked: %s", key)
 		}
 	}
-	var r PortfolioTWR
+	var r portfolioapi.PortfolioTWR
 	if err := json.Unmarshal(w.Body.Bytes(), &r); err != nil {
 		t.Fatal(err)
 	}
 	return &r
 }
 
-func requireTWR(t *testing.T, r *PortfolioTWR, wantRate, wantIssue string) {
+func requireTWR(t *testing.T, r *portfolioapi.PortfolioTWR, wantRate, wantIssue string) {
 	t.Helper()
 	if wantIssue == "" {
 		if r.Status != "calculated" || r.CumulativeRate == nil || *r.CumulativeRate != wantRate {
@@ -330,7 +331,7 @@ func TestPortfolioTWRProofAndCutoff(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := svc.portfolioTWR(ctx); err == nil {
+	if _, err := svc.portfolio.TWR(ctx); err == nil {
 		t.Fatal("canceled request continued")
 	}
 }

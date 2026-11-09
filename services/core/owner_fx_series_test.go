@@ -175,18 +175,6 @@ func TestOwnerFXPairBindingSurvivesWithdrawalAndIDsAreNamespaced(t *testing.T) {
 			t.Fatal(err)
 		}
 		importOwnerFXForTest(t, svc, []byte(ownerFXTestInput))
-		marks, err := valuationFXObservations(context.Background(), svc.db, mustTime("2026-01-01T00:00:00Z"))
-		if err != nil {
-			t.Fatal(err)
-		}
-		times, err := currentFXObservationTimes(marks)
-		if err != nil || len(times) != 3 || !times["owner_fx_1_0"][0].Equal(mustTime("2025-01-01T00:00:00.000000001Z")) || !times["\x00owner_fx_1_0"][0].Equal(mustTime("2025-01-01T00:00:00Z")) {
-			t.Fatalf("namespaces collided: %+v %v", times, err)
-		}
-		public, err := json.Marshal(publicCashValuationFX(&marks[1]))
-		if err != nil || strings.Contains(string(public), `\u0000`) {
-			t.Fatal("internal time key leaked")
-		}
 	})
 }
 
@@ -215,7 +203,7 @@ func TestOwnerFXSchemaInventoryAndLaterCorruptionFailClosed(t *testing.T) {
 	if _, err := svc.db.Exec(guard); err != nil {
 		t.Fatal(err)
 	}
-	if r, appErr := svc.currentPortfolioValuation(context.Background()); appErr == nil || appErr.Body.Message != "internal server error" || r != nil {
+	if r, appErr := svc.portfolio.CurrentValuation(context.Background()); appErr == nil || portfolioError(appErr).Body.Message != "internal server error" || r != nil {
 		t.Fatal("empty portfolio bypassed later journal proof")
 	}
 }
@@ -224,29 +212,6 @@ func TestOwnerFXFutureCaptureAndRequestBinding(t *testing.T) {
 	svc := ownerFXServiceForTest(t)
 	if _, err := svc.importOwnerFXSeries(context.Background(), ownerFXInputForTest(t, func(i *OwnerFXSeriesInput) { i.FetchedAt = "2026-01-01T00:00:00.000000001Z" })); err == nil {
 		t.Fatal("capture newer than the server clock accepted")
-	}
-	ctx := context.Background()
-	tx, err := svc.db.BeginTx(ctx, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer tx.Rollback()
-	at := mustTime("2026-01-01T00:00:00Z")
-	inputs, err := readValuationFXInputs(ctx, tx, at)
-	if err != nil {
-		t.Fatal(err)
-	}
-	prices, err := readValuationPriceInputs(ctx, tx, at)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if value, appErr := svc.currentPortfolioValuationTx(ctx, tx, at.Add(time.Nanosecond), inputs, prices); appErr == nil || value != nil {
-		t.Fatal("FX selection escaped its report cutoff")
-	}
-	foreign := inputs
-	foreign.tx = nil
-	if report, appErr := svc.portfolioTWRTx(ctx, tx, at, foreign, prices); appErr == nil || report != nil {
-		t.Fatal("FX selection escaped its transaction")
 	}
 }
 

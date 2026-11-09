@@ -77,7 +77,7 @@ func TestOwnerFXBackupRestoresWholeVersionsAndProvesEachField(t *testing.T) {
 		t.Fatal("original version lost in restore")
 	}
 	copySvc := newService(db, svc.now, svc.id)
-	value, appErr := copySvc.currentPortfolioValuation(context.Background())
+	value, appErr := copySvc.portfolio.CurrentValuation(context.Background())
 	if appErr != nil || value.TotalValue == nil || value.TotalValue.Amount != "120000" || value.Sample || !usesOwnerFX(value.Issues) {
 		t.Fatalf("latest restored FX changed value: %+v %v", value, appErr)
 	}
@@ -256,7 +256,7 @@ func TestOwnerFXRestorePreservesWithdrawalAndPairBinding(t *testing.T) {
 	}
 	defer db.Close()
 	copySvc := newService(db, svc.now, svc.id)
-	value, appErr := copySvc.currentPortfolioValuation(context.Background())
+	value, appErr := copySvc.portfolio.CurrentValuation(context.Background())
 	if appErr != nil || value.TotalValue != nil || value.Status != "unavailable" || usesOwnerFX(value.Issues) {
 		t.Fatalf("withdrawal fell back after restore: %+v %v", value, appErr)
 	}

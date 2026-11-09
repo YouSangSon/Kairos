@@ -92,11 +92,11 @@ func TestOwnerDataImportHTTPReviewApplyAndExactRetry(t *testing.T) {
 			t.Fatal("exact HTTP retry changed its receipt")
 		}
 	}
-	value, err := svc.currentPortfolioValuation(context.Background())
+	value, err := svc.portfolio.CurrentValuation(context.Background())
 	if err != nil || value.TotalValue == nil || value.TotalValue.Amount != "180000" || value.Sample || !usesOwnerPrice(value.Issues) || !usesOwnerFX(value.Issues) {
 		t.Fatalf("HTTP input did not reach the portfolio value: %+v %v", value, err)
 	}
-	comparison, err := svc.portfolioBenchmarks(context.Background())
+	comparison, err := svc.portfolio.Benchmarks(context.Background())
 	if err != nil || len(comparison.Benchmarks) != 2 {
 		t.Fatalf("both benchmark currencies did not reach comparison: %+v %v", comparison, err)
 	}

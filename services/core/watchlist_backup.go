@@ -2,19 +2,10 @@ package main
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"errors"
+	watchapi "omni-folio/services/core/internal/modules/watchlist/contracts"
 )
-
-func verifyWatchlistRestoreProof(path string) (watchlistRecoveryProof, error) {
-	db, err := openReadOnlyExistingDB(context.Background(), path)
-	if err != nil {
-		return watchlistRecoveryProof{}, err
-	}
-	defer db.Close()
-	return proveWatchlistRecovery(context.Background(), db)
-}
 
 func requireWatchlistManifestFields(fields, receipt map[string]json.RawMessage, current bool) error {
 	for _, group := range []struct {
@@ -37,7 +28,7 @@ func requireWatchlistManifestFields(fields, receipt map[string]json.RawMessage, 
 	return nil
 }
 
-func watchlistManifestMatches(manifest BackupManifest, proof watchlistRecoveryProof) bool {
+func watchlistManifestMatches(manifest BackupManifest, proof watchapi.RecoveryProof) bool {
 	r := manifest.VerificationReceipt
 	return manifest.WatchlistStateSHA256 == proof.SHA256 && manifest.WatchlistRevision == proof.Revision && manifest.WatchlistEntryCount == proof.Entries &&
 		r.WatchlistCheck == "ok" && r.CandidateWatchlistStateSHA256 == proof.SHA256 && r.CandidateWatchlistRevision == proof.Revision && r.CandidateWatchlistEntryCount == proof.Entries

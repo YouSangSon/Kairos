@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"net/http"
+	portfolioapi "omni-folio/services/core/internal/modules/portfolio/contracts"
 	"strings"
 	"testing"
 	"time"
@@ -16,7 +17,7 @@ func TestHoldingValuationUsesExactNativePriceAndKeepsSnapshotUnavailable(t *test
 	price := recordHoldingValuationPrice(t, svc, "fixture_aapl_xnas", "XNAS", "15", "2026-01-10T14:00:00Z", "2026-01-10T14:00:01Z", "2026-01-11T13:00:00Z")
 	svc.now = func() time.Time { return mustTime(holdingValuationAsOf) }
 
-	valuation, appErr := svc.holdingValuation(context.Background(), holdingValuationAsOf)
+	valuation, appErr := svc.portfolio.portfolioapi.HoldingValuation(context.Background(), holdingValuationAsOf)
 	if appErr != nil {
 		t.Fatal(appErr)
 	}
@@ -85,7 +86,7 @@ func TestHoldingValuationSuppressesTotalsAndFailsClosed(t *testing.T) {
 				recordHoldingValuationPrice(t, svc, price.id, price.venue, "15", price.observed, price.fetched, price.recorded)
 			}
 			svc.now = func() time.Time { return mustTime("2026-01-11T15:00:00Z") }
-			valuation, appErr := svc.holdingValuation(context.Background(), holdingValuationAsOf)
+			valuation, appErr := svc.portfolio.portfolioapi.HoldingValuation(context.Background(), holdingValuationAsOf)
 			if appErr != nil {
 				t.Fatal(appErr)
 			}
@@ -108,8 +109,8 @@ func TestHoldingValuationSuppressesTotalsAndFailsClosed(t *testing.T) {
 			t.Fatal(err)
 		}
 		svc.now = func() time.Time { return mustTime(holdingValuationAsOf) }
-		valuation, appErr := svc.holdingValuation(context.Background(), holdingValuationAsOf)
-		if valuation != nil || appErr == nil || appErr.Status != http.StatusInternalServerError || appErr.Body.Message != "internal server error" {
+		valuation, appErr := svc.portfolio.portfolioapi.HoldingValuation(context.Background(), holdingValuationAsOf)
+		if valuation != nil || appErr == nil || portfolioError(appErr).Status != http.StatusInternalServerError || portfolioError(appErr).Body.Message != "internal server error" {
 			t.Fatalf("corrupt ledger revision was certified: valuation=%+v err=%v", valuation, appErr)
 		}
 	})

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	portfolioapi "omni-folio/services/core/internal/modules/portfolio/contracts"
 	"reflect"
 	"strings"
 	"testing"
@@ -58,7 +59,7 @@ func TestPortfolioTWRCheckpointsExposeTheSameObservation(t *testing.T) {
 	}
 }
 
-func twrCheckpointsHTTP(t *testing.T, svc *Service) *PortfolioTWRCheckpoints {
+func twrCheckpointsHTTP(t *testing.T, svc *Service) *portfolioapi.PortfolioTWRCheckpoints {
 	t.Helper()
 	w := httptest.NewRecorder()
 	svc.routes().ServeHTTP(w, httptest.NewRequest("GET", "/v1/portfolio/twr/checkpoints", nil))
@@ -70,7 +71,7 @@ func twrCheckpointsHTTP(t *testing.T, svc *Service) *PortfolioTWRCheckpoints {
 			t.Fatal("private field leaked")
 		}
 	}
-	var result PortfolioTWRCheckpoints
+	var result portfolioapi.PortfolioTWRCheckpoints
 	if json.Unmarshal(w.Body.Bytes(), &result) != nil {
 		t.Fatal("invalid checkpoint response")
 	}

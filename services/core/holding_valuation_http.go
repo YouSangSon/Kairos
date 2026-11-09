@@ -16,9 +16,9 @@ func (s *Service) handleHoldingValuation(w http.ResponseWriter, r *http.Request)
 	if values, ok := query["as_of"]; ok {
 		asOf = values[0]
 	}
-	valuation, appErr := s.holdingValuation(r.Context(), asOf)
+	valuation, appErr := s.portfolio.HoldingValuation(r.Context(), asOf)
 	if appErr != nil {
-		writeError(w, appErr)
+		writeError(w, portfolioError(appErr))
 		return
 	}
 	// Whitelist the public view; durable instrument and observation IDs stay internal.
