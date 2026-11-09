@@ -114,19 +114,19 @@ func (s *scope) LatestBenchmark(ctx context.Context, id string) (*c.BenchmarkSer
 	return &result, err
 }
 func (s *scope) LastRecorded(ctx context.Context, kind string) (string, error) {
-	var query string
+	var row observation.Scanner
 	switch kind {
 	case "security_price":
-		query = `SELECT recorded_at FROM owner_price_series_versions ORDER BY sequence DESC LIMIT 1`
+		row = s.q.QueryRowContext(ctx, `SELECT recorded_at FROM owner_price_series_versions ORDER BY sequence DESC LIMIT 1`)
 	case "fx":
-		query = `SELECT recorded_at FROM owner_fx_series_versions ORDER BY sequence DESC LIMIT 1`
+		row = s.q.QueryRowContext(ctx, `SELECT recorded_at FROM owner_fx_series_versions ORDER BY sequence DESC LIMIT 1`)
 	case "benchmark":
-		query = `SELECT recorded_at FROM benchmark_series_versions ORDER BY sequence DESC LIMIT 1`
+		row = s.q.QueryRowContext(ctx, `SELECT recorded_at FROM benchmark_series_versions ORDER BY sequence DESC LIMIT 1`)
 	default:
 		return "", errors.New("owner data clock kind is invalid")
 	}
 	var recorded string
-	err := s.q.QueryRowContext(ctx, query).Scan(&recorded)
+	err := row.Scan(&recorded)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", nil
 	}
