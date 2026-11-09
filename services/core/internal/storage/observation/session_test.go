@@ -104,9 +104,164 @@ func TestObservationFailureReleasesConnection(t *testing.T) {
 
 func TestReadRegistryRejectsWriteAndDynamicStatements(t *testing.T) {
 	registry := New(nil, time.Now)
-	for _, statement := range []string{`DELETE FROM events RETURNING value`, `SELECT 1; DELETE FROM events`, `PRAGMA writable_schema=1`, `SELECT load_extension(?)`, `SELECT * FROM owner_price_series_versions`} {
+	for _, statement := range []string{`DELETE FROM events RETURNING value`, `SELECT 1; DELETE FROM events`, `PRAGMA writable_schema=1`, `SELECT load_extension(?)`, `SELECT * FROM owner_price_series_versions`, `SELECT * FROM events, order_events`, `SELECT name FROM sqlite_master WHERE 1=1 OR tbl_name='events'`} {
 		if _, err := registry.LedgerReader([]Statement{{SQL: statement}}); err == nil {
 			t.Errorf("accepted %q", statement)
 		}
+	}
+}
+
+func TestObservationRowsAndDelayedScanCannotEscape(t *testing.T) {
+	db, err := sql.Open("sqlite3", filepath.Join(t.TempDir(), "rows.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+	if _, err := db.Exec(`CREATE TABLE events(value INTEGER); INSERT INTO events VALUES(7)`); err != nil {
+		t.Fatal(err)
+	}
+	registry := New(db, time.Now)
+	reader, err := registry.LedgerReader([]Statement{{SQL: `SELECT value FROM events`}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rows Rows
+	var scan Scanner
+	err = registry.ReadValuation(context.Background(), func(ref storage.ObservationRef, _ time.Time) error {
+		handle, err := reader.Resolve(ref)
+		if err != nil {
+			return err
+		}
+		rows, err = handle.Query(context.Background(), `SELECT value FROM events`)
+		scan = handle.QueryOne(context.Background(), `SELECT value FROM events`)
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rows.Next() || !errors.Is(rows.Err(), ErrReference) {
+		t.Fatal("rows survived observation")
+	}
+	var value int
+	if err := scan.Scan(&value); !errors.Is(err, ErrReference) {
+		t.Fatalf("delayed scan survived observation: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := db.PingContext(ctx); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestObservationPreservesOneSnapshotAcrossWriters(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "snapshot.db")
+	db, err := sql.Open("sqlite3", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+	if _, err := db.Exec(`PRAGMA journal_mode=WAL; CREATE TABLE events(value INTEGER); CREATE TABLE fx_observations(value INTEGER); INSERT INTO events VALUES(1); INSERT INTO fx_observations VALUES(1)`); err != nil {
+		t.Fatal(err)
+	}
+	writer, err := sql.Open("sqlite3", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Close()
+	registry := New(db, time.Now)
+	ledger, err := registry.LedgerReader([]Statement{{SQL: `SELECT value FROM events`}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	market, err := registry.MarketReader([]Statement{{SQL: `SELECT value FROM fx_observations`}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = registry.ReadValuation(context.Background(), func(ref storage.ObservationRef, _ time.Time) error {
+		l, err := ledger.Resolve(ref)
+		if err != nil {
+			return err
+		}
+		var before, after int
+		if err := l.QueryOne(context.Background(), `SELECT value FROM events`).Scan(&before); err != nil {
+			return err
+		}
+		if _, err := writer.Exec(`BEGIN; UPDATE events SET value=2; UPDATE fx_observations SET value=2; COMMIT`); err != nil {
+			return err
+		}
+		m, err := market.Resolve(ref)
+		if err != nil {
+			return err
+		}
+		if err := m.QueryOne(context.Background(), `SELECT value FROM fx_observations`).Scan(&after); err != nil {
+			return err
+		}
+		if before != 1 || after != 1 {
+			t.Fatalf("mixed snapshots %d/%d", before, after)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var committed int
+	if err := db.QueryRow(`SELECT value FROM events`).Scan(&committed); err != nil || committed != 2 {
+		t.Fatalf("writer did not commit: %d %v", committed, err)
+	}
+}
+
+func TestOwnerPriceImportPurposeRollbackAndCommitFailure(t *testing.T) {
+	db, err := sql.Open("sqlite3", filepath.Join(t.TempDir(), "atomic.db")+"?_foreign_keys=on")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+	if _, err := db.Exec(`CREATE TABLE events(value INTEGER PRIMARY KEY); INSERT INTO events VALUES(1); CREATE TABLE owner_price_series_versions(value INTEGER REFERENCES events(value) DEFERRABLE INITIALLY DEFERRED)`); err != nil {
+		t.Fatal(err)
+	}
+	registry := New(db, time.Now)
+	importer, err := registry.OwnerPriceWriter(nil, []Statement{{SQL: `INSERT INTO owner_price_series_versions(value) VALUES(?)`, Arguments: 1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.ReadValuation(context.Background(), func(ref storage.ObservationRef, _ time.Time) error {
+		if _, err := importer.Resolve(ref); !errors.Is(err, ErrReference) {
+			t.Fatalf("wrong purpose accepted: %v", err)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	want := errors.New("abort after persist")
+	err = registry.ImportOwnerPrice(context.Background(), func(ref storage.ObservationRef, _ time.Time) error {
+		handle, err := importer.Resolve(ref)
+		if err != nil {
+			return err
+		}
+		if _, err := handle.Execute(context.Background(), `INSERT INTO owner_price_series_versions(value) VALUES(?)`, 1); err != nil {
+			return err
+		}
+		return want
+	})
+	if !errors.Is(err, want) {
+		t.Fatal(err)
+	}
+	err = registry.ImportOwnerPrice(context.Background(), func(ref storage.ObservationRef, _ time.Time) error {
+		handle, err := importer.Resolve(ref)
+		if err != nil {
+			return err
+		}
+		_, err = handle.Execute(context.Background(), `INSERT INTO owner_price_series_versions(value) VALUES(?)`, 2)
+		return err
+	})
+	if err == nil {
+		t.Fatal("deferred FK commit failure was hidden")
+	}
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM owner_price_series_versions`).Scan(&count); err != nil || count != 0 {
+		t.Fatalf("failed import persisted %d rows: %v", count, err)
 	}
 }

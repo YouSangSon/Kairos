@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"regexp"
 	"strings"
 	"time"
 
@@ -144,7 +143,7 @@ func authorized(statements map[string]Statement, query string, args []any) bool 
 	return true
 }
 
-func (h *ReadHandle) Query(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
+func (h *ReadHandle) Query(ctx context.Context, query string, args ...any) (Rows, error) {
 	if h == nil || !authorized(h.statements, query, args) {
 		return nil, ErrStatement
 	}
@@ -153,19 +152,20 @@ func (h *ReadHandle) Query(ctx context.Context, query string, args ...any) (*sql
 	if !h.session.active {
 		return nil, ErrReference
 	}
-	return h.session.tx.QueryContext(ctx, query, args...)
+	raw, err := h.session.tx.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	rows := &scopedRows{session: h.session, rows: raw}
+	h.session.rows[rows] = struct{}{}
+	return rows, nil
 }
 
 func (h *ReadHandle) QueryOne(ctx context.Context, query string, args ...any) Scanner {
 	if h == nil || !authorized(h.statements, query, args) {
 		return failedScan{ErrStatement}
 	}
-	h.session.mu.Lock()
-	defer h.session.mu.Unlock()
-	if !h.session.active {
-		return failedScan{ErrReference}
-	}
-	return h.session.tx.QueryRowContext(ctx, query, args...)
+	return &scopedScanner{handle: h, ctx: ctx, query: query, args: append([]any(nil), args...)}
 }
 
 func (h *ImportHandle) Execute(ctx context.Context, query string, args ...any) (sql.Result, error) {
@@ -180,98 +180,38 @@ func (h *ImportHandle) Execute(ctx context.Context, query string, args ...any) (
 	return h.session.tx.ExecContext(ctx, query, args...)
 }
 
-var sqlTokens = regexp.MustCompile(`'(?:''|[^'])*'|"(?:""|[^"])*"|\[[^\]]*\]|[A-Za-z_][A-Za-z0-9_]*|[?;(),.]`)
-
 func validateStatement(owner string, statement Statement, write bool) error {
-	tokens := sqlTokens.FindAllString(statement.SQL, -1)
-	if len(tokens) == 0 || statement.Arguments < 0 || strings.Contains(statement.SQL, "--") || strings.Contains(statement.SQL, "/*") {
+	fields := strings.Fields(statement.SQL)
+	if len(fields) == 0 {
 		return ErrStatement
 	}
-	operation := strings.ToUpper(tokens[0])
-	if write {
-		if operation != "INSERT" {
-			return ErrStatement
-		}
-	} else if operation != "SELECT" {
+	operation := strings.ToUpper(fields[0])
+	if statement.Arguments < 0 || (write && operation != "INSERT") || (!write && operation != "SELECT") {
 		return ErrStatement
 	}
-	arguments, tables, catalog := 0, 0, false
-	for i, token := range tokens {
-		upper := strings.ToUpper(token)
-		if token == "?" {
-			arguments++
-		}
-		if token == ";" {
-			return ErrStatement
-		}
-		if strings.HasPrefix(token, "'") {
-			continue
-		}
-		switch upper {
-		case "ATTACH", "DETACH", "PRAGMA", "UPDATE", "DELETE", "DROP", "ALTER", "CREATE", "REPLACE", "LOAD_EXTENSION", "WRITEFILE", "READFILE":
-			return ErrStatement
-		case "INSERT":
-			if !write || i != 0 {
-				return ErrStatement
-			}
-		}
-		if upper != "FROM" && upper != "JOIN" && upper != "INTO" {
-			continue
-		}
-		if i+1 >= len(tokens) {
-			return ErrStatement
-		}
-		next := tokens[i+1]
-		if next == "(" {
-			continue
-		}
-		if i+2 < len(tokens) && tokens[i+2] == "." {
-			return ErrStatement
-		}
-		table := strings.Trim(next, "\"[]")
-		if ownership.IsCatalog(table) {
-			catalog = true
-			continue
-		}
-		actual, ok := ownership.Owner(table)
-		if !ok || (actual != owner && table != ownership.ControlTable) {
-			return fmt.Errorf("%w: %s cannot access %s", ErrStatement, owner, table)
-		}
-		if write && table != "owner_price_series_versions" {
-			return ErrStatement
-		}
-		tables++
-	}
-	if arguments != statement.Arguments || (write && (tables != 1 || catalog)) {
+	if write && !strings.Contains(statement.SQL, "INTO owner_price_series_versions") {
 		return ErrStatement
 	}
-	if catalog {
-		if !strings.Contains(strings.ToUpper(statement.SQL), "WHERE") {
+	if err := ownership.ValidateSQL(owner, statement.SQL, statement.Objects); err != nil {
+		return fmt.Errorf("%w: %v", ErrStatement, err)
+	}
+	indexes, err := ownership.CatalogArguments(statement.SQL)
+	if err != nil || len(indexes) != len(statement.ObjectArguments) {
+		return ErrStatement
+	}
+	for i, index := range indexes {
+		if index != statement.ObjectArguments[i] {
 			return ErrStatement
-		}
-		if len(statement.Objects) == 0 {
-			bounded := false
-			for _, table := range ownership.Tables(owner) {
-				bounded = bounded || strings.Contains(statement.SQL, "'"+table+"'")
-			}
-			if !bounded {
-				return ErrStatement
-			}
-		} else if len(statement.ObjectArguments) == 0 {
-			return ErrStatement
-		}
-		for _, object := range statement.Objects {
-			owned := false
-			for _, table := range ownership.Tables(owner) {
-				owned = owned || object == table || strings.HasPrefix(object, table+"_")
-			}
-			if !owned {
-				return ErrStatement
-			}
 		}
 	}
 	for _, index := range statement.ObjectArguments {
 		if index < 0 || index >= statement.Arguments {
+			return ErrStatement
+		}
+	}
+	for _, object := range statement.Objects {
+		actual, ok := ownership.ObjectOwner(object)
+		if !ok || actual != owner {
 			return ErrStatement
 		}
 	}
