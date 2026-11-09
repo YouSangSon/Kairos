@@ -417,7 +417,7 @@ func transparentSQLForwarder(path string, file *ast.File, call *ast.CallExpr) bo
 				parameters = append(parameters, name.Name)
 			}
 		}
-		if len(parameters) != 3 || len(call.Args) != 3 || !call.Ellipsis.IsValid() {
+		if len(function.Type.Params.List) != 3 || len(parameters) != 3 || len(call.Args) != 3 || !call.Ellipsis.IsValid() {
 			return false
 		}
 		for index, arg := range call.Args {

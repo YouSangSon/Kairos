@@ -18,6 +18,8 @@ var approvedSQLFunctions = map[string]bool{
 }
 var sqlParentheses = map[string]bool{"and": true, "or": true, "not": true, "in": true, "exists": true, "cast": true, "select": true, "from": true, "join": true, "where": true, "when": true, "then": true, "else": true, "on": true, "using": true, "values": true, "filter": true}
 
+func isCatalog(name string) bool { return IsCatalog(name) || name == "pragma_table_list" }
+
 func sqlTokens(source string) ([]sqlToken, error) {
 	var tokens []sqlToken
 	arguments := 0
@@ -226,7 +228,7 @@ func sqlTableReferences(tokens []sqlToken) ([]sqlReference, bool, error) {
 					return nil, false, fmt.Errorf("unsupported table-valued function %s", name)
 				}
 			}
-			if IsCatalog(name) {
+			if isCatalog(name) {
 				if token.text != "from" || tablesAtDepth[depth] > 0 {
 					return nil, false, fmt.Errorf("catalog joins are unsupported")
 				}
@@ -267,7 +269,7 @@ func validateSQLTokens(owner string, tokens []sqlToken, catalogObjects []string,
 	}
 	for _, reference := range tables {
 		table := reference.name
-		if IsCatalog(table) {
+		if isCatalog(table) {
 			if write {
 				return fmt.Errorf("catalog is read only")
 			}
@@ -330,7 +332,7 @@ func catalogPredicates(owner string, tokens []sqlToken, objects []string, collec
 			continue
 		}
 		name, next, err := tableAt(tokens, i+1)
-		if err != nil || !IsCatalog(name) {
+		if err != nil || !isCatalog(name) {
 			continue
 		}
 		qualifier := name
@@ -381,13 +383,17 @@ func catalogPredicates(owner string, tokens []sqlToken, objects []string, collec
 		if where < 0 || where >= end {
 			return nil, fmt.Errorf("unbounded catalog read")
 		}
-		parser := catalogPredicate{owner: owner, tokens: tokens[where:end], objects: objects, collect: collect, qualifier: qualifier}
+		parser := catalogPredicate{owner: owner, tokens: tokens[where:end], objects: objects, collect: collect, qualifier: qualifier, table: name}
 		bounded, err := parser.or()
 		if err != nil {
 			return nil, err
 		}
 		arguments = append(arguments, parser.arguments...)
-		if parser.at != len(parser.tokens) || !bounded {
+		required := uint8(1)
+		if name == "pragma_table_list" {
+			required = 7
+		}
+		if parser.at != len(parser.tokens) || bounded&required != required {
 			return nil, fmt.Errorf("catalog read lacks owned object restriction")
 		}
 	}
@@ -402,6 +408,7 @@ type catalogPredicate struct {
 	collect   bool
 	qualifier string
 	arguments []int
+	table     string
 }
 
 func (p *catalogPredicate) take(text string) bool {
@@ -411,74 +418,74 @@ func (p *catalogPredicate) take(text string) bool {
 	}
 	return false
 }
-func (p *catalogPredicate) or() (bool, error) {
+func (p *catalogPredicate) or() (uint8, error) {
 	bounded, err := p.and()
 	if err != nil {
-		return false, err
+		return 0, err
 	}
 	for p.take("or") {
 		right, err := p.and()
 		if err != nil {
-			return false, err
+			return 0, err
 		}
-		bounded = bounded && right
+		bounded = bounded & right
 	}
 	return bounded, nil
 }
-func (p *catalogPredicate) and() (bool, error) {
+func (p *catalogPredicate) and() (uint8, error) {
 	bounded, err := p.atom()
 	if err != nil {
-		return false, err
+		return 0, err
 	}
 	for p.take("and") {
 		right, err := p.atom()
 		if err != nil {
-			return false, err
+			return 0, err
 		}
-		bounded = bounded || right
+		bounded = bounded | right
 	}
 	return bounded, nil
 }
-func (p *catalogPredicate) atom() (bool, error) {
+func (p *catalogPredicate) atom() (uint8, error) {
 	if p.take("(") {
 		bounded, err := p.or()
 		if err != nil {
-			return false, err
+			return 0, err
 		}
 		if !p.take(")") {
-			return false, fmt.Errorf("unterminated catalog predicate")
+			return 0, fmt.Errorf("unterminated catalog predicate")
 		}
 		return bounded, nil
 	}
 	if p.at >= len(p.tokens) {
-		return false, fmt.Errorf("missing catalog predicate")
+		return 0, fmt.Errorf("missing catalog predicate")
 	}
 	key := p.tokens[p.at].text
 	p.at++
 	if p.take(".") {
 		if key != p.qualifier {
-			return false, fmt.Errorf("catalog predicate uses another table qualifier %s", key)
+			return 0, fmt.Errorf("catalog predicate uses another table qualifier %s", key)
 		}
 		if p.at >= len(p.tokens) {
-			return false, fmt.Errorf("missing catalog field")
+			return 0, fmt.Errorf("missing catalog field")
 		}
 		key = p.tokens[p.at].text
 		p.at++
 	}
-	if key != "name" && key != "tbl_name" && key != "type" {
-		return false, fmt.Errorf("unsupported catalog predicate %s", key)
+	if key != "name" && key != "tbl_name" && key != "type" && !(p.table == "pragma_table_list" && key == "schema") {
+		return 0, fmt.Errorf("unsupported catalog predicate %s", key)
 	}
 	var values []sqlToken
 	if p.take("=") {
 		if p.at >= len(p.tokens) {
-			return false, fmt.Errorf("missing catalog value")
+			return 0, fmt.Errorf("missing catalog value")
 		}
 		values = append(values, p.tokens[p.at])
 		p.at++
 	} else if p.take("in") && p.take("(") {
 		for {
 			if p.at >= len(p.tokens) {
-				return false, fmt.Errorf("missing catalog IN value")
+				return 0, fmt.Errorf("missing catalog IN value")
 			}
 			values = append(values, p.tokens[p.at])
 			p.at++
@@ -486,29 +493,42 @@ func (p *catalogPredicate) atom() (bool, error) {
 				continue
 			}
 			if !p.take(")") {
-				return false, fmt.Errorf("unsupported catalog IN")
+				return 0, fmt.Errorf("unsupported catalog IN")
 			}
 			break
 		}
 	} else {
-		return false, fmt.Errorf("unsupported catalog comparison")
+		return 0, fmt.Errorf("unsupported catalog comparison")
 	}
 	for _, value := range values {
+		if p.table == "pragma_table_list" && (key == "schema" || key == "type") {
+			expected := "main"
+			if key == "type" {
+				expected = "table"
+			}
+			if !value.literal || value.text != expected {
+				return 0, fmt.Errorf("pragma_table_list requires main table predicate")
+			}
+			continue
+		}
 		if key == "type" {
 			if !value.literal && value.text != "?" {
-				return false, fmt.Errorf("dynamic catalog type")
+				return 0, fmt.Errorf("dynamic catalog type")
 			}
 			continue
 		}
 		names := []string{value.text}
 		if value.text == "?" && !value.literal {
+			if p.table == "pragma_table_list" {
+				return 0, fmt.Errorf("pragma_table_list requires fixed object literal")
+			}
 			p.arguments = append(p.arguments, value.argument)
 			if !p.collect && len(p.objects) == 0 {
-				return false, fmt.Errorf("unbounded catalog object argument")
+				return 0, fmt.Errorf("unbounded catalog object argument")
 			}
 			names = p.objects
 		} else if !value.literal {
-			return false, fmt.Errorf("dynamic catalog object")
+			return 0, fmt.Errorf("dynamic catalog object")
 		}
 		for _, name := range names {
 			if p.collect {
@@ -516,11 +536,20 @@ func (p *catalogPredicate) atom() (bool, error) {
 			}
 			expected, ok := ObjectOwner(name)
 			if !ok || expected != p.owner {
-				return false, fmt.Errorf("catalog object %s is not owned by %s", name, p.owner)
+				return 0, fmt.Errorf("catalog object %s is not owned by %s", name, p.owner)
 			}
 		}
 	}
-	return key != "type", nil
+	if key == "schema" {
+		return 2, nil
+	}
+	if key == "type" {
+		if p.table == "pragma_table_list" {
+			return 4, nil
+		}
+		return 0, nil
+	}
+	return 1, nil
 }
 
 func ValidateSchema(source string) ([]string, error) {
