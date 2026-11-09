@@ -126,7 +126,16 @@ func inspectDependencies(root string) ([]string, map[string]bool, error) {
 			}
 		}
 		violations = append(violations, inspectModuleDeclarations(relative, file, imports)...)
+		factoryDefinitions := map[*ast.Ident]bool{}
+		for _, decl := range file.Decls {
+			if function, ok := decl.(*ast.FuncDecl); ok {
+				factoryDefinitions[function.Name] = true
+			}
+		}
 		ast.Inspect(file, func(node ast.Node) bool {
+			if name, ok := node.(*ast.Ident); ok && name.Name == "NewMockDispatch" && !factoryDefinitions[name] && strings.HasPrefix(relative, "modules/trading/internal/adapters/kiwoom/") && !approvedDispatchFactory(relative, file, name.Pos()) {
+				violations = append(violations, relative+" constructs dispatch outside approved adapter factory")
+			}
 			selector, ok := node.(*ast.SelectorExpr)
 			if !ok {
 				return true

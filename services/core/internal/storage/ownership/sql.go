@@ -10,7 +10,13 @@ type sqlToken struct {
 	text     string
 	literal  bool
 	argument int
+	quoted   bool
 }
+
+var approvedSQLFunctions = map[string]bool{
+	"coalesce": true, "count": true, "instr": true, "json_array_length": true, "json_extract": true, "json_type": true, "json_valid": true, "length": true, "max": true, "min": true, "printf": true, "raise": true, "replace": true, "rtrim": true, "substr": true, "sum": true, "trim": true, "typeof": true, "upper": true,
+}
+var sqlParentheses = map[string]bool{"and": true, "or": true, "not": true, "in": true, "exists": true, "cast": true, "select": true, "from": true, "join": true, "where": true, "when": true, "then": true, "else": true, "on": true, "using": true, "values": true, "filter": true}
 
 func sqlTokens(source string) ([]sqlToken, error) {
 	var tokens []sqlToken
@@ -60,7 +66,7 @@ func sqlTokens(source string) ([]sqlToken, error) {
 			if !closed {
 				return nil, fmt.Errorf("unterminated SQL quote")
 			}
-			tokens = append(tokens, sqlToken{text: strings.ToLower(value.String()), literal: c == '\''})
+			tokens = append(tokens, sqlToken{text: strings.ToLower(value.String()), literal: c == '\'', quoted: c != '\''})
 			continue
 		}
 		if unicode.IsLetter(rune(c)) || c == '_' {
@@ -72,7 +78,13 @@ func sqlTokens(source string) ([]sqlToken, error) {
 			tokens = append(tokens, sqlToken{text: strings.ToLower(source[start:i])})
 			continue
 		}
+		if c == ':' || c == '@' || c == '$' {
+			return nil, fmt.Errorf("named SQL parameters are unsupported")
+		}
 		if c == '?' {
+			if i+1 < len(source) && unicode.IsDigit(rune(source[i+1])) {
+				return nil, fmt.Errorf("numbered SQL parameters are unsupported")
+			}
 			tokens = append(tokens, sqlToken{text: "?", argument: arguments})
 			arguments++
 			i++
@@ -103,11 +115,16 @@ func tableAt(tokens []sqlToken, index int) (string, int, error) {
 	return name.text, index, nil
 }
 
-func sqlTableReferences(tokens []sqlToken) ([]string, bool, error) {
-	if len(tokens) == 0 {
+type sqlReference struct {
+	name   string
+	object bool
+}
+
+func sqlTableReferences(tokens []sqlToken) ([]sqlReference, bool, error) {
+	if len(tokens) == 0 || tokens[0].quoted {
 		return nil, false, fmt.Errorf("empty SQL")
 	}
-	var tables []string
+	var tables []sqlReference
 	write := false
 	switch tokens[0].text {
 	case "select":
@@ -123,21 +140,22 @@ func sqlTableReferences(tokens []sqlToken) ([]string, bool, error) {
 			return nil, false, fmt.Errorf("unsupported PRAGMA")
 		}
 		name, _, err := tableAt(tokens[3:4], 0)
-		return []string{name}, false, err
+		return []sqlReference{{name: name, object: tokens[1].text == "index_info" || tokens[1].text == "index_xinfo"}}, false, err
 	default:
 		return nil, false, fmt.Errorf("unsupported SQL form %s", tokens[0].text)
 	}
 	depth := 0
 	from := map[int]bool{}
+	catalogAtDepth := map[int]bool{}
+	tablesAtDepth := map[int]int{}
 	for i := 0; i < len(tokens); i++ {
 		token := tokens[i]
-		if !token.literal && i+1 < len(tokens) && tokens[i+1].text == "(" {
-			switch token.text {
-			case "load_extension", "writefile", "readfile", "eval":
-				return nil, false, fmt.Errorf("forbidden SQL function %s", token.text)
+		if !token.literal && i+1 < len(tokens) && tokens[i+1].text == "(" && (unicode.IsLetter(rune(token.text[0])) || token.text[0] == '_') {
+			if !approvedSQLFunctions[token.text] && (token.quoted || !sqlParentheses[token.text]) {
+				return nil, false, fmt.Errorf("unapproved SQL function %s", token.text)
 			}
 		}
-		if token.literal {
+		if token.literal || token.quoted {
 			continue
 		}
 		switch token.text {
@@ -155,11 +173,17 @@ func sqlTableReferences(tokens []sqlToken) ([]string, bool, error) {
 			depth++
 		case ")":
 			delete(from, depth)
+			delete(catalogAtDepth, depth)
+			delete(tablesAtDepth, depth)
 			depth--
 			if depth < 0 {
 				return nil, false, fmt.Errorf("unbalanced SQL")
 			}
-		case "where", "group", "order", "having", "limit", "union", "except", "intersect", "values", "set":
+		case "union", "except", "intersect":
+			from[depth] = false
+			delete(catalogAtDepth, depth)
+			delete(tablesAtDepth, depth)
+		case "where", "group", "order", "having", "limit", "values", "set":
 			from[depth] = false
 		case "from", "join", "into", "update", ",":
 			table := token.text == "from" || token.text == "join" || token.text == "into" || token.text == "update" || token.text == "," && from[depth]
@@ -171,6 +195,7 @@ func sqlTableReferences(tokens []sqlToken) ([]string, bool, error) {
 					return nil, false, fmt.Errorf("unsupported SQL table expression")
 				}
 				from[depth] = true
+				tablesAtDepth[depth]++
 				continue
 			}
 			index := i + 1
@@ -181,14 +206,38 @@ func sqlTableReferences(tokens []sqlToken) ([]string, bool, error) {
 			if err != nil {
 				return nil, false, err
 			}
+			object := false
 			if next < len(tokens) && tokens[next].text == "(" && (token.text == "from" || token.text == "join" || token.text == ",") {
-				if name == "json_each" && next+4 < len(tokens) && (tokens[next+1].text == "new" || tokens[next+1].text == "old") && tokens[next+2].text == "." && tokens[next+4].text == ")" {
-					i = next + 4
-					continue
+				switch name {
+				case "json_each":
+					if next+4 >= len(tokens) || (tokens[next+1].text != "new" && tokens[next+1].text != "old") || tokens[next+2].text != "." || tokens[next+4].text != ")" {
+						return nil, false, fmt.Errorf("unsupported JSON table function source")
+					}
+					name = ""
+					next += 5
+				case "pragma_table_info", "pragma_table_xinfo", "pragma_foreign_key_list", "pragma_index_list", "pragma_index_info", "pragma_index_xinfo":
+					if next+2 >= len(tokens) || !tokens[next+1].literal || tokens[next+2].text != ")" {
+						return nil, false, fmt.Errorf("schema table function requires fixed owned object literal")
+					}
+					object = name == "pragma_index_info" || name == "pragma_index_xinfo"
+					name = tokens[next+1].text
+					next += 3
+				default:
+					return nil, false, fmt.Errorf("unsupported table-valued function %s", name)
 				}
-				return nil, false, fmt.Errorf("unsupported table-valued function %s", name)
 			}
-			tables = append(tables, name)
+			if IsCatalog(name) {
+				if token.text != "from" || tablesAtDepth[depth] > 0 {
+					return nil, false, fmt.Errorf("catalog joins are unsupported")
+				}
+				catalogAtDepth[depth] = true
+			} else if catalogAtDepth[depth] {
+				return nil, false, fmt.Errorf("catalog joins are unsupported")
+			}
+			tablesAtDepth[depth]++
+			if name != "" {
+				tables = append(tables, sqlReference{name: name, object: object})
+			}
 			i = next - 1
 			from[depth] = true
 		}
@@ -216,7 +265,8 @@ func validateSQLTokens(owner string, tokens []sqlToken, catalogObjects []string,
 	if len(tables) == 0 && (!allowScalar || len(tokens) == 0 || tokens[0].text != "select") {
 		return fmt.Errorf("SQL has no attributable table")
 	}
-	for _, table := range tables {
+	for _, reference := range tables {
+		table := reference.name
 		if IsCatalog(table) {
 			if write {
 				return fmt.Errorf("catalog is read only")
@@ -229,7 +279,7 @@ func validateSQLTokens(owner string, tokens []sqlToken, catalogObjects []string,
 			continue
 		}
 		expected, ok := Owner(table)
-		if !ok && tokens[0].text == "pragma" && (tokens[1].text == "index_info" || tokens[1].text == "index_xinfo") {
+		if !ok && reference.object {
 			expected, ok = ObjectOwner(table)
 		}
 		if !ok {
@@ -265,7 +315,7 @@ func catalogPredicates(owner string, tokens []sqlToken, objects []string, collec
 	var arguments []int
 	depth := 0
 	for i, token := range tokens {
-		if token.literal {
+		if token.literal || token.quoted {
 			continue
 		}
 		if token.text == "(" {
@@ -480,7 +530,7 @@ func ValidateSchema(source string) ([]string, error) {
 		return nil, err
 	}
 	for i := 0; i < len(tokens); i++ {
-		if tokens[i].literal || tokens[i].text != "create" {
+		if tokens[i].literal || tokens[i].quoted || tokens[i].text != "create" {
 			continue
 		}
 		index := i + 1
@@ -599,4 +649,22 @@ func ValidateSchema(source string) ([]string, error) {
 		}
 	}
 	return tables, nil
+}
+
+func ValidateOwnerPriceWrite(source string) error {
+	tokens, err := sqlTokens(source)
+	if err != nil {
+		return err
+	}
+	if len(tokens) < 3 || tokens[0].quoted || tokens[0].text != "insert" || tokens[1].quoted || tokens[1].text != "into" {
+		return fmt.Errorf("owner-price write requires fixed INSERT INTO")
+	}
+	target, _, err := tableAt(tokens, 2)
+	if err != nil {
+		return err
+	}
+	if target != "owner_price_series_versions" {
+		return fmt.Errorf("owner-price write targets unapproved table %s", target)
+	}
+	return validateSQLTokens("marketdata", tokens, nil, false)
 }

@@ -11,6 +11,7 @@ import (
 	"go/parser"
 	"go/token"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -78,6 +79,21 @@ func legacySymbols(root string) (map[string]map[string]string, error) {
 		}
 		result[relative] = map[string]string{}
 		for _, declaration := range file.Decls {
+			if group, ok := declaration.(*ast.GenDecl); ok && group.Tok == token.IMPORT {
+				for _, spec := range group.Specs {
+					imp := spec.(*ast.ImportSpec)
+					alias := ""
+					if imp.Name != nil {
+						alias = imp.Name.Name
+					}
+					var source bytes.Buffer
+					if err := format.Node(&source, token.NewFileSet(), imp); err != nil {
+						return err
+					}
+					result[relative]["import."+alias+"."+imp.Path.Value] = fmt.Sprintf("%x", sha256.Sum256(source.Bytes()))
+				}
+				continue
+			}
 			symbol := ""
 			var node ast.Node = declaration
 			switch value := declaration.(type) {
@@ -134,5 +150,33 @@ func TestLegacyFreezeRejectsChangedOrNewSymbols(t *testing.T) {
 	}
 	if violations := compareLegacySymbols(baseline, map[string]map[string]string{}); len(violations) != 0 {
 		t.Fatal("owner migration cannot remove legacy symbols", violations)
+	}
+}
+
+func TestLegacyFreezeAllowsImportRemoval(t *testing.T) {
+	root := fixtureSources(t, map[string]string{"legacy.go": `package legacy; import("fmt"; "errors");func Read(){}`})
+	baseline, err := legacySymbols(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "legacy.go"), []byte(`package legacy; import "errors";func Read(){}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	current, err := legacySymbols(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if violations := compareLegacySymbols(baseline, current); len(violations) != 0 {
+		t.Fatal(violations)
+	}
+	if err := os.WriteFile(filepath.Join(root, "legacy.go"), []byte(`package legacy; import "os";func Read(){}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	current, err = legacySymbols(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(compareLegacySymbols(baseline, current)) == 0 {
+		t.Fatal("retargeted import accepted")
 	}
 }

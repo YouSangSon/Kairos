@@ -50,6 +50,7 @@ func TestModuleGateRejectsBoundaryViolations(t *testing.T) {
 		{"composition private", "composition/a.go", `package composition; import _ "omni-folio/services/core/internal/modules/ledger/internal/adapters/sqlite"`, "private"},
 		{"ordinary root DB injection", "modules/ledger/api.go", `package ledger; import "database/sql"; type Config struct { DB *sql.DB }`, "construction"},
 		{"module dot alias", "modules/trading/internal/adapters/cli/a.go", `package cli; import . "omni-folio/services/core/internal/modules/marketdata/contracts"`, "dot import"},
+		{"dispatch arbitrary adapter caller", "modules/trading/internal/adapters/kiwoom/a.go", `package kiwoom; func business(){NewMockDispatch()}`, "dispatch outside"},
 		{"dispatch factory outside adapter", "modules/trading/internal/application/a.go", `package application; import k "omni-folio/services/core/internal/modules/trading/internal/adapters/kiwoom"; var factory=k.NewMockDispatch`, "dispatch"},
 		{"dispatch arbitrary compose helper", "modules/trading/compose.go", `package trading; import k "omni-folio/services/core/internal/modules/trading/internal/adapters/kiwoom"; func Helper(){ k.NewMockDispatch() }`, "dispatch"},
 	}
@@ -69,12 +70,13 @@ func TestModuleGateRejectsBoundaryViolations(t *testing.T) {
 
 func TestModuleGateAllowsPrivateInwardComposition(t *testing.T) {
 	root := fixtureSources(t, map[string]string{
-		"modules/ledger/contracts/api.go":                `package contracts; import "context"; type Snapshot struct { Revision int64 }; type Reader interface { Snapshot(context.Context) (Snapshot,error) }`,
-		"modules/marketdata/contracts/read.go":           `package contracts; import "context"; import s "omni-folio/services/core/internal/storage/contracts"; type Reader interface { Read(context.Context,s.ObservationRef) (string,error) }`,
-		"modules/ledger/internal/domain/nested/value.go": `package nested; import "omni-folio/services/core/internal/exact"; var _=exact.Parse`,
-		"modules/portfolio/internal/application/read.go": `package application; import l "omni-folio/services/core/internal/modules/ledger/contracts"; type Ledger interface { Snapshot() l.Snapshot }`,
-		"modules/ledger/compose.go":                      `package ledger; import "database/sql"; import a "omni-folio/services/core/internal/modules/ledger/internal/adapters/sqlite"; import "omni-folio/services/core/internal/modules/ledger/contracts"; type Config struct { DB *sql.DB }; func Compose(c Config) contracts.Reader { return a.New(c.DB) }`,
-		"composition/core.go":                            `package composition; import l "omni-folio/services/core/internal/modules/ledger"; var _=l.Compose`,
+		"modules/ledger/contracts/api.go":                     `package contracts; import "context"; type Snapshot struct { Revision int64 }; type Reader interface { Snapshot(context.Context) (Snapshot,error) }`,
+		"modules/marketdata/contracts/read.go":                `package contracts; import "context"; import s "omni-folio/services/core/internal/storage/contracts"; type Reader interface { Read(context.Context,s.ObservationRef) (string,error) }`,
+		"modules/trading/internal/adapters/kiwoom/factory.go": `package kiwoom; func NewProduction(){NewMockDispatch()};func NewMockDispatch(){}`,
+		"modules/ledger/internal/domain/nested/value.go":      `package nested; import "omni-folio/services/core/internal/exact"; var _=exact.Parse`,
+		"modules/portfolio/internal/application/read.go":      `package application; import l "omni-folio/services/core/internal/modules/ledger/contracts"; type Ledger interface { Snapshot() l.Snapshot }`,
+		"modules/ledger/compose.go":                           `package ledger; import "database/sql"; import a "omni-folio/services/core/internal/modules/ledger/internal/adapters/sqlite"; import "omni-folio/services/core/internal/modules/ledger/contracts"; type Config struct { DB *sql.DB }; func Compose(c Config) contracts.Reader { return a.New(c.DB) }`,
+		"composition/core.go":                                 `package composition; import l "omni-folio/services/core/internal/modules/ledger"; var _=l.Compose`,
 	})
 	violations, _, err := inspectDependencies(root)
 	if err != nil {

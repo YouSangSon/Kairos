@@ -152,6 +152,15 @@ func inspectSQLSources(root string) ([]string, error) {
 				violations = append(violations, source.path+" catalog argument registration does not cover object predicates")
 				return
 			}
+			owner, layer := modulePath(source.path)
+			if owner == "" || layer != "adapters" || !strings.Contains(source.path, "/internal/adapters/sqlite/") {
+				violations = append(violations, source.path+" SQL statement registration must be in private sqlite adapter")
+				return
+			}
+			if err := ownership.ValidateSQL(owner, sql, names); err != nil {
+				violations = append(violations, source.path+" "+err.Error())
+				return
+			}
 			catalogs[filepath.Dir(source.path)+"\x00"+sql] = names
 		}
 		ast.Inspect(source.file, func(node ast.Node) bool {

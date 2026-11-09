@@ -31,7 +31,12 @@ func TestSQLGateRejectsOwnershipAndUnsupportedForms(t *testing.T) {
 		{"unbounded catalog", `SELECT sql FROM sqlite_master`},
 		{"catalog parameter", `SELECT sql FROM sqlite_master WHERE name=?`},
 		{"foreign catalog", `SELECT sql FROM sqlite_temp_master WHERE name='events'`},
+		{"catalog JOIN target", `SELECT m.sql FROM security_price_observations p JOIN sqlite_master m ON m.name='events'`},
+		{"catalog comma target", `SELECT m.sql FROM security_price_observations p, sqlite_master m WHERE m.name='events'`},
+		{"catalog JOIN source", `SELECT m.sql FROM sqlite_master m JOIN security_price_observations p ON m.name='security_price_observations'`},
 		{"catalog predicate bypass", `SELECT sql FROM sqlite_master WHERE name='security_price_observations' OR 1=1`},
+		{"foreign fixed pragma table function", `SELECT name FROM pragma_table_info('events')`},
+		{"foreign fixed pragma index function", `SELECT name FROM pragma_index_info('events_idx')`},
 		{"foreign pragma", `PRAGMA table_info(events)`},
 		{"attached database", `SELECT * FROM other.security_price_observations`},
 		{"control write", `UPDATE schema_migrations SET version=1`},
@@ -58,6 +63,8 @@ func TestSQLGateAcceptsFixedOwnerStatements(t *testing.T) {
 		{"marketdata", `SELECT sql FROM sqlite_master WHERE name='security_price_observations'`},
 		{"marketdata", `SELECT name FROM sqlite_temp_master WHERE tbl_name IN ('owner_price_series_versions','security_price_observations')`},
 		{"watchlist", `SELECT COUNT(*) FROM (SELECT name FROM sqlite_master WHERE tbl_name='watchlist_state' AND type IN ('index','trigger') UNION ALL SELECT name FROM sqlite_temp_master WHERE tbl_name='watchlist_state' OR name='watchlist_state')`},
+		{"marketdata", `SELECT name FROM pragma_table_info('security_price_observations')`},
+		{"marketdata", `SELECT name FROM pragma_index_info('owner_price_series_latest_idx')`},
 		{"marketdata", `PRAGMA table_info(security_price_observations)`},
 		{"ledger", `SELECT version FROM schema_migrations`},
 		{"maintenance", `INSERT INTO schema_migrations(version) VALUES(?)`},
@@ -173,5 +180,68 @@ func TestSQLStatementMetadataRequiresEveryObjectArgument(t *testing.T) {
 	}
 	if len(violations) != 0 {
 		t.Fatal(violations)
+	}
+}
+
+func TestCatalogGateRejectsJoinedForeignSchema(t *testing.T) {
+	for _, query := range []string{
+		`SELECT m.sql FROM watchlist_state AS w JOIN sqlite_master AS m ON m.name = 'events'`,
+		`SELECT m.sql FROM watchlist_state AS w, sqlite_master AS m WHERE m.name = 'events'`,
+	} {
+		if err := ownership.ValidateSQL("watchlist", query, nil); err == nil {
+			t.Fatalf("accepted foreign catalog query %s", query)
+		}
+	}
+}
+
+func TestSQLGateRejectsQuotedKeywordAliases(t *testing.T) {
+	for _, alias := range []string{"where", "group", "order"} {
+		query := `SELECT o.* FROM events AS "` + alias + `", order_events AS o`
+		if err := ownership.ValidateSQL("ledger", query, nil); err == nil {
+			t.Errorf("accepted %s", query)
+		}
+	}
+}
+func TestSQLGateRejectsUnknownScalarFunctions(t *testing.T) {
+	for _, query := range []string{`SELECT custom_write(?) FROM events`, `SELECT made_up(value) FROM events`} {
+		if err := ownership.ValidateSQL("ledger", query, nil); err == nil {
+			t.Errorf("accepted %s", query)
+		}
+	}
+}
+
+func TestJSONTableFunctionKeepsOwnershipListContext(t *testing.T) {
+	schema := `CREATE TRIGGER order_events_guard AFTER INSERT ON order_events BEGIN SELECT 1 FROM json_each(NEW.event_json) AS j, events AS e; END;`
+	if _, err := ownership.ValidateSchema(schema); err == nil {
+		t.Error("accepted foreign table after trigger json_each")
+	}
+	query := `SELECT (SELECT e.event_id FROM json_each(new.event_json) AS j, events AS e LIMIT 1) FROM order_events AS new`
+	if err := ownership.ValidateSQL("trading", query, nil); err == nil {
+		t.Error("accepted foreign table after correlated json_each")
+	}
+}
+func TestSQLGateRejectsNonAnonymousParameters(t *testing.T) {
+	for _, query := range []string{
+		`SELECT ?2, sql FROM sqlite_master WHERE name=?`,
+		`SELECT sql FROM sqlite_master WHERE name=:name`,
+		`SELECT sql FROM sqlite_master WHERE name=@name`,
+		`SELECT sql FROM sqlite_master WHERE name=$name`,
+	} {
+		if err := ownership.ValidateSQL("watchlist", query, []string{"watchlist_state"}); err == nil {
+			t.Errorf("accepted %s", query)
+		}
+	}
+}
+func TestOwnerPriceWriteRequiresExactCurrentTarget(t *testing.T) {
+	for _, query := range []string{
+		`INSERT INTO owner_fx_series_versions(version) VALUES(?) /* INTO owner_price_series_versions */`,
+		`INSERT INTO owner_price_series_versions_new(version) VALUES(?)`,
+	} {
+		if err := ownership.ValidateOwnerPriceWrite(query); err == nil {
+			t.Errorf("accepted %s", query)
+		}
+	}
+	if err := ownership.ValidateOwnerPriceWrite(`INSERT INTO owner_price_series_versions(version) VALUES(?)`); err != nil {
+		t.Fatal(err)
 	}
 }
