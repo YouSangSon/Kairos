@@ -93,7 +93,7 @@ func migrationStore(t testing.TB, db *sql.DB) *Store {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return New(db, registry, owner)
+	return New(db, registry, owner, now, nil, nil)
 }
 
 func assertMigratedState(t *testing.T, db *sql.DB, version int) {

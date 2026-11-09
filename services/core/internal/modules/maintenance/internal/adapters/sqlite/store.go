@@ -16,10 +16,13 @@ type Store struct {
 	db           *sql.DB
 	observations *observation.Registry
 	trading      trading.Recovery
+	now          func() time.Time
+	id           func(string) string
+	factory      OwnerFactory
 }
 
-func New(db *sql.DB, observations *observation.Registry, trading trading.Recovery) *Store {
-	return &Store{db: db, observations: observations, trading: trading}
+func New(db *sql.DB, observations *observation.Registry, trading trading.Recovery, now func() time.Time, id func(string) string, factory OwnerFactory) *Store {
+	return &Store{db: db, observations: observations, trading: trading, now: now, id: id, factory: factory}
 }
 
 type orderQuerier interface {
