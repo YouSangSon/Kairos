@@ -1,0 +1,556 @@
+package ownership
+
+import (
+	"fmt"
+	"strings"
+	"unicode"
+)
+
+type sqlToken struct {
+	text     string
+	literal  bool
+	argument int
+}
+
+func sqlTokens(source string) ([]sqlToken, error) {
+	var tokens []sqlToken
+	arguments := 0
+	for i := 0; i < len(source); {
+		c := source[i]
+		if unicode.IsSpace(rune(c)) {
+			i++
+			continue
+		}
+		if c == '-' && i+1 < len(source) && source[i+1] == '-' {
+			for i < len(source) && source[i] != '\n' {
+				i++
+			}
+			continue
+		}
+		if c == '/' && i+1 < len(source) && source[i+1] == '*' {
+			end := strings.Index(source[i+2:], "*/")
+			if end < 0 {
+				return nil, fmt.Errorf("unterminated SQL comment")
+			}
+			i += end + 4
+			continue
+		}
+		if c == '\'' || c == '"' || c == '`' || c == '[' {
+			endChar := c
+			if c == '[' {
+				endChar = ']'
+			}
+			i++
+			var value strings.Builder
+			closed := false
+			for i < len(source) {
+				if source[i] == endChar {
+					i++
+					if i < len(source) && source[i] == endChar {
+						value.WriteByte(endChar)
+						i++
+						continue
+					}
+					closed = true
+					break
+				}
+				value.WriteByte(source[i])
+				i++
+			}
+			if !closed {
+				return nil, fmt.Errorf("unterminated SQL quote")
+			}
+			tokens = append(tokens, sqlToken{text: strings.ToLower(value.String()), literal: c == '\''})
+			continue
+		}
+		if unicode.IsLetter(rune(c)) || c == '_' {
+			start := i
+			i++
+			for i < len(source) && (unicode.IsLetter(rune(source[i])) || unicode.IsDigit(rune(source[i])) || source[i] == '_') {
+				i++
+			}
+			tokens = append(tokens, sqlToken{text: strings.ToLower(source[start:i])})
+			continue
+		}
+		if c == '?' {
+			tokens = append(tokens, sqlToken{text: "?", argument: arguments})
+			arguments++
+			i++
+			continue
+		}
+		tokens = append(tokens, sqlToken{text: string(c)})
+		i++
+	}
+	return tokens, nil
+}
+
+func tableAt(tokens []sqlToken, index int) (string, int, error) {
+	if index >= len(tokens) {
+		return "", index, fmt.Errorf("missing SQL table")
+	}
+	name := tokens[index]
+	if name.literal || name.text == "" || !(unicode.IsLetter(rune(name.text[0])) || name.text[0] == '_') {
+		return "", index, fmt.Errorf("unsupported or dynamic SQL table %q", name.text)
+	}
+	index++
+	if index < len(tokens) && tokens[index].text == "." {
+		if name.text != "main" {
+			return "", index, fmt.Errorf("unsupported SQL schema %s", name.text)
+		}
+		return tableAt(tokens, index+1)
+	}
+
+	return name.text, index, nil
+}
+
+func sqlTableReferences(tokens []sqlToken) ([]string, bool, error) {
+	if len(tokens) == 0 {
+		return nil, false, fmt.Errorf("empty SQL")
+	}
+	var tables []string
+	write := false
+	switch tokens[0].text {
+	case "select":
+	case "insert", "replace", "update", "delete":
+		write = true
+	case "pragma":
+		if len(tokens) != 5 || tokens[2].text != "(" || tokens[4].text != ")" {
+			return nil, false, fmt.Errorf("unsupported PRAGMA")
+		}
+		switch tokens[1].text {
+		case "table_info", "table_xinfo", "foreign_key_list", "index_list", "index_info", "index_xinfo":
+		default:
+			return nil, false, fmt.Errorf("unsupported PRAGMA")
+		}
+		name, _, err := tableAt(tokens[3:4], 0)
+		return []string{name}, false, err
+	default:
+		return nil, false, fmt.Errorf("unsupported SQL form %s", tokens[0].text)
+	}
+	depth := 0
+	from := map[int]bool{}
+	for i := 0; i < len(tokens); i++ {
+		token := tokens[i]
+		if !token.literal && i+1 < len(tokens) && tokens[i+1].text == "(" {
+			switch token.text {
+			case "load_extension", "writefile", "readfile", "eval":
+				return nil, false, fmt.Errorf("forbidden SQL function %s", token.text)
+			}
+		}
+		if token.literal {
+			continue
+		}
+		switch token.text {
+		case ";":
+			if i != len(tokens)-1 {
+				return nil, false, fmt.Errorf("multiple SQL statements")
+			}
+		case "in":
+			if i+1 >= len(tokens) || tokens[i+1].text != "(" {
+				return nil, false, fmt.Errorf("unsupported IN table reference")
+			}
+		case "with", "attach", "detach", "returning", ":", "@", "$":
+			return nil, false, fmt.Errorf("unsupported SQL form %s", token.text)
+		case "(":
+			depth++
+		case ")":
+			delete(from, depth)
+			depth--
+			if depth < 0 {
+				return nil, false, fmt.Errorf("unbalanced SQL")
+			}
+		case "where", "group", "order", "having", "limit", "union", "except", "intersect", "values", "set":
+			from[depth] = false
+		case "from", "join", "into", "update", ",":
+			table := token.text == "from" || token.text == "join" || token.text == "into" || token.text == "update" || token.text == "," && from[depth]
+			if !table {
+				continue
+			}
+			if i+1 < len(tokens) && tokens[i+1].text == "(" {
+				if (token.text != "from" && token.text != "join") || i+2 >= len(tokens) || tokens[i+2].text != "select" {
+					return nil, false, fmt.Errorf("unsupported SQL table expression")
+				}
+				from[depth] = true
+				continue
+			}
+			index := i + 1
+			if token.text == "update" && index+1 < len(tokens) && tokens[index].text == "or" {
+				index += 2
+			}
+			name, next, err := tableAt(tokens, index)
+			if err != nil {
+				return nil, false, err
+			}
+			if next < len(tokens) && tokens[next].text == "(" && (token.text == "from" || token.text == "join" || token.text == ",") {
+				return nil, false, fmt.Errorf("unsupported table-valued function %s", name)
+			}
+			tables = append(tables, name)
+			i = next - 1
+			from[depth] = true
+		}
+	}
+	if depth != 0 {
+		return nil, false, fmt.Errorf("unbalanced SQL")
+	}
+	if len(tables) == 0 {
+		return nil, false, fmt.Errorf("SQL has no attributable table")
+	}
+	return tables, write, nil
+}
+
+func ValidateSQL(owner, source string, catalogObjects []string) error {
+	tokens, err := sqlTokens(source)
+	if err != nil {
+		return err
+	}
+	tables, write, err := sqlTableReferences(tokens)
+	if err != nil {
+		return err
+	}
+	for _, table := range tables {
+		if IsCatalog(table) {
+			if write {
+				return fmt.Errorf("catalog is read only")
+			}
+			if owner != "maintenance" {
+				if err := checkCatalogPredicate(owner, tokens, catalogObjects); err != nil {
+					return err
+				}
+			}
+			continue
+		}
+		expected, ok := Owner(table)
+		if !ok && tokens[0].text == "pragma" && (tokens[1].text == "index_info" || tokens[1].text == "index_xinfo") {
+			expected, ok = ObjectOwner(table)
+		}
+		if !ok {
+			return fmt.Errorf("unregistered SQL object %s", table)
+		}
+		if table == ControlTable && !write {
+			continue
+		}
+		if expected != owner {
+			return fmt.Errorf("SQL object %s owned by %s, accessed by %s", table, expected, owner)
+		}
+		if owner == "maintenance" && table != ControlTable && write {
+			return fmt.Errorf("maintenance cannot write business table %s", table)
+		}
+	}
+	return nil
+}
+
+func checkCatalogPredicate(owner string, tokens []sqlToken, objects []string) error {
+	_, err := catalogPredicates(owner, tokens, objects, false)
+	return err
+}
+
+func CatalogArguments(source string) ([]int, error) {
+	tokens, err := sqlTokens(source)
+	if err != nil {
+		return nil, err
+	}
+	return catalogPredicates("", tokens, nil, true)
+}
+
+func catalogPredicates(owner string, tokens []sqlToken, objects []string, collect bool) ([]int, error) {
+	var arguments []int
+	depth := 0
+	for i, token := range tokens {
+		if token.literal {
+			continue
+		}
+		if token.text == "(" {
+			depth++
+			continue
+		}
+		if token.text == ")" {
+			depth--
+			continue
+		}
+		if token.text != "from" {
+			continue
+		}
+		name, next, err := tableAt(tokens, i+1)
+		if err != nil || !IsCatalog(name) {
+			continue
+		}
+		qualifier := name
+		if next < len(tokens) && tokens[next].text == "as" {
+			next++
+			if next < len(tokens) {
+				qualifier = tokens[next].text
+				next++
+			}
+		} else if next < len(tokens) && tokens[next].text != "where" && tokens[next].text != ";" {
+			qualifier = tokens[next].text
+			next++
+		}
+		branchDepth := depth
+		where := -1
+		end := len(tokens)
+		scanDepth := depth
+		for at := next; at < len(tokens); at++ {
+			text := tokens[at].text
+			if tokens[at].literal {
+				continue
+			}
+			if text == "(" {
+				scanDepth++
+			}
+			if text == ")" {
+				scanDepth--
+				if scanDepth < branchDepth {
+					end = at
+					break
+				}
+			}
+			if scanDepth != branchDepth {
+				continue
+			}
+			if where < 0 && (text == "join" || text == ",") {
+				return nil, fmt.Errorf("catalog joins are unsupported")
+			}
+			if text == "where" {
+				where = at + 1
+				continue
+			}
+			if text == "union" || text == "except" || text == "intersect" || text == "group" || text == "order" || text == "limit" || text == ";" {
+				end = at
+				break
+			}
+		}
+		if where < 0 || where >= end {
+			return nil, fmt.Errorf("unbounded catalog read")
+		}
+		parser := catalogPredicate{owner: owner, tokens: tokens[where:end], objects: objects, collect: collect, qualifier: qualifier}
+		bounded, err := parser.or()
+		if err != nil {
+			return nil, err
+		}
+		arguments = append(arguments, parser.arguments...)
+		if parser.at != len(parser.tokens) || !bounded {
+			return nil, fmt.Errorf("catalog read lacks owned object restriction")
+		}
+	}
+	return arguments, nil
+}
+
+type catalogPredicate struct {
+	owner     string
+	tokens    []sqlToken
+	objects   []string
+	at        int
+	collect   bool
+	qualifier string
+	arguments []int
+}
+
+func (p *catalogPredicate) take(text string) bool {
+	if p.at < len(p.tokens) && !p.tokens[p.at].literal && p.tokens[p.at].text == text {
+		p.at++
+		return true
+	}
+	return false
+}
+func (p *catalogPredicate) or() (bool, error) {
+	bounded, err := p.and()
+	if err != nil {
+		return false, err
+	}
+	for p.take("or") {
+		right, err := p.and()
+		if err != nil {
+			return false, err
+		}
+		bounded = bounded && right
+	}
+	return bounded, nil
+}
+func (p *catalogPredicate) and() (bool, error) {
+	bounded, err := p.atom()
+	if err != nil {
+		return false, err
+	}
+	for p.take("and") {
+		right, err := p.atom()
+		if err != nil {
+			return false, err
+		}
+		bounded = bounded || right
+	}
+	return bounded, nil
+}
+func (p *catalogPredicate) atom() (bool, error) {
+	if p.take("(") {
+		bounded, err := p.or()
+		if err != nil {
+			return false, err
+		}
+		if !p.take(")") {
+			return false, fmt.Errorf("unterminated catalog predicate")
+		}
+		return bounded, nil
+	}
+	if p.at >= len(p.tokens) {
+		return false, fmt.Errorf("missing catalog predicate")
+	}
+	key := p.tokens[p.at].text
+	p.at++
+	if p.take(".") {
+		if key != p.qualifier {
+			return false, fmt.Errorf("catalog predicate uses another table qualifier %s", key)
+		}
+		if p.at >= len(p.tokens) {
+			return false, fmt.Errorf("missing catalog field")
+		}
+		key = p.tokens[p.at].text
+		p.at++
+	}
+	if key != "name" && key != "tbl_name" && key != "type" {
+		return false, fmt.Errorf("unsupported catalog predicate %s", key)
+	}
+	var values []sqlToken
+	if p.take("=") {
+		if p.at >= len(p.tokens) {
+			return false, fmt.Errorf("missing catalog value")
+		}
+		values = append(values, p.tokens[p.at])
+		p.at++
+	} else if p.take("in") && p.take("(") {
+		for {
+			if p.at >= len(p.tokens) {
+				return false, fmt.Errorf("missing catalog IN value")
+			}
+			values = append(values, p.tokens[p.at])
+			p.at++
+			if p.take(",") {
+				continue
+			}
+			if !p.take(")") {
+				return false, fmt.Errorf("unsupported catalog IN")
+			}
+			break
+		}
+	} else {
+		return false, fmt.Errorf("unsupported catalog comparison")
+	}
+	for _, value := range values {
+		if key == "type" {
+			if !value.literal && value.text != "?" {
+				return false, fmt.Errorf("dynamic catalog type")
+			}
+			continue
+		}
+		names := []string{value.text}
+		if value.text == "?" && !value.literal {
+			p.arguments = append(p.arguments, value.argument)
+			if !p.collect && len(p.objects) == 0 {
+				return false, fmt.Errorf("unbounded catalog object argument")
+			}
+			names = p.objects
+		} else if !value.literal {
+			return false, fmt.Errorf("dynamic catalog object")
+		}
+		for _, name := range names {
+			if p.collect {
+				continue
+			}
+			expected, ok := ObjectOwner(name)
+			if !ok || expected != p.owner {
+				return false, fmt.Errorf("catalog object %s is not owned by %s", name, p.owner)
+			}
+		}
+	}
+	return key != "type", nil
+}
+
+func ValidateSchema(source string) ([]string, error) {
+	var tables []string
+	tokens, err := sqlTokens(source)
+	if err != nil {
+		return nil, err
+	}
+	for i := 0; i < len(tokens); i++ {
+		if tokens[i].literal || tokens[i].text != "create" {
+			continue
+		}
+		index := i + 1
+		for index < len(tokens) && (tokens[index].text == "unique" || tokens[index].text == "temp" || tokens[index].text == "temporary") {
+			index++
+		}
+		if index >= len(tokens) {
+			return nil, fmt.Errorf("incomplete schema declaration")
+		}
+		kind := tokens[index].text
+		index++
+		if index+2 < len(tokens) && tokens[index].text == "if" && tokens[index+1].text == "not" && tokens[index+2].text == "exists" {
+			index += 3
+		}
+		if index >= len(tokens) {
+			return nil, fmt.Errorf("missing schema object")
+		}
+		name := tokens[index].text
+		expected, ok := Owner(name)
+		if kind == "trigger" || kind == "index" {
+			expected, ok = ObjectOwner(name)
+		}
+		if !ok {
+			return nil, fmt.Errorf("unregistered schema %s %s", kind, name)
+		}
+		if kind == "view" {
+			return nil, fmt.Errorf("view requires explicit registry owner %s", name)
+		}
+		if kind == "table" {
+			tables = append(tables, name)
+			continue
+		}
+		if kind != "index" && kind != "trigger" {
+			return nil, fmt.Errorf("unsupported schema object %s", kind)
+		}
+		on := index + 1
+		for on < len(tokens) && tokens[on].text != "on" {
+			on++
+		}
+		target, _, err := tableAt(tokens, on+1)
+		if err != nil {
+			return nil, err
+		}
+		targetOwner, known := Owner(target)
+		if !known || targetOwner != expected {
+			return nil, fmt.Errorf("schema object %s targets other owner %s", name, target)
+		}
+		if kind == "trigger" {
+			body := on + 1
+			for body < len(tokens) && tokens[body].text != "begin" {
+				body++
+			}
+			end := body + 1
+			for end < len(tokens) && !(tokens[end].text == "end" && end+1 < len(tokens) && tokens[end+1].text == ";") {
+				end++
+			}
+			for at := body + 1; at < end; at++ {
+				switch tokens[at].text {
+				case "from", "join", "into", "update":
+					if tokens[at].literal {
+						continue
+					}
+					if at+1 < end && (tokens[at+1].text == "on" || tokens[at+1].text == "of") {
+						continue
+					}
+					table, next, err := tableAt(tokens, at+1)
+					if table == "json_each" && next+5 < end && tokens[next].text == "(" && (tokens[next+1].text == "new" || tokens[next+1].text == "old") && tokens[next+2].text == "." && tokens[next+4].text == ")" {
+						continue
+					}
+					if err != nil {
+						return nil, err
+					}
+					actual, known := Owner(table)
+					if !known || actual != expected {
+						return nil, fmt.Errorf("trigger %s accesses other owner object %s", name, table)
+					}
+				}
+			}
+		}
+	}
+	return tables, nil
+}

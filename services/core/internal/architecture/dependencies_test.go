@@ -47,6 +47,7 @@ func inspectDependencies(root string) ([]string, map[string]bool, error) {
 	var violations []string
 	seen := map[string]bool{}
 	methods := map[string]map[string]bool{}
+	graph := map[string]map[string]bool{}
 	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -85,6 +86,10 @@ func inspectDependencies(root string) ([]string, map[string]bool, error) {
 			methods[key][function.Name.Name] = true
 		}
 		imports := map[string]string{}
+		packagePath := internalPrefix + filepath.ToSlash(filepath.Dir(relative))
+		if graph[packagePath] == nil {
+			graph[packagePath] = map[string]bool{}
+		}
 		for _, imp := range file.Imports {
 			name, err := strconv.Unquote(imp.Path.Value)
 			if err != nil {
@@ -98,10 +103,16 @@ func inspectDependencies(root string) ([]string, map[string]bool, error) {
 				}
 			}
 			imports[alias] = name
-			if !allowedImport(scope, name) {
+			if strings.HasPrefix(name, internalPrefix) {
+				graph[packagePath][name] = true
+			}
+			if reason := moduleImportViolation(relative, name); reason != "" {
+				violations = append(violations, relative+" "+reason)
+			} else if !strings.HasPrefix(relative, "modules/") && !allowedImport(scope, name) {
 				violations = append(violations, fmt.Sprintf("%s imports forbidden %s", relative, name))
 			}
 		}
+		violations = append(violations, inspectModuleDeclarations(relative, file, imports)...)
 		ast.Inspect(file, func(node ast.Node) bool {
 			selector, ok := node.(*ast.SelectorExpr)
 			if !ok {
@@ -111,13 +122,14 @@ func inspectDependencies(root string) ([]string, map[string]bool, error) {
 			if !ok {
 				return true
 			}
-			if _, domain := domainDependencies[scope]; domain && imports[pkg.Name] == "time" {
+			_, legacyDomain := domainDependencies[scope]
+			if (legacyDomain || moduleLayer(relative) == "domain") && imports[pkg.Name] == "time" {
 				switch selector.Sel.Name {
 				case "Now", "Since", "Until", "After", "AfterFunc", "NewTimer", "NewTicker", "Tick", "Sleep", "LoadLocation":
 					violations = append(violations, relative+" uses impure time."+selector.Sel.Name)
 				}
 			}
-			if imports[pkg.Name] == internalPrefix+"adapters/kiwoom" && selector.Sel.Name == "NewMockDispatch" && scope != "bootstrap" {
+			if strings.HasSuffix(imports[pkg.Name], "/adapters/kiwoom") && selector.Sel.Name == "NewMockDispatch" && !approvedDispatchFactory(relative, file, selector.Pos()) {
 				violations = append(violations, relative+" constructs dispatch outside bootstrap")
 			}
 			return true
@@ -125,10 +137,11 @@ func inspectDependencies(root string) ([]string, map[string]bool, error) {
 		return nil
 	})
 	for receiver, methodSet := range methods {
-		if methodSet["Provider"] && methodSet["Mode"] && methodSet["Preflight"] && methodSet["SubmitLimitOrder"] && !strings.HasPrefix(receiver, "adapters/kiwoom/") {
+		if methodSet["Provider"] && methodSet["Mode"] && methodSet["Preflight"] && methodSet["SubmitLimitOrder"] && !strings.HasPrefix(receiver, "adapters/kiwoom/") && !strings.HasPrefix(receiver, "modules/trading/internal/adapters/kiwoom/") {
 			violations = append(violations, receiver+" implements production dispatch outside kiwoom adapter")
 		}
 	}
+	violations = append(violations, importCycles(graph)...)
 	return violations, seen, err
 }
 
