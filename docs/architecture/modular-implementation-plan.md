@@ -15,8 +15,8 @@
 | Go 원장 | `services/core/internal/modules/ledger/`와 기존 ledger 구현·호출자·테스트 | 원장/종목 자격/분할/broker 대조 공개 계약. private 내부·자기 table만 사용. 동일 tx·receipt·FIFO 보존 | 계획 |
 | Go 시장·평가·관심 종목 | 각 `internal/modules/` owner와 기존 root 대응 함수 | 원장 공개 자격/관측 참조 사용, atomic owner-price import, 평가/quote 같은 snapshot 유지 | 계획 |
 | Go 거래·유지보수 | 거래 전체 transaction 호출 묶음과 owner proof·migration·backup/restore | admission/fill/policy/promotion/runner/dispatch 원자성·순서·복구 보존, source/candidate proof 동등성 | 계획 |
-| Flutter | `apps/client/lib`, `test` 및 영향받는 동일 앱 계약 검사 | WIP 두 실패 해결, 7 feature 실제 repository/codec 소유, session 보존, pure domain/application, 순환 검사 | 진행 |
-| Python | `services/research/tests/test_boundary.py` 및 필요 owner 파일 | 기존 domain/application/adapter 이전 유지, 상대/절대 import cycle과 계층 위반을 자동 거부 | 진행 |
+| Flutter | `apps/client/lib`, `test` 및 영향받는 동일 앱 계약 검사 | WIP 두 실패 해결, 7 feature 실제 repository/codec 소유, session 보존, pure domain/application, 순환 검사 | 로컬 통합91d5462, analyzer/498개 검사/web release 통과. 독립 리뷰 3건 보완 후 집중 30개 검사·분석 통과, 보완본 재검토 잔여 blocker 없음 |
+| Python | `services/research/tests/test_boundary.py` 및 필요 owner 파일 | 기존 domain/application/adapter 이전 유지, 상대/절대 import cycle과 계층 위반을 자동 거부 | 집중 5개 검사 통과, 최종 통합 검사 대기 |
 | 통합 | root `.gitignore`, 필요 Makefile·CI·문서 및 통합 diff | 최종 `make check` 1회, `make smoke`, 필요한 Podman/클라이언트 release 경로, 독립 리뷰, local commit과 cleanup | 계획 |
 
 Go의 실제 파일별 수정 허용 목록과 시그니처는 각 owner 작업의 첫 기록에서 고정한다. 원자적 closure를 자를 수 없다면 같은 단위로 옮기며 root Service를 통째로 internal/core에 옮기지 않는다. 생성만 한 폴더/빈 인터페이스/전달 wrapper를 완료로 세지 않는다.

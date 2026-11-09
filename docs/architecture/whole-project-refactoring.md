@@ -2,7 +2,7 @@
 
 - 설계 기준일: 2026-11-05. 코드 기준: `add8787eaa5f348daeea97df2df5cd06de3b90a8`.
 - 범위: Go core, Flutter client, Python research, 계약·테스트·빌드·운영 도구의 연결부.
-- 상태: 구현은 중단 상태이며, 2026-11-09 요청으로 15절의 모듈·소유권 보완 설계를 작성했다. 아래 경로·인터페이스는 목표 구조다. 실제 적용 범위는 14절, 후속 설계 제안은 15절을 따른다.
+- 상태: 2026-11-09 사용자의 구현 요청으로 작업을 재개했다. 아래 구조는 목표이며 부분 구현과 전체 완료를 구분한다. 과거 중단 기록은 14절, 설계는 15절, 실행 단위와 검증 상태는 [구현 계획](modular-implementation-plan.md)을 따른다.
 - 상위 결정: [ADR-0002](../adr/0002-domain-module-boundaries.md). 제품 기능과 승격 권한은 [CONTEXT](../../CONTEXT.md), [GATES](../../GATES.md)가 소유한다.
 
 ## 1. 목표와 설계의 한계
@@ -652,3 +652,23 @@ resolver의 쓰기 제한은 동적으로 해석한 SQL 전체에 대한 보안 
 
 
 보완본은 독립 Astra reviewer가 최신 15.12 및 관련 15.5·15.8·예외 문장을 위 원본 코드와 다시 대조했다. 이 검토 범위에서 남은 Blocker/Major는 발견하지 못했다. 문서의 상대 파일 링크·fence·문체, 폐기한 순차 조회/단일 metadata 예외 문장의 제거, MOD-11–16 시나리오 연결과 `git diff --check`를 확인했다. 이번에는 설계 문서 하나만 수정했으며 runtime 검사·빌드·배포·새 캐시/리소스 생성은 수행하지 않았다. 실제 resolver의 권한 제한, transaction 경합·취소·복구는 구현 후 검증할 항목이다.
+
+
+### 15.13 구현 중 확정한 보존 계약
+
+아래는 구현 조사에서 확인한 기존 동작을 보존하기 위한 계약 보완이다. 새 투자 정책·권한을 추가한 결정이 아니다. 업무 의미가 달라지는 예외로 확대하지 않는다.
+
+- **평가 사실의 범위**: ledger `ValuationFacts`는 snapshot·분할뿐 아니라 기존 XIRR 외부 현금흐름과 TWR 재작성 현금흐름, 정확한 경제 시각과 관측 cutoff보다 미래에 기록된 event 판정을 제공한다. 해당 필터·정렬·CASH_VOID 처리·revision 조건은 기존 SQL/특성화 검사와 일대일로 유지한다. portfolio가 원장 table을 다시 읽게 만들지 않는다.
+- **명시적인 과거 평가 시각**: cash/holding의 기존 `as_of` 경로는 해당 시각 이하의 owner series version을 선택한다. storage `ReadValuationAt`은 한 번 캡처한 server clock과 요청 시각을 기존 규칙으로 대조하고 ref.cutoff를 요청 시각으로 고정한다. 현재 평가/XIRR/TWR/benchmark의 기본 경로는 server cutoff 한 개를 사용한다. 과거 시각이 현재 원장 revision에 앞설 때의 기존 오류를 보존하며, 과거 원장 snapshot 조회라는 새 기능으로 확장하지 않는다.
+- **migration의 미커밋 증명**: migration 20과 27은 maintenance가 소유한 같은 transaction에서 pre-proof → DDL/trigger·index 복원 → post-proof를 수행한 뒤 migration record·FK 검사·commit을 한다. version20의 증명은 history19, version27은 history26 상태에서 실행된다. 일반 최신-schema VerifyBackup으로 대체하지 않는다.
+
+migration에서는 임의 `*sql.Tx`를 외부에서 받아 registry에 등록하는 API를 허용하지 않는다. composition이 구성하고 maintenance private adapter에만 주입하는 `MigrationStarter`가 registry 내부의 DB에서 transaction과 그 transaction에 결박된 `MigrationProof`를 함께 생성한다. raw transaction은 DDL을 수행하는 maintenance에만 반환한다. proof의 비공개 결박은 변경할 수 없고, `Verify(ctx, callback)`에는 tx 인자가 없다. 일반 owner와 업무 contracts는 starter/proof 타입을 받지 않는다.
+
+`Verify`는 commit/rollback을 소유하지 않고 각 pre/post 검증마다 새 읽기 전용 참조를 제한 수명으로 발급한다. 종료 시 참조와 handle을 무효화하고 열린 rows를 닫으며 지연 Scan/Next도 끝난 scope에서 수행할 수 없게 한다. 이를 위해 raw rows/row를 owner 밖에 넘기지 않는 wrapper 또는 eager 소비를 사용한다. schema19/26에 필요한 owner proof statement만 migration purpose로 허용한다. 다른 owner resolver가 새 purpose를 자동 수락해서는 안 된다. maintenance는 proof 오류를 무시하고 DDL/commit으로 진행하지 않으며 기존 rollback·FK·trigger 복구를 보존한다.
+
+이 추가 계약은 원본 `core.go:migrate`, `captureMigration20Snapshot`, `captureMigration27Snapshot`의 순서를 대조한 독립 Astra 검토를 거쳤다. 임의 tx 등록과 callback 이후 raw rows 생존 문제를 지적받아 결박 생성기와 조회 수명 제약을 선택했다. 잘못된 registry, 종료 후 Scan/Next, proof 실패·취소·panic, 원자적 FK/trigger 복구는 실제 SQLite 검사 항목이며 문서 추가만으로 통과 처리하지 않는다.
+
+
+추가 경계 검토에서는 domain이 공개 응답/포트/관측 참조가 섞인 contracts를 import하는 예외를 채택하지 않았다. private canonical 구조와 application의 명시적 typed 변환을 유지한다. JSON 왕복/reflection으로 변환하지 않으며 nil/빈 배열·nullable 값·decimal/hash 의미를 보존한다. 작은 UTC 검증 때문에 domain에 혼합 codec package를 허용하지 않는다. 공통 JSON/canonical record helper는 바깥 adapter에서만 사용한다.
+
+여러 owner가 사용하는 Kiwoom SDK는 바깥 `internal/providers/kiwoom` adapter에 두되 전체 주문 intent 검증은 trading private domain이 소유한다. private trading provider adapter가 전체 intent·synthetic 제약을 검사한 뒤 mock-only 전용 typed SDK 작업만 호출한다. SDK는 mock 환경과 프로토콜 필드를 검증하고, 기존 opaque account-scoped order alias와 definitive provider rejection/unknown 분류·무재시도 계약을 보존한다. Token/PostPage나 범용 요청 API·임의 callback constructor를 공개하지 않는다. private adapter 생성은 trading Compose, mock SDK 생성·제출 호출은 이 private adapter에만 허용하는 검사로 제한한다. 이는 외부 SDK에 금융 규칙을 공개하지 않는 기존 설계의 구체화이며 새 실거래 권한은 없다.
