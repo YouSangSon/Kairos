@@ -22,8 +22,10 @@ type ValuationInputs struct {
 	BenchmarkVersionCount int
 }
 
+type ValuationQuery struct{ FX, Prices, Benchmarks bool }
+
 type Queries interface {
-	ReadValuationInputs(context.Context, storage.ObservationRef) (ValuationInputs, error)
+	ReadValuationInputs(context.Context, storage.ObservationRef, ValuationQuery) (ValuationInputs, error)
 }
 
 type PriceIdentities struct {

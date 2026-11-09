@@ -143,7 +143,7 @@ func authorized(statements map[string]Statement, query string, args []any) bool 
 	return true
 }
 
-func (h *ReadHandle) Query(ctx context.Context, query string, args ...any) (Rows, error) {
+func (h *ReadHandle) QueryContext(ctx context.Context, query string, args ...any) (Rows, error) {
 	if h == nil || !authorized(h.statements, query, args) {
 		return nil, ErrStatement
 	}

@@ -44,10 +44,10 @@ func TestObservationLifetimeAndAuthority(t *testing.T) {
 		if value != 7 {
 			t.Fatalf("value = %d", value)
 		}
-		if _, err := handle.Query(context.Background(), `DELETE FROM events RETURNING value`); !errors.Is(err, ErrStatement) {
+		if _, err := handle.QueryContext(context.Background(), `DELETE FROM events RETURNING value`); !errors.Is(err, ErrStatement) {
 			t.Fatalf("write query accepted: %v", err)
 		}
-		if _, err := handle.Query(context.Background(), `SELECT value FROM events`, 1); !errors.Is(err, ErrStatement) {
+		if _, err := handle.QueryContext(context.Background(), `SELECT value FROM events`, 1); !errors.Is(err, ErrStatement) {
 			t.Fatalf("argument mismatch accepted: %v", err)
 		}
 		other := New(db, time.Now)
@@ -133,7 +133,7 @@ func TestObservationRowsAndDelayedScanCannotEscape(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		rows, err = handle.Query(context.Background(), `SELECT value FROM events`)
+		rows, err = handle.QueryContext(context.Background(), `SELECT value FROM events`)
 		scan = handle.QueryOne(context.Background(), `SELECT value FROM events`)
 		return err
 	})
