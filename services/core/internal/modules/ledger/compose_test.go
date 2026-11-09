@@ -1,9 +1,12 @@
 package ledger_test
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"reflect"
 	"testing"
@@ -172,4 +175,65 @@ func TestBrokerSnapshotAndReconciliationCommitTogether(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(first, again) {
 		t.Fatalf("snapshot retry changed: %+v %v", again, err)
 	}
+}
+
+func TestPublicLedgerPreservesGoldenWireAndFingerprint(t *testing.T) {
+	_, db, _ := testLedger(t)
+	times := []string{"2026-01-10T15:00:30Z", "2026-01-10T15:01:00Z", "2026-01-10T15:01:00.125Z"}
+	clockIndex := 0
+	now := func() time.Time {
+		value, err := time.Parse(time.RFC3339Nano, times[clockIndex])
+		if err != nil {
+			t.Fatal(err)
+		}
+		clockIndex++
+		return value
+	}
+	ids := map[string][]string{"event": {"event_cash_001", "event_trade_001", "event_trade_002"}, "preview": {"preview_golden_001"}, "receipt": {"receipt_golden_001"}}
+	id := func(prefix string) string { value := ids[prefix][0]; ids[prefix] = ids[prefix][1:]; return value }
+	api, err := ledger.Compose(ledger.Config{DB: db, Now: now, ID: id, PreviewTTL: func() time.Duration { return 15 * time.Minute }, Observations: observation.New(db, now)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture := func(name string) []byte {
+		t.Helper()
+		raw, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "..", "contracts", "fixtures", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return raw
+	}
+	assertFixture := func(actual any, name string) {
+		t.Helper()
+		encoded, err := json.Marshal(actual)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var expected bytes.Buffer
+		if err := json.Compact(&expected, fixture(name)); err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(encoded, expected.Bytes()) {
+			t.Fatalf("wire bytes differ from %s\n%s", name, encoded)
+		}
+	}
+	preview, issue := api.PreviewImport(context.Background(), fixture("golden-import.csv"))
+	if issue != nil {
+		t.Fatal(issue)
+	}
+	assertFixture(preview, "golden-preview.json")
+	var request contracts.ApplyRequest
+	if err := json.Unmarshal(fixture("golden-apply-request.json"), &request); err != nil {
+		t.Fatal(err)
+	}
+	receipt, issue := api.ApplyImport(context.Background(), request)
+	if issue != nil {
+		t.Fatal(issue)
+	}
+	assertFixture(receipt, "golden-apply.json")
+	snapshot, err := api.Snapshot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertFixture(snapshot, "golden-snapshot.json")
 }
