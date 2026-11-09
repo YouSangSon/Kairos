@@ -19,6 +19,8 @@ List<String> architectureViolations(Map<String, String> sources) {
   final violations = <String>[];
   final directives = <String, List<_Directive>>{};
   final libraries = <String, String>{};
+  final dependencies = <String, Set<String>>{};
+  final owners = <String, Set<String>>{};
   for (final entry in sources.entries) {
     if (_boundary(entry.key) == null) {
       violations.add('${entry.key}: source has no architectural owner');
@@ -70,9 +72,46 @@ List<String> architectureViolations(Map<String, String> sources) {
           '${entry.key}: ${directive.kind} crosses a boundary ($target)',
         );
       }
+      if (target != null &&
+          sources.containsKey(target) &&
+          !directive.kind.startsWith('part of')) {
+        (dependencies[entry.key] ??= {}).add(target);
+        final owner = _boundary(entry.key)?.split('/').first;
+        final targetOwner = _boundary(target)?.split('/').first;
+        if (owner != null && targetOwner != null && owner != targetOwner) {
+          (owners[owner] ??= {}).add(targetOwner);
+        }
+      }
     }
   }
+  violations.addAll(_cycles(dependencies));
+  violations.addAll(_cycles(owners));
   return violations;
+}
+
+List<String> _cycles(Map<String, Set<String>> graph) {
+  final failures = <String>[];
+  final visited = <String>{};
+  final path = <String>[];
+  void visit(String node) {
+    if (path.contains(node)) {
+      failures.add(
+        'dependency cycle: ${[...path.sublist(path.indexOf(node)), node].join(' -> ')}',
+      );
+      return;
+    }
+    if (!visited.add(node)) return;
+    path.add(node);
+    for (final target in (graph[node] ?? <String>{}).toList()..sort()) {
+      visit(target);
+    }
+    path.removeLast();
+  }
+
+  for (final node in graph.keys.toList()..sort()) {
+    visit(node);
+  }
+  return failures;
 }
 
 String? _boundary(String path) {
@@ -116,8 +155,9 @@ bool _allowed(String source, String target) {
   if (owner == 'core' && targetOwner != 'core') return false;
   if (targetOwner == 'core' &&
       layer == 'presentation' &&
-      !const {'domain', 'presentation'}.contains(targetLayer))
+      !const {'domain', 'presentation'}.contains(targetLayer)) {
     return false;
+  }
   if (layer == 'domain') return targetLayer == 'domain';
   if (layer == 'application') {
     return targetLayer == 'domain' ||
@@ -141,8 +181,9 @@ String? _resolve(String source, String value) {
     if (target.scheme != 'file' ||
         target.hasQuery ||
         target.hasFragment ||
-        !target.path.startsWith(base.path))
+        !target.path.startsWith(base.path)) {
       return null;
+    }
     return target.path.substring(base.path.length);
   } on FormatException {
     return null;
@@ -161,26 +202,74 @@ class _Token {
 }
 
 List<_Directive> _directives(String source) {
-  final tokens = _tokens(source), result = <_Directive>[];
-  var depth = 0;
-  for (var i = 0; i < tokens.length; i++) {
-    final token = tokens[i];
-    if (token.string) continue;
-    if (token.value == '{') depth++;
-    if (token.value == '}') depth--;
-    if (depth != 0 ||
-        !const {'import', 'export', 'part', 'library'}.contains(token.value)) {
+  final tokens = _tokens(source).iterator, result = <_Directive>[];
+  _Token? next() => tokens.moveNext() ? tokens.current : null;
+  var token = next();
+  while (token != null) {
+    if (token.value == '@') {
+      token = next();
+      if (token == null || !RegExp(r'^[A-Za-z_$]').hasMatch(token.value)) {
+        throw const FormatException('Annotation requires a name');
+      }
+      token = next();
+      while (token?.value == '.' || token?.value == '<') {
+        if (token!.value == '.') {
+          final name = next();
+          if (name == null || !RegExp(r'^[A-Za-z_$]').hasMatch(name.value)) {
+            throw const FormatException('Annotation requires a name');
+          }
+        } else {
+          var depth = 1;
+          while (depth > 0) {
+            final argument = next();
+            if (argument == null) {
+              throw const FormatException('Unterminated annotation type');
+            }
+            if (argument.value == '<') depth++;
+            if (argument.value == '>') depth--;
+          }
+        }
+        token = next();
+      }
+      if (token?.value == '(') {
+        var depth = 1;
+        while (depth > 0) {
+          final argument = next();
+          if (argument == null) {
+            throw const FormatException('Unterminated annotation');
+          }
+          if (!argument.string && argument.value == '(') depth++;
+          if (!argument.string && argument.value == ')') depth--;
+        }
+        token = next();
+      }
       continue;
     }
-    final end = tokens.indexWhere((t) => !t.string && t.value == ';', i + 1);
-    if (end < 0) throw const FormatException('Unterminated library directive');
-    final values = tokens.sublist(i + 1, end);
+    if (token.string ||
+        !const {'import', 'export', 'part', 'library'}.contains(token.value)) {
+      break;
+    }
+    final values = <_Token>[];
+    var terminated = false;
+    while (tokens.moveNext()) {
+      if (!tokens.current.string && tokens.current.value == ';') {
+        terminated = true;
+        break;
+      }
+      values.add(tokens.current);
+    }
+    if (!terminated) {
+      throw const FormatException('Unterminated library directive');
+    }
     if (values.isEmpty && token.value != 'library') {
       throw const FormatException('Library directive requires a target');
     }
     if (token.value == 'library') {
       result.add(_Directive('library', values.map((t) => t.value).join()));
     } else if (token.value == 'part' && values.first.value == 'of') {
+      if (values.length < 2) {
+        throw const FormatException('Part-of directive requires a target');
+      }
       result.add(
         _Directive(
           values[1].string ? 'part of' : 'part of name',
@@ -194,26 +283,29 @@ List<_Directive> _directives(String source) {
       result.add(_Directive(token.value, values.first.value));
       for (var j = 1; j < values.length; j++) {
         if (values[j].string || values[j].value != 'if') continue;
+        if (++j >= values.length || values[j].value != '(') {
+          throw const FormatException(
+            'Conditional directive requires a condition',
+          );
+        }
         var conditionDepth = 0;
         do {
-          j++;
           if (values[j].value == '(') conditionDepth++;
           if (values[j].value == ')') conditionDepth--;
-        } while (conditionDepth > 0 && j + 1 < values.length);
-        j++;
+          j++;
+        } while (conditionDepth > 0 && j < values.length);
         if (j >= values.length || !values[j].string) {
           throw const FormatException('Conditional directive requires a URI');
         }
         result.add(_Directive(token.value, values[j].value));
       }
     }
-    i = end;
+    token = next();
   }
   return result;
 }
 
-List<_Token> _tokens(String source) {
-  final result = <_Token>[];
+Iterable<_Token> _tokens(String source) sync* {
   var i = 0;
   while (i < source.length) {
     if (RegExp(r'\s').hasMatch(source[i])) {
@@ -263,8 +355,9 @@ List<_Token> _tokens(String source) {
             final end = braced
                 ? source.indexOf('}', i)
                 : i + (escape == 'u' ? 4 : 2);
-            if (end < i || end > source.length)
+            if (end < i || end > source.length) {
               throw const FormatException('Invalid unicode escape');
+            }
             value.writeCharCode(int.parse(source.substring(i, end), radix: 16));
             i = end + (braced ? 1 : 0);
           } else {
@@ -284,23 +377,23 @@ List<_Token> _tokens(String source) {
           value.write(source[i++]);
         }
       }
-      if (i >= source.length)
+      if (i >= source.length) {
         throw const FormatException('Unterminated string');
+      }
       i += marker.length;
-      result.add(_Token(value.toString(), string: true));
+      yield _Token(value.toString(), string: true);
       continue;
     }
     final identifier = RegExp(
       r'[A-Za-z_$][A-Za-z0-9_$]*',
     ).matchAsPrefix(source, i);
     if (identifier != null) {
-      result.add(_Token(identifier[0]!));
+      yield _Token(identifier[0]!);
       i = identifier.end;
     } else {
-      result.add(_Token(source[i++]));
+      yield _Token(source[i++]);
     }
   }
-  return result;
 }
 
 void main(List<String> arguments) {

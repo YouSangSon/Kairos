@@ -1,3 +1,4 @@
+import 'package:omni_folio_client/core/domain/timestamp.dart';
 import 'package:omni_folio_client/core/data/json_codec.dart';
 import 'package:omni_folio_client/features/watchlist/domain/models.dart';
 
@@ -70,15 +71,15 @@ WatchlistPrice decodeWatchlistPrice(Json json, String cutoff, String status) {
       adjustment == 'unspecified' &&
       sample;
   final old =
-      jsonUtcNanoseconds(cutoff) - jsonUtcNanoseconds(observed) >
+      utcNanoseconds(cutoff) - utcNanoseconds(observed) >
       BigInt.from(86400) * BigInt.from(1000000000);
   if ((!owner && !fixture) ||
       price.length > 128 ||
       price.startsWith('-') ||
       price == '0' ||
-      jsonUtcNanoseconds(observed) > jsonUtcNanoseconds(fetched) ||
-      jsonUtcNanoseconds(fetched) > jsonUtcNanoseconds(recorded) ||
-      jsonUtcNanoseconds(recorded) > jsonUtcNanoseconds(cutoff) ||
+      utcNanoseconds(observed) > utcNanoseconds(fetched) ||
+      utcNanoseconds(fetched) > utcNanoseconds(recorded) ||
+      utcNanoseconds(recorded) > utcNanoseconds(cutoff) ||
       status != (fixture || old ? 'stale' : 'unknown')) {
     throw const FormatException('Invalid stored watchlist price');
   }
@@ -148,7 +149,7 @@ WatchlistReport decodeWatchlistReport(Json json) {
   final rows = jsonJsonList(json, 'quotes');
   if (rows.length != state.entries.length ||
       (state.updatedAt != null &&
-          jsonUtcNanoseconds(state.updatedAt!) > jsonUtcNanoseconds(at))) {
+          utcNanoseconds(state.updatedAt!) > utcNanoseconds(at))) {
     throw const FormatException('Watchlist observation mismatch');
   }
   final quotes = <WatchlistQuote>[];

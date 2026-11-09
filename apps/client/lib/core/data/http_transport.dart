@@ -2,7 +2,6 @@ import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 import 'package:omni_folio_client/core/data/json_codec.dart';
 import 'package:omni_folio_client/core/domain/api_exception.dart';
-import 'package:omni_folio_client/features/portfolio/data/codecs.dart';
 
 const defaultApiUrl = String.fromEnvironment(
   'OMNI_API_URL',

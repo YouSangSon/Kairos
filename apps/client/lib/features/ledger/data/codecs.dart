@@ -1,3 +1,4 @@
+import 'package:omni_folio_client/core/domain/timestamp.dart';
 import 'package:omni_folio_client/core/data/json_codec.dart';
 import 'package:omni_folio_client/core/domain/decimal.dart';
 import 'package:omni_folio_client/features/ledger/domain/models.dart';
@@ -30,9 +31,9 @@ LedgerActivityPage decodeLedgerActivityPage(Json json) {
     throw const FormatException('Invalid ledger activity page size');
   }
   for (var index = 1; index < events.length; index += 1) {
-    if (jsonUtcNanoseconds(
+    if (utcNanoseconds(
           events[index].occurredAt,
-        ).compareTo(jsonUtcNanoseconds(events[index - 1].occurredAt)) >
+        ).compareTo(utcNanoseconds(events[index - 1].occurredAt)) >
         0) {
       throw const FormatException('Ledger activities must be newest first');
     }
@@ -102,10 +103,10 @@ InstrumentLedger decodeInstrumentLedger(Json json) {
     final trade = trades[index];
     if (!const {'BUY', 'SELL'}.contains(trade.type) ||
         trade.currency != currency ||
-        jsonUtcNanoseconds(trade.occurredAt) > jsonUtcNanoseconds(asOf) ||
+        utcNanoseconds(trade.occurredAt) > utcNanoseconds(asOf) ||
         (index > 0 &&
-            jsonUtcNanoseconds(trade.occurredAt) >
-                jsonUtcNanoseconds(trades[index - 1].occurredAt))) {
+            utcNanoseconds(trade.occurredAt) >
+                utcNanoseconds(trades[index - 1].occurredAt))) {
       throw const FormatException('Invalid instrument trade scope');
     }
   }

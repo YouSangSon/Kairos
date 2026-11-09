@@ -1,9 +1,9 @@
+import 'package:omni_folio_client/core/domain/timestamp.dart';
 import 'dart:convert';
 import 'package:omni_folio_client/core/data/json_codec.dart';
 import 'package:omni_folio_client/core/domain/decimal.dart';
 import 'package:omni_folio_client/features/market_data/domain/models.dart';
 import 'package:omni_folio_client/features/market_data/domain/owner_data_summary.dart';
-import 'package:omni_folio_client/features/portfolio/data/codecs.dart';
 
 OwnerDataPreview decodeOwnerDataPreview(Json json, String input) {
   jsonRequireExactKeys(json, {'kind', 'input', 'summary'});
@@ -128,9 +128,9 @@ OwnerDataPreview decodeOwnerDataPreview(Json json, String input) {
         points.last is! Json ||
         points.first['observed_at'] != first ||
         points.last['observed_at'] != last ||
-        jsonUtcNanoseconds(first) > jsonUtcNanoseconds(last) ||
+        utcNanoseconds(first) > utcNanoseconds(last) ||
         ((count == 1) != (first == last)) ||
-        jsonUtcNanoseconds(last) > jsonUtcNanoseconds(fetched)) {
+        utcNanoseconds(last) > utcNanoseconds(fetched)) {
       throw const FormatException(
         'Owner observation range does not match input',
       );
@@ -156,8 +156,7 @@ OwnerDataReceipt decodeOwnerDataReceipt(Json json, OwnerDataPreview review) {
     throw const FormatException('Owner receipt does not match review');
   }
   final recorded = jsonUtcText(receipt, 'recorded_at');
-  if (jsonUtcNanoseconds(recorded) <
-      jsonUtcNanoseconds(review.summary.fetchedAt)) {
+  if (utcNanoseconds(recorded) < utcNanoseconds(review.summary.fetchedAt)) {
     throw const FormatException('Owner receipt predates capture');
   }
   return OwnerDataReceipt(review, recorded);

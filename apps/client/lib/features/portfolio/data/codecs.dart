@@ -1,5 +1,4 @@
-import 'dart:convert';
-import 'package:omni_folio_client/core/data/codecs.dart';
+import 'package:omni_folio_client/core/domain/timestamp.dart';
 import 'package:omni_folio_client/core/data/json_codec.dart';
 import 'package:omni_folio_client/core/domain/decimal.dart';
 import 'package:omni_folio_client/core/domain/models.dart';
@@ -234,7 +233,7 @@ HoldingValuation decodeHoldingValuation(Json json) {
       owner != lines.any((l) => l.price?.source == 'owner_declared')) {
     throw const FormatException('Invalid holding price authority');
   }
-  final valuationTime = jsonUtcNanoseconds(valuationAsOf);
+  final valuationTime = utcNanoseconds(valuationAsOf);
   if (jsonText(json, 'scope') != 'holdings_only' ||
       jsonText(json, 'policy_version') !=
           (owner
@@ -248,16 +247,16 @@ HoldingValuation decodeHoldingValuation(Json json) {
         'complete',
       }.contains(status) ||
       !RegExp(r'^rev_[0-9]{10}$').hasMatch(jsonText(json, 'ledger_revision')) ||
-      jsonUtcNanoseconds(ledgerAsOf) > valuationTime ||
-      jsonUtcNanoseconds(ledgerRecordedAt) > valuationTime) {
+      utcNanoseconds(ledgerAsOf) > valuationTime ||
+      utcNanoseconds(ledgerRecordedAt) > valuationTime) {
     throw const FormatException('Invalid holding valuation metadata');
   }
   for (final line in lines) {
     final price = line.price;
     if (price == null) continue;
-    final observedAt = jsonUtcNanoseconds(price.observedAt);
-    final fetchedAt = jsonUtcNanoseconds(price.fetchedAt);
-    final recordedAt = jsonUtcNanoseconds(price.recordedAt);
+    final observedAt = utcNanoseconds(price.observedAt);
+    final fetchedAt = utcNanoseconds(price.fetchedAt);
+    final recordedAt = utcNanoseconds(price.recordedAt);
     final age = valuationTime - observedAt;
     final maxAge = BigInt.from(86400) * BigInt.from(1000000000);
     if (price.currency != line.currency ||
@@ -395,9 +394,8 @@ CurrentPortfolioValuation decodeCurrentPortfolioValuation(Json json) {
       maxAge != 86400 ||
       baseCurrency != 'KRW' ||
       !RegExp(r'^rev_[0-9]{10}$').hasMatch(ledgerRevision) ||
-      jsonUtcNanoseconds(ledgerAsOf) > jsonUtcNanoseconds(valuationAsOf) ||
-      jsonUtcNanoseconds(ledgerRecordedAt) >
-          jsonUtcNanoseconds(valuationAsOf) ||
+      utcNanoseconds(ledgerAsOf) > utcNanoseconds(valuationAsOf) ||
+      utcNanoseconds(ledgerRecordedAt) > utcNanoseconds(valuationAsOf) ||
       !const {
         'empty',
         'complete',
@@ -555,7 +553,7 @@ PortfolioTwrCheckpoints decodePortfolioTwrCheckpoints(Json json) {
     final value = raw[index];
     jsonRequireExactKeys(value, {'at', 'kind', 'cumulative_rate'});
     final at = jsonUtcText(value, 'at');
-    final time = jsonUtcNanoseconds(at);
+    final time = utcNanoseconds(at);
     final rate = jsonDecimal(value, 'cumulative_rate');
     final terminal = index == count;
     if (value['kind'] != (terminal ? 'valuation' : 'external_flow') ||
@@ -563,8 +561,8 @@ PortfolioTwrCheckpoints decodePortfolioTwrCheckpoints(Json json) {
         decimalScale(rate) > 12 ||
         (rate.startsWith('-') &&
             comparePositiveDecimal(rate.substring(1), '1') > 0) ||
-        time < jsonUtcNanoseconds(report.periodStart!) ||
-        time > jsonUtcNanoseconds(report.periodEnd) ||
+        time < utcNanoseconds(report.periodStart!) ||
+        time > utcNanoseconds(report.periodEnd) ||
         (previous != null && (terminal ? time < previous : time <= previous)) ||
         (index == 0 && (at != report.periodStart || rate != '0')) ||
         (terminal &&
@@ -736,7 +734,7 @@ PortfolioTwr decodePortfolioTwr(Json json) {
       sample != seen.contains('sample_data') ||
       (valuation.sample && !sample) ||
       end != valuation.valuationAsOf ||
-      (start != null && jsonUtcNanoseconds(start) > jsonUtcNanoseconds(end)) ||
+      (start != null && utcNanoseconds(start) > utcNanoseconds(end)) ||
       (missingValuation &&
           (valuation.totalValue != null ||
               count != null ||
@@ -816,8 +814,8 @@ BenchmarkSeriesSummary decodeBenchmarkSeriesSummary(Json json) {
   final last = jsonUtcText(json, 'last_observed_at');
   final fetched = jsonUtcText(json, 'fetched_at');
   final recorded = jsonUtcText(json, 'recorded_at');
-  final firstTime = jsonUtcNanoseconds(first);
-  final lastTime = jsonUtcNanoseconds(last);
+  final firstTime = utcNanoseconds(first);
+  final lastTime = utcNanoseconds(last);
   if (json['storage_check'] != 'verified' ||
       json['authority'] != 'owner_declared' ||
       !const {'KRW', 'USD'}.contains(currency) ||
@@ -839,8 +837,8 @@ BenchmarkSeriesSummary decodeBenchmarkSeriesSummary(Json json) {
       count > 10000 ||
       firstTime > lastTime ||
       ((count == 1) != (firstTime == lastTime)) ||
-      lastTime > jsonUtcNanoseconds(fetched) ||
-      jsonUtcNanoseconds(fetched) > jsonUtcNanoseconds(recorded)) {
+      lastTime > utcNanoseconds(fetched) ||
+      utcNanoseconds(fetched) > utcNanoseconds(recorded)) {
     throw const FormatException('Invalid benchmark series summary');
   }
   return BenchmarkSeriesSummary(
@@ -957,18 +955,18 @@ PortfolioBenchmark decodePortfolioBenchmark(Json json, PortfolioTwr portfolio) {
   final native = decodeBenchmarkRate(json['native'] as Json);
   final krw = decodeBenchmarkRate(json['krw'] as Json);
   final difference = jsonNullableDecimal(json, 'difference_percentage_points');
-  final endAt = jsonUtcNanoseconds(portfolio.periodEnd);
+  final endAt = utcNanoseconds(portfolio.periodEnd);
   final startAt = portfolio.periodStart == null
       ? null
-      : jsonUtcNanoseconds(portfolio.periodStart!);
+      : utcNanoseconds(portfolio.periodStart!);
   final maxAge = BigInt.from(86400) * BigInt.from(1000000000);
   bool stale(String? observedAt, BigInt at) =>
-      observedAt != null && at - jsonUtcNanoseconds(observedAt) > maxAge;
+      observedAt != null && at - utcNanoseconds(observedAt) > maxAge;
   bool equalRates() =>
       native.status == krw.status &&
       native.rate == krw.rate &&
       native.issue == krw.issue;
-  if (jsonUtcNanoseconds(series.recordedAt) > endAt ||
+  if (utcNanoseconds(series.recordedAt) > endAt ||
       sample !=
           (series.sample ||
               (startFx?.sample ?? false) ||
@@ -985,17 +983,16 @@ PortfolioBenchmark decodePortfolioBenchmark(Json json, PortfolioTwr portfolio) {
     (startFx?.observedAt, startAt),
     (endFx?.observedAt, endAt),
   ]) {
-    if (observedAt != null &&
-        (at == null || jsonUtcNanoseconds(observedAt) > at)) {
+    if (observedAt != null && (at == null || utcNanoseconds(observedAt) > at)) {
       throw const FormatException('Future benchmark observation');
     }
   }
   for (final mark in [start, end]) {
     if (mark != null &&
-        (jsonUtcNanoseconds(mark.observedAt) <
-                jsonUtcNanoseconds(series.firstObservedAt) ||
-            jsonUtcNanoseconds(mark.observedAt) >
-                jsonUtcNanoseconds(series.lastObservedAt))) {
+        (utcNanoseconds(mark.observedAt) <
+                utcNanoseconds(series.firstObservedAt) ||
+            utcNanoseconds(mark.observedAt) >
+                utcNanoseconds(series.lastObservedAt))) {
       throw const FormatException('Benchmark observation outside its version');
     }
   }
@@ -1358,10 +1355,4 @@ PortfolioXirr decodePortfolioXirr(Json json) {
     netContributions: net,
     issues: List.unmodifiable(issues),
   );
-}
-
-Json decodeObject(String body) {
-  final value = jsonDecode(body);
-  if (value is! Json) throw const FormatException('Expected JSON object');
-  return value;
 }

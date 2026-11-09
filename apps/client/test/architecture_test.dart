@@ -58,6 +58,95 @@ const text = "import 'dart:io';";
     );
   });
 
+  test('ignores nested interpolation after the library directives', () {
+    expect(
+      architectureViolations({
+        'features/ledger/data/csv.dart': r'''
+import '../domain/value.dart';
+String escape(String value) => '"${value.replaceAll('"', '""')}"';
+''',
+        'features/ledger/domain/value.dart': '',
+      }),
+      isEmpty,
+    );
+  });
+
+  test('metadata cannot hide directives or require lexing declarations', () {
+    expect(
+      architectureViolations({
+        'features/ledger/domain/value.dart': r'''
+@Deprecated('old API')
+library ledger;
+@deprecated
+import 'dart:math';
+@Deprecated('old API')
+class Value {
+  String escape(String value) => '"${value.replaceAll('"', '""')}"';
+}
+''',
+      }),
+      isEmpty,
+    );
+    expect(
+      architectureViolations({
+        'features/ledger/domain/value.dart':
+            "@Deprecated('old API') import 'package:http/http.dart';",
+      }),
+      contains(contains('forbidden platform dependency')),
+    );
+  });
+
+  test('malformed directives report violations without aborting the gate', () {
+    for (final source in ["import 'value.dart' if;", 'part of;']) {
+      expect(
+        architectureViolations({'features/ledger/domain/value.dart': source}),
+        isNotEmpty,
+      );
+    }
+  });
+
+  test('rejects import, export and conditional dependency cycles', () {
+    for (final directive in [
+      "import 'nested/b.dart';",
+      "export 'nested/b.dart';",
+      "import 'value.dart' if (dart.library.io) 'nested/b.dart';",
+    ]) {
+      expect(
+        architectureViolations({
+          'features/ledger/domain/a.dart': directive,
+          'features/ledger/domain/nested/b.dart': "import '../a.dart';",
+          'features/ledger/domain/value.dart': '',
+        }).any((failure) => failure.contains('dependency cycle')),
+        isTrue,
+        reason: directive,
+      );
+    }
+  });
+
+  test('rejects feature cycles even when individual files are acyclic', () {
+    expect(
+      architectureViolations({
+        'features/ledger/domain/a.dart':
+            "import '../../portfolio/domain/a.dart';",
+        'features/portfolio/domain/a.dart': '',
+        'features/portfolio/domain/b.dart':
+            "import '../../ledger/domain/b.dart';",
+        'features/ledger/domain/b.dart': '',
+      }).any((failure) => failure.contains('dependency cycle')),
+      isTrue,
+    );
+  });
+
+  test('part cycles are rejected while part-of ownership is not a cycle', () {
+    expect(
+      architectureViolations({
+        'features/ledger/domain/a.dart': "part 'b.dart';",
+        'features/ledger/domain/b.dart': "part 'a.dart';",
+      }),
+      contains(contains('dependency cycle')),
+    );
+  });
+
   test('part and named part-of stay inside the same owner and layer', () {
     expect(
       architectureViolations({

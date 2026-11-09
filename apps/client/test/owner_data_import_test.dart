@@ -106,7 +106,7 @@ void main() {
         );
         final preview = await api.previewOwnerData(original.input);
         final result = await api.applyOwnerData(preview);
-        expect(result.review.summary, original.summary);
+        expect(result.review.summary.sameAs(original.summary), isTrue);
         expect(calls, [
           '/v1/market-data/imports/preview',
           '/v1/market-data/imports/apply',

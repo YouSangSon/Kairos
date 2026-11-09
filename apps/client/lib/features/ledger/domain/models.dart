@@ -1,4 +1,4 @@
-import 'package:omni_folio_client/core/data/json_codec.dart';
+import 'package:omni_folio_client/core/domain/timestamp.dart';
 
 class LedgerActivityPage {
   const LedgerActivityPage({
@@ -31,14 +31,14 @@ class LedgerActivityPage {
         (continuationCursor != null &&
             (continuationCursor == requestedCursor ||
                 traversedCursors.contains(continuationCursor))) ||
-        jsonUtcNanoseconds(
+        utcNanoseconds(
               events.first.occurredAt,
-            ).compareTo(jsonUtcNanoseconds(upperBoundOccurredAt)) >
+            ).compareTo(utcNanoseconds(upperBoundOccurredAt)) >
             0 ||
         (lowerBoundOccurredAt != null &&
-            jsonUtcNanoseconds(
+            utcNanoseconds(
                   events.last.occurredAt,
-                ).compareTo(jsonUtcNanoseconds(lowerBoundOccurredAt)) <
+                ).compareTo(utcNanoseconds(lowerBoundOccurredAt)) <
                 0)) {
       throw const FormatException('Invalid ledger activity continuation');
     }

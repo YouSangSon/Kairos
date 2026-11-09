@@ -7,7 +7,6 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
-import 'package:omni_folio_client/core/data/codecs.dart';
 import 'package:omni_folio_client/core/data/http_transport.dart';
 import 'package:omni_folio_client/core/data/json_codec.dart';
 import 'package:omni_folio_client/core/domain/api_exception.dart';

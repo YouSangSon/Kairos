@@ -1,4 +1,4 @@
-import 'package:omni_folio_client/core/data/json_codec.dart';
+import 'package:omni_folio_client/core/domain/timestamp.dart';
 import 'package:omni_folio_client/core/domain/models.dart';
 
 class Holding {
@@ -187,7 +187,7 @@ class PortfolioSnapshot {
 class TwrCheckpoint {
   const TwrCheckpoint(this.at, this.kind, this.cumulativeRate);
   final String at, kind, cumulativeRate;
-  BigInt get atNanoseconds => jsonUtcNanoseconds(at);
+  BigInt get atNanoseconds => utcNanoseconds(at);
 }
 
 class PortfolioTwrCheckpoints {

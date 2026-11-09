@@ -1,5 +1,4 @@
 import 'dart:convert';
-import 'package:omni_folio_client/core/data/codecs.dart';
 import 'package:omni_folio_client/core/domain/decimal.dart';
 import 'package:omni_folio_client/core/domain/models.dart';
 
@@ -106,18 +105,6 @@ List<Json> jsonOptionalJsonList(Json value, String key) {
       .toList(growable: false);
 }
 
-BigInt jsonUtcNanoseconds(String value) {
-  final dot = value.indexOf('.');
-  final whole = dot < 0 ? value : '${value.substring(0, dot)}Z';
-  final seconds = DateTime.parse(whole).microsecondsSinceEpoch ~/ 1000000;
-  final fraction = dot < 0
-      ? BigInt.zero
-      : BigInt.parse(
-          value.substring(dot + 1, value.length - 1).padRight(9, '0'),
-        );
-  return BigInt.from(seconds) * BigInt.from(1000000000) + fraction;
-}
-
 List<Money> jsonMoneyList(Json value, String key) =>
     jsonJsonList(value, key).map(decodeMoney).toList(growable: false);
 
@@ -201,4 +188,13 @@ String jsonBenchmarkText(
     throw const FormatException('Invalid benchmark text');
   }
   return text;
+}
+
+Money decodeMoney(Json json) =>
+    Money(jsonText(json, 'currency'), jsonDecimal(json, 'amount'));
+
+Json decodeObject(String body) {
+  final value = jsonDecode(body);
+  if (value is! Json) throw const FormatException('Expected JSON object');
+  return value;
 }

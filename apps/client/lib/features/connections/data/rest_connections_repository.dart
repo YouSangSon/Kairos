@@ -1,10 +1,10 @@
+import 'package:omni_folio_client/core/data/json_codec.dart';
 import 'dart:async';
 import 'package:omni_folio_client/core/data/http_transport.dart';
 import 'package:omni_folio_client/core/domain/api_exception.dart';
 import 'package:omni_folio_client/features/connections/data/codecs.dart';
 import 'package:omni_folio_client/features/connections/domain/connections_repository.dart';
 import 'package:omni_folio_client/features/connections/domain/models.dart';
-import 'package:omni_folio_client/features/portfolio/data/codecs.dart';
 
 class RestConnectionsRepository implements ConnectionsRepository {
   RestConnectionsRepository(this.transport);
