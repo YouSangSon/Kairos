@@ -1,16 +1,16 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
-import 'package:omni_folio_client/api.dart';
-import 'package:omni_folio_client/app.dart';
-import 'package:omni_folio_client/paper_promotion_report.dart';
-import 'package:omni_folio_client/paper_promotion_report_page.dart';
+import 'package:omni_folio_client/core/domain/api_exception.dart';
+import 'package:omni_folio_client/features/paper/data/paper_promotion_report_codec.dart';
+import 'package:omni_folio_client/features/paper/domain/paper_promotion_report.dart';
+import 'package:omni_folio_client/features/paper/presentation/paper_promotion_report_page.dart';
+import 'support/repositories.dart';
 
 typedef Json = Map<String, dynamic>;
 
@@ -43,13 +43,11 @@ void main() {
         'aborted': 'ABORTED',
       };
       for (final entry in expected.entries) {
-        final view = PaperPromotionReport.fromJson(_fixture(entry.key));
+        final view = decodePaperPromotionReport(_fixture(entry.key));
         expect(view.attempt?.decision, entry.value, reason: entry.key);
         expect(view.observedAt, '2026-10-27T15:00:00Z');
       }
-      final promoted = PaperPromotionReport.fromJson(
-        _fixture('promoted-current'),
-      );
+      final promoted = decodePaperPromotionReport(_fixture('promoted-current'));
       expect(promoted.attempt!.selectionStatus, 'current');
       expect(promoted.attempt!.comparison!.windows.length, 3);
       expect(
@@ -61,13 +59,13 @@ void main() {
         '0.045992',
       );
       expect(
-        PaperPromotionReport.fromJson(
+        decodePaperPromotionReport(
           _fixture('promoted-superseded'),
         ).attempt!.selectionStatus,
         'superseded',
       );
       expect(
-        PaperPromotionReport.fromJson(
+        decodePaperPromotionReport(
           _fixture('stale'),
         ).attempt!.comparison!.decision,
         'PROMOTE',
@@ -79,7 +77,7 @@ void main() {
     void reject(void Function(Json) change) {
       final value = _fixture('promoted-current');
       change(value);
-      expect(() => PaperPromotionReport.fromJson(value), throwsFormatException);
+      expect(() => decodePaperPromotionReport(value), throwsFormatException);
     }
 
     for (final key in _fixture('promoted-current').keys) {
@@ -136,7 +134,7 @@ void main() {
     void reject(String name, void Function(Json) change) {
       final value = _fixture(name);
       change(value);
-      expect(() => PaperPromotionReport.fromJson(value), throwsFormatException);
+      expect(() => decodePaperPromotionReport(value), throwsFormatException);
     }
 
     reject(
@@ -194,14 +192,14 @@ void main() {
       final held = _fixture('held');
       held['attempt']['reason_code'] = reason;
       held['attempt']['comparison']['reason_code'] = reason;
-      expect(PaperPromotionReport.fromJson(held).attempt!.reasonCode, reason);
+      expect(decodePaperPromotionReport(held).attempt!.reasonCode, reason);
     }
     final staleHold = _fixture('stale');
     staleHold['attempt']['comparison'] = _fixture(
       'held',
     )['attempt']['comparison'];
     expect(
-      PaperPromotionReport.fromJson(staleHold).attempt!.comparison!.decision,
+      decodePaperPromotionReport(staleHold).attempt!.comparison!.decision,
       'HOLD',
     );
   });
@@ -210,7 +208,7 @@ void main() {
     void reject(void Function(Json) change) {
       final value = _fixture('promoted-current');
       change(value);
-      expect(() => PaperPromotionReport.fromJson(value), throwsFormatException);
+      expect(() => decodePaperPromotionReport(value), throwsFormatException);
     }
 
     for (final invalid in [0, -1, 5, 1.5, '2']) {
@@ -297,7 +295,7 @@ void main() {
     metrics['max_drawdown'] = '3';
     metrics['turnover'] = '9' * 128;
     metrics['round_trips'] = '9' * 128;
-    final parsed = PaperPromotionReport.fromJson(valid);
+    final parsed = decodePaperPromotionReport(valid);
     expect(parsed.attempt!.candidate.quantity, '4611686018427387903');
     expect(
       parsed.attempt!.comparison!.windows.first.candidate.turnover,
@@ -311,10 +309,7 @@ void main() {
       void reject(void Function(Json) change) {
         final value = _fixture('promoted-current');
         change(value);
-        expect(
-          () => PaperPromotionReport.fromJson(value),
-          throwsFormatException,
-        );
+        expect(() => decodePaperPromotionReport(value), throwsFormatException);
       }
 
       for (final date in [
@@ -367,7 +362,7 @@ void main() {
       regressed['attempt']['claimed_at'] = '2026-10-27T15:00:00.000000001Z';
       regressed['attempt']['decided_at'] = '2026-10-27T15:00:00.000000002Z';
       expect(
-        PaperPromotionReport.fromJson(regressed).observedAt,
+        decodePaperPromotionReport(regressed).observedAt,
         '2020-01-01T00:00:00Z',
       );
     },
@@ -375,7 +370,7 @@ void main() {
 
   test('REST request uses only the fixed GET path', () async {
     http.Request? request;
-    final api = RestOmniApi(
+    final api = RestTestRepositories(
       baseUrl: 'http://example.test/',
       client: MockClient((value) async {
         request = value;
@@ -393,13 +388,13 @@ void main() {
 
   testWidgets('connections fetches only when opened', (tester) async {
     final api = _PaperApi()
-      ..next = PaperPromotionReport.fromJson(_fixture('empty'));
-    final controller = PortfolioController(api);
+      ..next = decodePaperPromotionReport(_fixture('empty'));
+    final controller = testPortfolioController(api);
     addTearDown(controller.dispose);
     await tester.pumpWidget(
       MaterialApp(
         home: Scaffold(
-          body: DataPage(api: api, controller: controller),
+          body: testDataPage(api: api, controller: controller),
         ),
       ),
     );
@@ -437,7 +432,7 @@ void main() {
     expect(find.textContaining('account-secret'), findsNothing);
     api
       ..pending = null
-      ..next = PaperPromotionReport.fromJson(_fixture('empty'));
+      ..next = decodePaperPromotionReport(_fixture('empty'));
     await tester.tap(find.text('다시 시도'));
     await tester.pumpAndSettle();
     expect(find.text('저장된 모의 전략 비교 기록이 없습니다.'), findsOneWidget);
@@ -448,7 +443,7 @@ void main() {
     'failed refresh retains the entire prior observation and recovers',
     (tester) async {
       final api = _PaperApi()
-        ..next = PaperPromotionReport.fromJson(_fixture('promoted-current'));
+        ..next = decodePaperPromotionReport(_fixture('promoted-current'));
       await tester.pumpWidget(
         MaterialApp(home: PaperPromotionReportPage(api: api)),
       );
@@ -480,7 +475,7 @@ void main() {
       expect(find.text('비용 차감 수익률 1.4734027%'), findsOneWidget);
       api
         ..pending = null
-        ..next = PaperPromotionReport.fromJson(_fixture('held'));
+        ..next = decodePaperPromotionReport(_fixture('held'));
       await tester.tap(find.byTooltip('모의 전략 비교 새로고침'));
       await tester.pumpAndSettle();
       await tester.scrollUntilVisible(find.text('이 비교에서 후보를 선택하지 않음'), -200);
@@ -506,7 +501,7 @@ void main() {
       };
       for (final entry in outcomes.entries) {
         final api = _PaperApi()
-          ..next = PaperPromotionReport.fromJson(_fixture(entry.key));
+          ..next = decodePaperPromotionReport(_fixture(entry.key));
         await tester.pumpWidget(
           MaterialApp(
             home: PaperPromotionReportPage(key: ValueKey(entry.key), api: api),
@@ -567,7 +562,7 @@ void main() {
     final value = _fixture('promoted-current');
     value['attempt']['comparison']['windows'][0]['candidate']['after_cost_return'] =
         '-1.23456789123456789';
-    final api = _PaperApi()..next = PaperPromotionReport.fromJson(value);
+    final api = _PaperApi()..next = decodePaperPromotionReport(value);
     await tester.pumpWidget(
       MaterialApp(home: PaperPromotionReportPage(api: api)),
     );
@@ -617,7 +612,7 @@ void main() {
         value['attempt']['comparison']['windows'][0]['candidate']['after_cost_return'] =
             '9' * 128;
         for (final brightness in [Brightness.light, Brightness.dark]) {
-          final api = _PaperApi()..next = PaperPromotionReport.fromJson(value);
+          final api = _PaperApi()..next = decodePaperPromotionReport(value);
           await tester.pumpWidget(
             MaterialApp(
               theme: ThemeData(brightness: brightness),
@@ -659,7 +654,7 @@ void main() {
     final semantics = tester.ensureSemantics();
     try {
       final api = _PaperApi()
-        ..next = PaperPromotionReport.fromJson(_fixture('empty'));
+        ..next = decodePaperPromotionReport(_fixture('empty'));
       await tester.pumpWidget(
         MaterialApp(home: PaperPromotionReportPage(api: api)),
       );
@@ -692,9 +687,7 @@ void main() {
     await tester.pump();
     expect(find.text('모의 전략 비교 불러오는 중'), findsOneWidget);
     expect(find.byType(LinearProgressIndicator), findsNothing);
-    pending.complete(
-      PaperPromotionReport.fromJson(_fixture('promoted-current')),
-    );
+    pending.complete(decodePaperPromotionReport(_fixture('promoted-current')));
     await tester.pumpAndSettle();
     await tester.scrollUntilVisible(find.text('구간 1 · 30개 봉'), 200);
     await tester.tap(find.text('구간 1 · 30개 봉'));
@@ -712,13 +705,13 @@ void main() {
     );
     await tester.pump();
     await tester.pumpWidget(const MaterialApp(home: SizedBox()));
-    pending.complete(PaperPromotionReport.fromJson(_fixture('empty')));
+    pending.complete(decodePaperPromotionReport(_fixture('empty')));
     await tester.pump();
     expect(tester.takeException(), isNull);
   });
 }
 
-class _PaperApi implements OmniApi {
+class _PaperApi implements TestRepositories {
   PaperPromotionReport? next;
   Completer<PaperPromotionReport>? pending;
   int calls = 0;

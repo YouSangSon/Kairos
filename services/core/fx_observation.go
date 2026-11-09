@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"omni-folio/services/core/internal/application/fault"
 	"regexp"
 	"time"
 )
@@ -229,32 +230,32 @@ func proveFXObservationRecovery(ctx context.Context, q orderQuerier) (fxObservat
 func (s *Service) handleLatestFXObservation(w http.ResponseWriter, r *http.Request) {
 	query, err := url.ParseQuery(r.URL.RawQuery)
 	if err != nil {
-		writeError(w, &appError{http.StatusBadRequest, APIError{Code: "invalid_query", Message: "query parameters are invalid"}})
+		writeError(w, &appError{Status: http.StatusBadRequest, Body: APIError{Code: "invalid_query", Message: "query parameters are invalid"}})
 		return
 	}
 	for key := range query {
 		if key != "source" && key != "base_currency" && key != "quote_currency" && key != "as_of" {
-			writeError(w, &appError{http.StatusBadRequest, APIError{Code: "invalid_query", Message: "unknown query parameter " + key, Field: key}})
+			writeError(w, &appError{Status: http.StatusBadRequest, Body: APIError{Code: "invalid_query", Message: "unknown query parameter " + key, Field: key}})
 			return
 		}
 	}
 	for _, key := range []string{"source", "base_currency", "quote_currency", "as_of"} {
 		if len(query[key]) != 1 || query[key][0] == "" {
-			writeError(w, &appError{http.StatusBadRequest, APIError{Code: "invalid_query", Message: key + " query parameter must appear exactly once", Field: key}})
+			writeError(w, &appError{Status: http.StatusBadRequest, Body: APIError{Code: "invalid_query", Message: key + " query parameter must appear exactly once", Field: key}})
 			return
 		}
 	}
 	if err := validateFXObservationQuery(query.Get("source"), query.Get("base_currency"), query.Get("quote_currency"), query.Get("as_of")); err != nil {
-		writeError(w, &appError{http.StatusBadRequest, APIError{Code: "invalid_query", Message: "direct FX observation query values are invalid"}})
+		writeError(w, &appError{Status: http.StatusBadRequest, Body: APIError{Code: "invalid_query", Message: "direct FX observation query values are invalid"}})
 		return
 	}
 	observation, err := latestDirectFXObservation(r.Context(), s.db, query.Get("source"), query.Get("base_currency"), query.Get("quote_currency"), query.Get("as_of"))
 	if errors.Is(err, errFXObservationNotFound) {
-		writeError(w, &appError{http.StatusNotFound, APIError{Code: "fx_observation_not_found", Message: "direct FX observation was not found"}})
+		writeError(w, &appError{Status: http.StatusNotFound, Body: APIError{Code: "fx_observation_not_found", Message: "direct FX observation was not found"}})
 		return
 	}
 	if err != nil {
-		writeError(w, internalError(err))
+		writeError(w, fault.Internal(err))
 		return
 	}
 	writeJSON(w, http.StatusOK, struct {

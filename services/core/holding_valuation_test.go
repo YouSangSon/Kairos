@@ -109,7 +109,7 @@ func TestHoldingValuationSuppressesTotalsAndFailsClosed(t *testing.T) {
 		}
 		svc.now = func() time.Time { return mustTime(holdingValuationAsOf) }
 		valuation, appErr := svc.holdingValuation(context.Background(), holdingValuationAsOf)
-		if valuation != nil || appErr == nil || appErr.status != http.StatusInternalServerError || appErr.body.Message != "internal server error" {
+		if valuation != nil || appErr == nil || appErr.Status != http.StatusInternalServerError || appErr.Body.Message != "internal server error" {
 			t.Fatalf("corrupt ledger revision was certified: valuation=%+v err=%v", valuation, appErr)
 		}
 	})

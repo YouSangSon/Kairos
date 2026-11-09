@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"omni-folio/services/core/internal/application/fault"
 	"strconv"
 	"time"
 )
@@ -48,12 +49,12 @@ type ResearchReportMetrics struct {
 
 func (s *Service) handleResearchReport(w http.ResponseWriter, r *http.Request) {
 	if r.URL.RawQuery != "" {
-		writeError(w, &appError{http.StatusBadRequest, APIError{Code: "invalid_query", Message: "research report accepts no query parameters"}})
+		writeError(w, &appError{Status: http.StatusBadRequest, Body: APIError{Code: "invalid_query", Message: "research report accepts no query parameters"}})
 		return
 	}
 	result, err := s.researchReport(r.Context())
 	if err != nil {
-		writeError(w, internalError(err))
+		writeError(w, fault.Internal(err))
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")

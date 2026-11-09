@@ -1,16 +1,22 @@
+import '../test/support/repositories.dart';
 import 'dart:ui' show FrameTiming;
-
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
-import 'package:omni_folio_client/api.dart';
-import 'package:omni_folio_client/app.dart';
-import 'package:omni_folio_client/models.dart';
-import 'package:omni_folio_client/paper_monitor.dart';
-import 'package:omni_folio_client/paper_promotion_report.dart';
-import 'package:omni_folio_client/research_report.dart';
-import 'package:omni_folio_client/public_research.dart';
+import 'package:omni_folio_client/core/data/json_codec.dart';
+import 'package:omni_folio_client/core/domain/models.dart';
+import 'package:omni_folio_client/features/connections/domain/models.dart';
+import 'package:omni_folio_client/features/ledger/domain/models.dart';
+import 'package:omni_folio_client/features/market_data/data/codecs.dart';
+import 'package:omni_folio_client/features/market_data/domain/models.dart';
+import 'package:omni_folio_client/features/paper/domain/paper_monitor.dart';
+import 'package:omni_folio_client/features/paper/domain/paper_promotion_report.dart';
+import 'package:omni_folio_client/features/portfolio/domain/models.dart';
+import 'package:omni_folio_client/features/research/domain/public_research.dart';
+import 'package:omni_folio_client/features/research/domain/research_report.dart';
+import 'package:omni_folio_client/features/watchlist/data/codecs.dart';
+import 'package:omni_folio_client/features/watchlist/domain/models.dart';
 
 const _frameBudgetMs = 16.67;
 const _flutterVersion = String.fromEnvironment('G2_FLUTTER_VERSION');
@@ -34,7 +40,7 @@ void main() {
       reason: 'Pass G2_FLUTTER_VERSION, G2_DEVICE, and G2_OS_VERSION defines.',
     );
 
-    await tester.pumpWidget(OmniFolioApp(api: _ProfileApi()));
+    await tester.pumpWidget(testApp(api: _ProfileApi()));
     await tester.pumpAndSettle();
     await tester.tap(find.text('보유'));
     await tester.pumpAndSettle();
@@ -170,9 +176,9 @@ double _p95(Iterable<Duration> values) {
   return milliseconds[(milliseconds.length * 0.95).ceil() - 1];
 }
 
-class _ProfileApi implements OmniApi {
+class _ProfileApi implements TestRepositories {
   @override
-  Future<WatchlistReport> watchlist() async => WatchlistReport.fromJson({
+  Future<WatchlistReport> watchlist() async => decodeWatchlistReport({
     'policy_version': 'watchlist_stored_prices_24h.v1',
     'max_observation_age_seconds': 86400,
     'observed_at': '2026-01-01T00:00:00Z',
@@ -232,7 +238,7 @@ class _ProfileApi implements OmniApi {
     ),
     realizedPnl: const [Money('KRW', '12500')],
   );
-  final _candles = MarketCandles.fromJson({
+  final _candles = decodeMarketCandles({
     'symbol': 'KRX000',
     'venue': 'KRX',
     'timezone': 'Asia/Seoul',

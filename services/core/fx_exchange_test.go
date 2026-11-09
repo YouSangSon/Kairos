@@ -16,7 +16,7 @@ func TestFXExchangePreviewApplyReplayAndBackupRestore(t *testing.T) {
 	svc, _ := testService(t, nil, nil)
 	applyTestCSV(t, svc, "fx-seed", testCSV("deposit,account-main,DEPOSIT,2026-01-01T00:00:00Z,,,,,USD,200"))
 
-	preview, appErr := svc.preview(context.Background(), []byte(fxCSV(
+	preview, appErr := svc.Preview(context.Background(), []byte(fxCSV(
 		"fx-1,account-main,FX_EXCHANGE,2026-01-02T00:00:00Z,,,,,USD,-100,KRW,137000,",
 	)))
 	if appErr != nil {
@@ -29,7 +29,7 @@ func TestFXExchangePreviewApplyReplayAndBackupRestore(t *testing.T) {
 	if fx == nil || fx.Currency != "USD" || fx.Amount != "-100" || fx.CounterCurrency != "KRW" || fx.CounterAmount != "137000" {
 		t.Fatalf("FX counter leg was not preserved: %+v", fx)
 	}
-	if _, appErr := svc.apply(context.Background(), ApplyRequest{PreviewID: preview.PreviewID, IdempotencyKey: "fx-apply"}); appErr != nil {
+	if _, appErr := svc.Apply(context.Background(), ApplyRequest{PreviewID: preview.PreviewID, IdempotencyKey: "fx-apply"}); appErr != nil {
 		t.Fatal(appErr)
 	}
 	snapshot, err := snapshotFrom(context.Background(), svc.db)
@@ -41,13 +41,13 @@ func TestFXExchangePreviewApplyReplayAndBackupRestore(t *testing.T) {
 		t.Fatalf("FX replay drifted: got=%+v want_cash=%+v", snapshot, wantCash)
 	}
 
-	replay, appErr := svc.preview(context.Background(), []byte(fxCSV(
+	replay, appErr := svc.Preview(context.Background(), []byte(fxCSV(
 		"fx-1,account-main,FX_EXCHANGE,2026-01-02T00:00:00Z,,,,,USD,-100,KRW,137000,",
 	)))
 	if appErr != nil || !replay.CanApply || replay.Rows[0].Status != "duplicate" {
 		t.Fatalf("exact FX replay was not idempotent: preview=%+v err=%v", replay, appErr)
 	}
-	conflict, appErr := svc.preview(context.Background(), []byte(fxCSV(
+	conflict, appErr := svc.Preview(context.Background(), []byte(fxCSV(
 		"fx-1,account-main,FX_EXCHANGE,2026-01-02T00:00:00Z,,,,,USD,-100,KRW,136999,",
 	)))
 	if appErr != nil || conflict.CanApply || conflict.Rows[0].Errors[0].Code != "source_event_conflict" {
@@ -107,7 +107,7 @@ func TestFXExchangeRejectsInvalidLegs(t *testing.T) {
 	for index, row := range tests {
 		t.Run(fmt.Sprintf("case-%d", index), func(t *testing.T) {
 			svc, _ := testService(t, nil, nil)
-			preview, appErr := svc.preview(context.Background(), []byte(fxCSV(row)))
+			preview, appErr := svc.Preview(context.Background(), []byte(fxCSV(row)))
 			if appErr != nil {
 				t.Fatal(appErr)
 			}

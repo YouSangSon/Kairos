@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"net/http"
+	"omni-folio/services/core/internal/application/fault"
 	"time"
 )
 
@@ -30,7 +31,7 @@ type LocalOrderView struct {
 func (s *Service) handleLocalOrders(w http.ResponseWriter, r *http.Request) {
 	result, err := s.localOrderLog(r.Context())
 	if err != nil {
-		writeError(w, internalError(err))
+		writeError(w, fault.Internal(err))
 		return
 	}
 	writeJSON(w, http.StatusOK, result)

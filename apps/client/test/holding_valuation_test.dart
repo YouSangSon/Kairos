@@ -1,18 +1,25 @@
 import 'dart:async';
 import 'dart:convert';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
-import 'package:omni_folio_client/api.dart';
-import 'package:omni_folio_client/app.dart';
-import 'package:omni_folio_client/holding_valuation_page.dart';
-import 'package:omni_folio_client/models.dart';
-import 'package:omni_folio_client/paper_monitor.dart';
-import 'package:omni_folio_client/paper_promotion_report.dart';
-import 'package:omni_folio_client/research_report.dart';
-import 'package:omni_folio_client/public_research.dart';
+import 'package:omni_folio_client/core/data/json_codec.dart';
+import 'package:omni_folio_client/core/domain/api_exception.dart';
+import 'package:omni_folio_client/features/connections/data/codecs.dart';
+import 'package:omni_folio_client/features/connections/domain/models.dart';
+import 'package:omni_folio_client/features/ledger/domain/models.dart';
+import 'package:omni_folio_client/features/market_data/domain/models.dart';
+import 'package:omni_folio_client/features/paper/domain/paper_monitor.dart';
+import 'package:omni_folio_client/features/paper/domain/paper_promotion_report.dart';
+import 'package:omni_folio_client/features/portfolio/data/codecs.dart';
+import 'package:omni_folio_client/features/portfolio/domain/models.dart';
+import 'package:omni_folio_client/features/portfolio/presentation/holding_valuation_page.dart';
+import 'package:omni_folio_client/features/research/domain/public_research.dart';
+import 'package:omni_folio_client/features/research/domain/research_report.dart';
+import 'package:omni_folio_client/features/watchlist/data/codecs.dart';
+import 'package:omni_folio_client/features/watchlist/domain/models.dart';
+import 'support/repositories.dart';
 
 Json holdingValuationJson({
   String status = 'stale_sample',
@@ -134,7 +141,7 @@ Json unavailableValuationJson() => holdingValuationJson(
 void main() {
   test('holding valuation GET has no query and parses exact strings', () async {
     late http.Request request;
-    final api = RestOmniApi(
+    final api = RestTestRepositories(
       baseUrl: 'http://example.test/',
       client: MockClient((value) async {
         request = value;
@@ -213,18 +220,15 @@ void main() {
       },
     ]) {
       expect(
-        () => HoldingValuation.fromJson(invalid),
+        () => decodeHoldingValuation(invalid),
         throwsFormatException,
         reason: '$invalid',
       );
     }
 
+    expect(decodeHoldingValuation(unavailableValuationJson()).totals, isEmpty);
     expect(
-      HoldingValuation.fromJson(unavailableValuationJson()).totals,
-      isEmpty,
-    );
-    expect(
-      HoldingValuation.fromJson(
+      decodeHoldingValuation(
         holdingValuationJson(
           status: 'empty',
           sample: false,
@@ -247,7 +251,7 @@ void main() {
       'field': 'AAPL',
     };
     expect(
-      HoldingValuation.fromJson(
+      decodeHoldingValuation(
         holdingValuationJson(
           status: 'unavailable',
           sample: true,
@@ -267,7 +271,7 @@ void main() {
       'stale',
     );
     expect(
-      () => HoldingValuation.fromJson({
+      () => decodeHoldingValuation({
         ...valid,
         'lines': [
           {...validLine, 'price': oneNanosecondStalePrice},
@@ -276,7 +280,7 @@ void main() {
       throwsFormatException,
     );
     expect(
-      () => HoldingValuation.fromJson({
+      () => decodeHoldingValuation({
         ...valid,
         'lines': [
           {
@@ -297,7 +301,7 @@ void main() {
     tester,
   ) async {
     final api = _TestApi();
-    await tester.pumpWidget(OmniFolioApp(api: api));
+    await tester.pumpWidget(testApp(api: api));
     await tester.pumpAndSettle();
     await tester.tap(find.text('보유'));
     await tester.pumpAndSettle();
@@ -325,7 +329,7 @@ void main() {
         realizedPnl: const [],
       ),
     );
-    await tester.pumpWidget(OmniFolioApp(api: api));
+    await tester.pumpWidget(testApp(api: api));
     await tester.pumpAndSettle();
     await tester.tap(find.text('보유'));
     await tester.pumpAndSettle();
@@ -351,7 +355,7 @@ void main() {
       expect(find.textContaining('최대 24시간'), findsOneWidget);
 
       api.valuationHandler = () async =>
-          HoldingValuation.fromJson(unavailableValuationJson());
+          decodeHoldingValuation(unavailableValuationJson());
       await tester.tap(find.byTooltip('저장 가격 평가 새로고침'));
       await tester.pumpAndSettle();
 
@@ -396,7 +400,7 @@ void main() {
     tester,
   ) async {
     final api = _TestApi()
-      ..valuationHandler = () async => HoldingValuation.fromJson(
+      ..valuationHandler = () async => decodeHoldingValuation(
         holdingValuationJson(
           status: 'empty',
           sample: false,
@@ -439,7 +443,7 @@ void main() {
     await tester.tap(find.text('다시 시도'), warnIfMissed: false);
     await tester.pump();
     expect(api.valuationCalls, 2);
-    retry.complete(HoldingValuation.fromJson(holdingValuationJson()));
+    retry.complete(decodeHoldingValuation(holdingValuationJson()));
     await tester.pumpAndSettle();
     expect(find.text('AAPL'), findsOneWidget);
   });
@@ -507,9 +511,9 @@ void main() {
   });
 }
 
-class _TestApi implements OmniApi {
+class _TestApi implements TestRepositories {
   @override
-  Future<WatchlistReport> watchlist() async => WatchlistReport.fromJson({
+  Future<WatchlistReport> watchlist() async => decodeWatchlistReport({
     'policy_version': 'watchlist_stored_prices_24h.v1',
     'max_observation_age_seconds': 86400,
     'observed_at': '2026-01-01T00:00:00Z',
@@ -558,11 +562,11 @@ class _TestApi implements OmniApi {
   Future<HoldingValuation> holdingValuation() async {
     valuationCalls += 1;
     return valuationHandler?.call() ??
-        HoldingValuation.fromJson(holdingValuationJson());
+        decodeHoldingValuation(holdingValuationJson());
   }
 
   @override
-  Future<ServiceStatus> status() async => ServiceStatus.fromJson({
+  Future<ServiceStatus> status() async => decodeServiceStatus({
     'live_enabled': false,
     'mode': 'local_import_only',
     'trust_state': 'verified',

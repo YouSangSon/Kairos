@@ -16,6 +16,8 @@
 
 | 목적 | 문서 | 역할 |
 |---|---|---|
+| 서비스·플랫폼 확장 설계 | [architecture/scalability-and-platform.md](architecture/scalability-and-platform.md) | MSA·복수 DB·인증·캐시·Kafka/RabbitMQ의 역할과 전환 gate |
+| 전체 리팩토링 설계 | [architecture/whole-project-refactoring.md](architecture/whole-project-refactoring.md) | Go·Flutter·Python 책임, 처리 경계, 전환 순서와 완료 기준 |
 | 이름과 설정 호환성 | [project-identity.md](project-identity.md) | Kairos 이름과 기존 데이터·인증·패키지 식별자의 경계 |
 | 도메인 용어·불변식 | [`../CONTEXT.md`](../CONTEXT.md) | ledger, broker truth, reconciliation, live-disabled의 공통 언어 |
 | 상세 실행 계획 | [`kairos-plan.md`](kairos-plan.md) | 조사, 단계, 위험, review decision ledger |

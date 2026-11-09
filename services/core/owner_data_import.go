@@ -92,12 +92,12 @@ func previewOwnerData(ctx context.Context, raw []byte) (*OwnerDataImportPreview,
 func ownerDataImportError(err error) *appError {
 	switch {
 	case errors.Is(err, errOwnerDataRejected), errors.Is(err, errOwnerPriceInput), errors.Is(err, errOwnerFXInput), errors.Is(err, errBenchmarkSeriesInput):
-		return &appError{http.StatusBadRequest, APIError{Code: "owner_data_invalid", Message: "owner data input does not meet the declared contract"}}
+		return &appError{Status: http.StatusBadRequest, Body: APIError{Code: "owner_data_invalid", Message: "owner data input does not meet the declared contract"}}
 	case errors.Is(err, errOwnerDataConflict):
-		return &appError{http.StatusConflict, APIError{Code: "owner_data_conflict", Message: "owner data identity or source conflicts with stored data"}}
+		return &appError{Status: http.StatusConflict, Body: APIError{Code: "owner_data_conflict", Message: "owner data identity or source conflicts with stored data"}}
 	default:
 		// Database errors may contain private values; preserve uncertainty without echoing them.
-		return &appError{http.StatusInternalServerError, APIError{Code: "owner_data_unavailable", Message: "owner data storage could not be confirmed; retry the same input"}}
+		return &appError{Status: http.StatusInternalServerError, Body: APIError{Code: "owner_data_unavailable", Message: "owner data storage could not be confirmed; retry the same input"}}
 	}
 }
 

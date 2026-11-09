@@ -58,16 +58,16 @@ func (s *Service) handlePublicResearch(w http.ResponseWriter, r *http.Request) {
 	query, err := url.ParseQuery(r.URL.RawQuery)
 	if err != nil || len(query) != 2 || len(query["market"]) != 1 || len(query["symbol"]) != 1 ||
 		(query.Get("market") != "KR" && query.Get("market") != "US") || !researchSymbol.MatchString(query.Get("symbol")) {
-		writeError(w, &appError{400, APIError{Code: "invalid_query", Message: "choose one KR or US market and canonical symbol"}})
+		writeError(w, &appError{Status: 400, Body: APIError{Code: "invalid_query", Message: "choose one KR or US market and canonical symbol"}})
 		return
 	}
 	if s.researchFeed == "" {
-		writeError(w, &appError{503, APIError{Code: "research_not_configured", Message: "public research is not configured"}})
+		writeError(w, &appError{Status: 503, Body: APIError{Code: "research_not_configured", Message: "public research is not configured"}})
 		return
 	}
 	raw, err := readBoundedRegularFile(s.researchFeed, publicResearchMaxBytes)
 	if errors.Is(err, os.ErrNotExist) {
-		writeError(w, &appError{404, APIError{Code: "research_feed_missing", Message: "public research file is missing"}})
+		writeError(w, &appError{Status: 404, Body: APIError{Code: "research_feed_missing", Message: "public research file is missing"}})
 		return
 	}
 	var feed *publicResearchFeed
@@ -75,7 +75,7 @@ func (s *Service) handlePublicResearch(w http.ResponseWriter, r *http.Request) {
 		feed, err = decodePublicResearch(raw)
 	}
 	if err != nil {
-		writeError(w, &appError{503, APIError{Code: "research_feed_unavailable", Message: "public research file is unavailable"}})
+		writeError(w, &appError{Status: 503, Body: APIError{Code: "research_feed_unavailable", Message: "public research file is unavailable"}})
 		return
 	}
 	items := []json.RawMessage{}

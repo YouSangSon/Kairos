@@ -18,8 +18,8 @@ func TestLedgerChronologyFIFOLotsAndLatestTime(t *testing.T) {
 		t.Fatal(err)
 	}
 	if snapshot.AsOf != "2026-01-01T00:00:00.2Z" ||
-		!reflect.DeepEqual(snapshot.Holdings, []Holding{{"instrument_aapl", "AAPL", "1", "20", "USD"}}) ||
-		!reflect.DeepEqual(snapshot.RealizedPnL, []Money{{"USD", "20"}}) {
+		!reflect.DeepEqual(snapshot.Holdings, []Holding{{InstrumentID: "instrument_aapl", Symbol: "AAPL", Quantity: "1", CostBasis: "20", Currency: "USD"}}) ||
+		!reflect.DeepEqual(snapshot.RealizedPnL, []Money{{Currency: "USD", Amount: "20"}}) {
 		t.Fatalf("fractional chronology changed oldest cost or latest time: %+v", snapshot)
 	}
 }
@@ -50,14 +50,14 @@ func TestLedgerChronologyBrokerReplay(t *testing.T) {
 
 func TestLedgerChronologyRejectsSellBeforeBuyAtomically(t *testing.T) {
 	svc, _ := testService(t, nil, nil)
-	preview, appErr := svc.preview(context.Background(), []byte(testCSV(
+	preview, appErr := svc.Preview(context.Background(), []byte(testCSV(
 		"b1,account-main,BUY,2026-01-01T00:00:00.1Z,AAPL,1,10,0,USD,-10",
 		"s0,account-main,SELL,2026-01-01T00:00:00Z,AAPL,1,20,0,USD,20",
 	)))
 	if appErr != nil {
 		t.Fatal(appErr)
 	}
-	if _, appErr := svc.apply(context.Background(), ApplyRequest{preview.PreviewID, "early-sell"}); appErr == nil {
+	if _, appErr := svc.Apply(context.Background(), ApplyRequest{PreviewID: preview.PreviewID, IdempotencyKey: "early-sell"}); appErr == nil {
 		t.Fatal("sell funded by a later buy committed")
 	}
 	var count, rev int
@@ -71,7 +71,7 @@ func TestLedgerChronologyCashVoidFractionalBoundary(t *testing.T) {
 	applyTestCSV(t, svc, "whole-cash", testCSV("d0,account-main,DEPOSIT,2026-01-01T00:00:00Z,,,,,USD,10"))
 	applyTestCSV(t, svc, "fractional-void", cashVoidCSV("v1,account-main,CASH_VOID,2026-01-01T00:00:00.000000001Z,,,,,USD,-10,d0"))
 	snapshot, err := snapshotFrom(context.Background(), svc.db)
-	if err != nil || !reflect.DeepEqual(snapshot.Cash, []Money{{"USD", "0"}}) {
+	if err != nil || !reflect.DeepEqual(snapshot.Cash, []Money{{Currency: "USD", Amount: "0"}}) {
 		t.Fatalf("valid cash reversal failed: %+v %v", snapshot, err)
 	}
 }

@@ -7,7 +7,6 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"embed"
-	"encoding/csv"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -23,10 +22,14 @@ import (
 	"sort"
 	"strings"
 	"time"
-	"unicode/utf8"
+
+	"omni-folio/services/core/internal/adapters/sqlite"
+	"omni-folio/services/core/internal/application/fault"
+	"omni-folio/services/core/internal/application/ledger"
+	"omni-folio/services/core/internal/exact"
+	"omni-folio/services/core/internal/ledgerdomain"
 
 	_ "github.com/mattn/go-sqlite3"
-	"omni-folio/services/core/internal/exact"
 )
 
 const (
@@ -60,6 +63,7 @@ const (
 var migrationFiles embed.FS
 
 type Service struct {
+	*ledger.UseCases
 	db                *sql.DB
 	now               func() time.Time
 	id                func(string) string
@@ -71,126 +75,22 @@ type Service struct {
 	activityCursorKey [32]byte
 }
 
-type APIError struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
-	Field   string `json:"field,omitempty"`
-}
+type APIError = ledgerdomain.APIError
+type Transaction = ledgerdomain.Transaction
+type Money = ledgerdomain.Money
+type Holding = ledgerdomain.Holding
+type Provenance = ledgerdomain.Provenance
+type PortfolioSnapshot = ledgerdomain.PortfolioSnapshot
 
-type Transaction struct {
-	EventID               string `json:"event_id"`
-	SourceEventID         string `json:"source_event_id"`
-	AccountID             string `json:"account_id"`
-	Type                  string `json:"type"`
-	OccurredAt            string `json:"occurred_at"`
-	InstrumentID          string `json:"instrument_id,omitempty"`
-	Symbol                string `json:"symbol,omitempty"`
-	Quantity              string `json:"quantity,omitempty"`
-	Price                 string `json:"price,omitempty"`
-	Fee                   string `json:"fee,omitempty"`
-	Currency              string `json:"currency"`
-	Amount                string `json:"amount"`
-	CounterCurrency       string `json:"counter_currency,omitempty"`
-	CounterAmount         string `json:"counter_amount,omitempty"`
-	CorrectsSourceEventID string `json:"corrects_source_event_id,omitempty"`
-}
+const fifoCostBasisPolicy = ledgerdomain.FIFOCostBasisPolicy
 
-type PreviewRow struct {
-	RowNumber        int               `json:"row_number"`
-	Status           string            `json:"status"`
-	Transaction      *Transaction      `json:"transaction,omitempty"`
-	CorrectionTarget *CorrectionTarget `json:"correction_target,omitempty"`
-	DuplicateOf      string            `json:"duplicate_of,omitempty"`
-	Errors           []APIError        `json:"errors,omitempty"`
-	Resolution       *Resolution       `json:"resolution,omitempty"`
-}
-
-type CorrectionTarget struct {
-	SourceEventID string `json:"source_event_id"`
-	Type          string `json:"type"`
-	Currency      string `json:"currency"`
-	Amount        string `json:"amount"`
-}
-
-type Resolution struct {
-	Kind           string   `json:"kind"`
-	SourceField    string   `json:"source_field"`
-	SourceValue    string   `json:"source_value"`
-	RequiredAction string   `json:"required_action"`
-	CandidateIDs   []string `json:"candidate_ids"`
-}
-
-type PreviewTotals struct {
-	TotalRows      int `json:"total_rows"`
-	NewRows        int `json:"new_rows"`
-	DuplicateRows  int `json:"duplicate_rows"`
-	ErrorRows      int `json:"error_rows"`
-	UnresolvedRows int `json:"unresolved_rows"`
-}
-
-type ImportPreview struct {
-	PreviewID          string        `json:"preview_id"`
-	FileSHA256         string        `json:"file_sha256"`
-	SchemaVersion      string        `json:"schema_version"`
-	MappingVersion     string        `json:"mapping_version"`
-	LedgerRevision     string        `json:"ledger_revision"`
-	PreviewFingerprint string        `json:"preview_fingerprint"`
-	CanApply           bool          `json:"can_apply"`
-	Rows               []PreviewRow  `json:"rows"`
-	Totals             PreviewTotals `json:"totals"`
-}
-
-type ApplyRequest struct {
-	PreviewID      string `json:"preview_id"`
-	IdempotencyKey string `json:"idempotency_key"`
-}
-
-type ApplyReceipt struct {
-	ReceiptID            string `json:"receipt_id"`
-	PreviewID            string `json:"preview_id"`
-	IdempotencyKey       string `json:"idempotency_key"`
-	FileSHA256           string `json:"file_sha256"`
-	LedgerRevisionBefore string `json:"ledger_revision_before"`
-	LedgerRevisionAfter  string `json:"ledger_revision_after"`
-	AppliedRows          int    `json:"applied_rows"`
-	SkippedDuplicateRows int    `json:"skipped_duplicate_rows"`
-	ReceivedAt           string `json:"received_at"`
-	RecordedAt           string `json:"recorded_at"`
-}
-
-type Money struct {
-	Currency string `json:"currency"`
-	Amount   string `json:"amount"`
-}
-
-type Holding struct {
-	InstrumentID string `json:"instrument_id"`
-	Symbol       string `json:"symbol"`
-	Quantity     string `json:"quantity"`
-	CostBasis    string `json:"cost_basis"`
-	Currency     string `json:"currency"`
-}
-
-type Provenance struct {
-	EventIDs   []string `json:"event_ids"`
-	ReceiptIDs []string `json:"receipt_ids"`
-}
-
-type PortfolioSnapshot struct {
-	PortfolioID     string     `json:"portfolio_id"`
-	LedgerRevision  string     `json:"ledger_revision"`
-	CostBasisPolicy string     `json:"cost_basis_policy"`
-	AsOf            string     `json:"as_of"`
-	RecordedAt      string     `json:"recorded_at"`
-	LiveEnabled     bool       `json:"live_enabled"`
-	ValuationStatus string     `json:"valuation_status"`
-	Cash            []Money    `json:"cash"`
-	Holdings        []Holding  `json:"holdings"`
-	RealizedPnL     []Money    `json:"realized_pnl"`
-	Provenance      Provenance `json:"provenance"`
-}
-
-const fifoCostBasisPolicy = "fifo_utc_nanosecond_exact_else_half_even_residual_8_v2"
+type PreviewRow = ledger.PreviewRow
+type CorrectionTarget = ledger.CorrectionTarget
+type Resolution = ledger.Resolution
+type PreviewTotals = ledger.PreviewTotals
+type ImportPreview = ledger.ImportPreview
+type ApplyRequest = ledger.ApplyRequest
+type ApplyReceipt = ledger.ApplyReceipt
 
 type BackupManifest struct {
 	FormatVersion                            string              `json:"format_version"`
@@ -316,12 +216,7 @@ type VerificationReceipt struct {
 	Errors                                       []string `json:"errors"`
 }
 
-type appError struct {
-	status int
-	body   APIError
-}
-
-func (e *appError) Error() string { return e.body.Message }
+type appError = fault.Error
 
 func openDB(path string) (*sql.DB, error) {
 	if path == "" {
@@ -996,6 +891,7 @@ func newService(db *sql.DB, now func() time.Time, id func(string) string) *Servi
 	if _, err := rand.Read(service.activityCursorKey[:]); err != nil {
 		panic(err)
 	}
+	service.UseCases = ledger.New(sqlite.NewLedger(db), func() time.Time { return service.now() }, func(prefix string) string { return service.id(prefix) }, func() time.Duration { return service.ttl })
 	return service
 }
 
@@ -1070,9 +966,9 @@ func withCORS(next http.Handler, allowedOrigin string) http.Handler {
 			origins, present := r.Header[http.CanonicalHeaderKey("Origin")]
 			if present && (len(origins) != 1 || origins[0] == "" || allowedOrigin == "" || origins[0] != allowedOrigin) {
 				if r.URL.Path == "/v1/watchlist" {
-					writeError(w, &appError{http.StatusForbidden, APIError{Code: "watchlist_origin_rejected", Message: "watchlist origin is not allowed"}})
+					writeError(w, &appError{Status: http.StatusForbidden, Body: APIError{Code: "watchlist_origin_rejected", Message: "watchlist origin is not allowed"}})
 				} else {
-					writeError(w, &appError{http.StatusForbidden, APIError{Code: "owner_data_origin_rejected", Message: "owner data origin is not allowed"}})
+					writeError(w, &appError{Status: http.StatusForbidden, Body: APIError{Code: "owner_data_origin_rejected", Message: "owner data origin is not allowed"}})
 				}
 				return
 			}
@@ -1103,7 +999,7 @@ func (s *Service) handleStatus(w http.ResponseWriter, r *http.Request) {
 	var rev int64
 	var verified sql.NullString
 	if err := s.db.QueryRowContext(r.Context(), `SELECT revision, last_verified_at FROM ledger_meta WHERE singleton=1`).Scan(&rev, &verified); err != nil {
-		writeError(w, internalError(err))
+		writeError(w, fault.Internal(err))
 		return
 	}
 	var lastVerified *string
@@ -1126,16 +1022,16 @@ func (s *Service) handleStatus(w http.ResponseWriter, r *http.Request) {
 func (s *Service) handlePreview(w http.ResponseWriter, r *http.Request) {
 	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
 	if err != nil || mediaType != "text/csv" {
-		writeError(w, &appError{http.StatusBadRequest, APIError{Code: "invalid_content_type", Message: "Content-Type must be text/csv"}})
+		writeError(w, &appError{Status: http.StatusBadRequest, Body: APIError{Code: "invalid_content_type", Message: "Content-Type must be text/csv"}})
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		writeError(w, &appError{http.StatusBadRequest, APIError{Code: "invalid_body", Message: "CSV body is too large or unreadable"}})
+		writeError(w, &appError{Status: http.StatusBadRequest, Body: APIError{Code: "invalid_body", Message: "CSV body is too large or unreadable"}})
 		return
 	}
-	preview, appErr := s.preview(r.Context(), body)
+	preview, appErr := s.Preview(r.Context(), body)
 	if appErr != nil {
 		writeError(w, appErr)
 		return
@@ -1149,7 +1045,7 @@ func (s *Service) handleApply(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	receipt, appErr := s.apply(r.Context(), req)
+	receipt, appErr := s.Apply(r.Context(), req)
 	if appErr != nil {
 		writeError(w, appErr)
 		return
@@ -1160,17 +1056,17 @@ func (s *Service) handleApply(w http.ResponseWriter, r *http.Request) {
 func (s *Service) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 	tx, err := s.db.BeginTx(r.Context(), &sql.TxOptions{ReadOnly: true})
 	if err != nil {
-		writeError(w, internalError(err))
+		writeError(w, fault.Internal(err))
 		return
 	}
 	defer tx.Rollback()
 	snapshot, err := snapshotFrom(r.Context(), tx)
 	if err != nil {
-		writeError(w, internalError(err))
+		writeError(w, fault.Internal(err))
 		return
 	}
 	if err := tx.Commit(); err != nil {
-		writeError(w, internalError(err))
+		writeError(w, fault.Internal(err))
 		return
 	}
 	writeJSON(w, http.StatusOK, snapshot)
@@ -1179,11 +1075,11 @@ func (s *Service) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 func (s *Service) handleLatestBrokerReconciliation(w http.ResponseWriter, r *http.Request) {
 	result, err := s.latestBrokerReconciliation(r.Context())
 	if errors.Is(err, sql.ErrNoRows) {
-		writeError(w, &appError{http.StatusNotFound, APIError{Code: "broker_reconciliation_not_found", Message: "broker reconciliation was not found"}})
+		writeError(w, &appError{Status: http.StatusNotFound, Body: APIError{Code: "broker_reconciliation_not_found", Message: "broker reconciliation was not found"}})
 		return
 	}
 	if err != nil {
-		writeError(w, internalError(err))
+		writeError(w, fault.Internal(err))
 		return
 	}
 	writeJSON(w, http.StatusOK, result)
@@ -1192,16 +1088,16 @@ func (s *Service) handleLatestBrokerReconciliation(w http.ResponseWriter, r *htt
 func decodeJSON(w http.ResponseWriter, r *http.Request, dst any) *appError {
 	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
 	if err != nil || mediaType != "application/json" {
-		return &appError{http.StatusBadRequest, APIError{Code: "invalid_content_type", Message: "Content-Type must be application/json"}}
+		return &appError{Status: http.StatusBadRequest, Body: APIError{Code: "invalid_content_type", Message: "Content-Type must be application/json"}}
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(dst); err != nil {
-		return &appError{http.StatusBadRequest, APIError{Code: "invalid_json", Message: "request body must match the contract"}}
+		return &appError{Status: http.StatusBadRequest, Body: APIError{Code: "invalid_json", Message: "request body must match the contract"}}
 	}
 	if err := dec.Decode(&struct{}{}); err != io.EOF {
-		return &appError{http.StatusBadRequest, APIError{Code: "invalid_json", Message: "request body must contain one JSON object"}}
+		return &appError{Status: http.StatusBadRequest, Body: APIError{Code: "invalid_json", Message: "request body must contain one JSON object"}}
 	}
 	return nil
 }
@@ -1211,695 +1107,16 @@ type queryer interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 }
 
-func (s *Service) preview(ctx context.Context, body []byte) (*ImportPreview, *appError) {
-	if len(body) == 0 {
-		return nil, &appError{http.StatusBadRequest, APIError{Code: "empty_csv", Message: "CSV body must not be empty"}}
-	}
-	if len(body) > maxBodyBytes {
-		return nil, &appError{http.StatusBadRequest, APIError{Code: "csv_too_large", Message: "CSV body must not exceed 1048576 bytes"}}
-	}
-	if !utf8.Valid(body) {
-		return nil, &appError{http.StatusBadRequest, APIError{Code: "invalid_encoding", Message: "CSV body must be UTF-8"}}
-	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, internalError(err)
-	}
-	defer tx.Rollback()
-	var rev int64
-	if err := tx.QueryRowContext(ctx, `SELECT revision FROM ledger_meta WHERE singleton=1`).Scan(&rev); err != nil {
-		return nil, internalError(err)
-	}
-	rows, parseErr := s.parseCSV(ctx, tx, body)
-	if parseErr != nil {
-		return nil, parseErr
-	}
-	totals := PreviewTotals{TotalRows: len(rows)}
-	for _, row := range rows {
-		switch row.Status {
-		case "new":
-			totals.NewRows++
-		case "duplicate":
-			totals.DuplicateRows++
-		case "error":
-			totals.ErrorRows++
-		case "unresolved":
-			totals.UnresolvedRows++
-		}
-	}
-	hash := sha256.Sum256(body)
-	created := s.now().UTC()
-	preview := &ImportPreview{
-		PreviewID: s.id("preview"), FileSHA256: hex.EncodeToString(hash[:]), SchemaVersion: csvSchema, MappingVersion: mappingSchema,
-		LedgerRevision: revision(rev), CanApply: totals.ErrorRows == 0 && totals.UnresolvedRows == 0,
-		Rows: rows, Totals: totals,
-	}
-	preview.PreviewFingerprint = previewFingerprint(preview.FileSHA256, preview.SchemaVersion, preview.MappingVersion, preview.LedgerRevision)
-	encoded, err := json.Marshal(preview)
-	if err != nil {
-		return nil, internalError(err)
-	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO previews(preview_id,file_sha256,ledger_revision,can_apply,preview_json,expires_at,created_at) VALUES(?,?,?,?,?,?,?)`,
-		preview.PreviewID, preview.FileSHA256, rev, boolInt(preview.CanApply), string(encoded), created.Add(s.ttl).Format(time.RFC3339Nano), created.Format(time.RFC3339Nano)); err != nil {
-		return nil, internalError(err)
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, internalError(err)
-	}
-	return preview, nil
-}
-
-func (s *Service) parseCSV(ctx context.Context, q queryer, body []byte) ([]PreviewRow, *appError) {
-	r := csv.NewReader(bytes.NewReader(body))
-	r.FieldsPerRecord = -1
-	records, err := r.ReadAll()
-	if err != nil || len(records) == 0 {
-		return nil, &appError{http.StatusBadRequest, APIError{Code: "invalid_csv", Message: "body must be valid CSV with a header"}}
-	}
-	if len(records)-1 > maxImportRows {
-		return nil, &appError{http.StatusBadRequest, APIError{Code: "too_many_rows", Message: "CSV must not contain more than 10000 data rows"}}
-	}
-	required := []string{"source_event_id", "account_id", "type", "occurred_at", "symbol", "quantity", "price", "fee", "currency", "amount"}
-	columns := make(map[string]int, len(records[0]))
-	for i, name := range records[0] {
-		if _, exists := columns[name]; exists {
-			return nil, &appError{http.StatusBadRequest, APIError{Code: "invalid_csv_header", Message: "CSV header names must be unique"}}
-		}
-		columns[name] = i
-	}
-	for _, name := range required {
-		if _, ok := columns[name]; !ok {
-			return nil, &appError{http.StatusBadRequest, APIError{Code: "invalid_csv_header", Message: "CSV is missing required column " + name, Field: name}}
-		}
-	}
-	value := func(record []string, name string) string {
-		i, ok := columns[name]
-		if !ok || i >= len(record) {
-			return ""
-		}
-		return record[i]
-	}
-	seen := map[string]PreviewRow{}
-	seenCorrectionTargets := map[string]bool{}
-	result := make([]PreviewRow, 0, len(records)-1)
-	for i, record := range records[1:] {
-		row := PreviewRow{RowNumber: i + 2}
-		tx, fieldErrors := s.normalize(record, value)
-		if len(fieldErrors) != 0 {
-			row.Status, row.Errors = "error", fieldErrors
-			result = append(result, row)
-			continue
-		}
-		if resolution := unresolved(tx); resolution != nil {
-			row.Status, row.Transaction, row.Resolution = "unresolved", tx, resolution
-			result = append(result, row)
-			continue
-		}
-		key := tx.AccountID + "\x00" + tx.SourceEventID
-		if prior, ok := seen[key]; ok {
-			if !sameTransaction(prior.Transaction, tx) {
-				row.Status, row.Transaction, row.Errors = "error", tx, []APIError{{Code: "source_event_conflict", Message: "source_event_id was already used with different transaction data", Field: "source_event_id"}}
-			} else {
-				tx.EventID = prior.Transaction.EventID
-				row.Status, row.Transaction, row.CorrectionTarget, row.DuplicateOf = "duplicate", tx, prior.CorrectionTarget, tx.EventID
-			}
-			result = append(result, row)
-			continue
-		}
-		stored, err := loadTransactionBySource(ctx, q, tx.AccountID, tx.SourceEventID)
-		switch {
-		case err == nil:
-			if !sameTransaction(stored, tx) {
-				row.Status, row.Transaction, row.Errors = "error", tx, []APIError{{Code: "source_event_conflict", Message: "source_event_id was already used with different transaction data", Field: "source_event_id"}}
-				break
-			}
-			tx.EventID = stored.EventID
-			row.Status, row.Transaction, row.DuplicateOf = "duplicate", tx, stored.EventID
-			if tx.Type == "CASH_VOID" {
-				target, validationErr, err := validateCashVoid(ctx, q, tx, false)
-				if err != nil {
-					return nil, internalError(err)
-				}
-				if validationErr != nil {
-					return nil, internalError(errors.New("stored cash void failed validation"))
-				}
-				row.CorrectionTarget = target
-			}
-		case errors.Is(err, sql.ErrNoRows):
-			row.Status, row.Transaction = "new", tx
-			if tx.Type == "CASH_VOID" {
-				target, validationErr, err := validateCashVoid(ctx, q, tx, true)
-				if err != nil {
-					return nil, internalError(err)
-				}
-				if validationErr != nil {
-					row.Status, row.Errors = "error", []APIError{*validationErr}
-				} else {
-					targetKey := tx.AccountID + "\x00" + tx.CorrectsSourceEventID
-					if seenCorrectionTargets[targetKey] {
-						row.Status, row.Errors = "error", []APIError{*invalidCorrection()}
-					} else {
-						seenCorrectionTargets[targetKey] = true
-						row.CorrectionTarget = target
-					}
-				}
-			}
-		case err != nil:
-			return nil, internalError(err)
-		}
-		if row.Status != "error" {
-			seen[key] = row
-		}
-		result = append(result, row)
-	}
-	return result, nil
-}
-
-func loadTransactionBySource(ctx context.Context, q queryer, accountID, sourceEventID string) (*Transaction, error) {
-	var tx Transaction
-	err := q.QueryRowContext(ctx, `SELECT event_id,source_event_id,account_id,type,occurred_at,COALESCE(instrument_id,''),COALESCE(symbol,''),COALESCE(quantity,''),COALESCE(price,''),COALESCE(fee,''),currency,amount,COALESCE(counter_currency,''),COALESCE(counter_amount,''),COALESCE(corrects_source_event_id,'') FROM events WHERE account_id=? AND source_event_id=?`, accountID, sourceEventID).Scan(
-		&tx.EventID, &tx.SourceEventID, &tx.AccountID, &tx.Type, &tx.OccurredAt, &tx.InstrumentID, &tx.Symbol, &tx.Quantity, &tx.Price, &tx.Fee, &tx.Currency, &tx.Amount, &tx.CounterCurrency, &tx.CounterAmount, &tx.CorrectsSourceEventID,
-	)
-	return &tx, err
-}
-
-func sameTransaction(a, b *Transaction) bool {
-	if a == nil || b == nil {
-		return false
-	}
-	left, right := *a, *b
-	left.EventID, right.EventID = "", ""
-	return left == right
-}
-
-func validateCashVoid(ctx context.Context, q queryer, correction *Transaction, requireUnused bool) (*CorrectionTarget, *APIError, error) {
-	target, err := loadTransactionBySource(ctx, q, correction.AccountID, correction.CorrectsSourceEventID)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, invalidCorrection(), nil
-	}
-	if err != nil {
-		return nil, nil, err
-	}
-	eligible := target.Type == "DEPOSIT" || target.Type == "WITHDRAWAL" || target.Type == "DIVIDEND" || target.Type == "FEE" || target.Type == "TAX"
-	targetTime, targetTimeErr := time.Parse(time.RFC3339Nano, target.OccurredAt)
-	correctionTime, correctionTimeErr := time.Parse(time.RFC3339Nano, correction.OccurredAt)
-	targetAmount, targetAmountErr := parseDecimal(target.Amount)
-	correctionAmount, correctionAmountErr := parseDecimal(correction.Amount)
-	if !eligible || target.Currency != correction.Currency || targetTimeErr != nil || correctionTimeErr != nil || correctionTime.Before(targetTime) || targetAmountErr != nil || correctionAmountErr != nil || new(big.Rat).Add(targetAmount, correctionAmount).Sign() != 0 {
-		return nil, invalidCorrection(), nil
-	}
-	if requireUnused {
-		var count int
-		if err := q.QueryRowContext(ctx, `SELECT COUNT(*) FROM events WHERE account_id=? AND corrects_source_event_id=?`, correction.AccountID, correction.CorrectsSourceEventID).Scan(&count); err != nil {
-			return nil, nil, err
-		}
-		if count != 0 {
-			return nil, invalidCorrection(), nil
-		}
-	}
-	return &CorrectionTarget{SourceEventID: target.SourceEventID, Type: target.Type, Currency: target.Currency, Amount: target.Amount}, nil, nil
-}
-
-func invalidCorrection() *APIError {
-	return &APIError{Code: "invalid_correction", Message: "cash void does not exactly reverse one eligible existing cash event", Field: "corrects_source_event_id"}
-}
-
-func (s *Service) normalize(record []string, value func([]string, string) string) (*Transaction, []APIError) {
-	get := func(name string) string { return value(record, name) }
-	tx := &Transaction{
-		EventID: s.id("event"), SourceEventID: get("source_event_id"), AccountID: get("account_id"),
-		Type: get("type"), OccurredAt: get("occurred_at"), Symbol: get("symbol"), Quantity: get("quantity"),
-		Price: get("price"), Fee: get("fee"), Currency: get("currency"), Amount: get("amount"),
-		CounterCurrency: get("counter_currency"), CounterAmount: get("counter_amount"), CorrectsSourceEventID: get("corrects_source_event_id"),
-	}
-	var errs []APIError
-	for _, field := range []struct{ name, value string }{{"source_event_id", tx.SourceEventID}, {"account_id", tx.AccountID}} {
-		if field.value == "" {
-			errs = append(errs, APIError{"required", field.name + " is required", field.name})
-		}
-	}
-	if occurredAt, err := time.Parse(time.RFC3339, tx.OccurredAt); err != nil {
-		errs = append(errs, APIError{"invalid_datetime", "occurred_at must be an RFC 3339 timestamp", "occurred_at"})
-	} else {
-		tx.OccurredAt = occurredAt.UTC().Format(time.RFC3339Nano)
-	}
-	if len(tx.Currency) != 3 || tx.Currency != strings.ToUpper(tx.Currency) || strings.IndexFunc(tx.Currency, func(r rune) bool { return r < 'A' || r > 'Z' }) >= 0 {
-		errs = append(errs, APIError{"invalid_currency", "currency must be a three-letter uppercase code", "currency"})
-	}
-	amount, err := parseDecimal(tx.Amount)
-	if err != nil {
-		errs = append(errs, APIError{"invalid_decimal", "amount must be a canonical decimal", "amount"})
-	}
-	if tx.Type != "CASH_VOID" && tx.CorrectsSourceEventID != "" {
-		errs = append(errs, APIError{"invalid_fields", "corrects_source_event_id is only valid for CASH_VOID", "corrects_source_event_id"})
-	}
-	if tx.Type != "FX_EXCHANGE" && (tx.CounterCurrency != "" || tx.CounterAmount != "") {
-		errs = append(errs, APIError{"invalid_fields", "counter currency and amount are only valid for FX_EXCHANGE", "counter_currency"})
-	}
-	switch tx.Type {
-	case "DEPOSIT", "WITHDRAWAL", "FEE", "TAX":
-		if tx.Symbol != "" || tx.Quantity != "" || tx.Price != "" || tx.Fee != "" {
-			errs = append(errs, APIError{"invalid_fields", tx.Type + " trade fields must be empty", "symbol"})
-		}
-		tx.Symbol, tx.Quantity, tx.Price, tx.Fee = "", "", "", ""
-		if err == nil && ((tx.Type == "DEPOSIT" && amount.Sign() <= 0) || (tx.Type != "DEPOSIT" && amount.Sign() >= 0)) {
-			direction := "negative"
-			if tx.Type == "DEPOSIT" {
-				direction = "positive"
-			}
-			errs = append(errs, APIError{"invalid_amount", tx.Type + " amount must be " + direction, "amount"})
-		}
-	case "DIVIDEND":
-		if tx.Symbol == "" {
-			errs = append(errs, APIError{"required", "symbol is required for DIVIDEND", "symbol"})
-		} else {
-			tx.InstrumentID = instrumentIDForSymbol(tx.Symbol)
-		}
-		if tx.Quantity != "" || tx.Price != "" || tx.Fee != "" {
-			errs = append(errs, APIError{"invalid_fields", "DIVIDEND quantity, price, and fee must be empty", "quantity"})
-		}
-		tx.Quantity, tx.Price, tx.Fee = "", "", ""
-		if err == nil && amount.Sign() <= 0 {
-			errs = append(errs, APIError{"invalid_amount", "DIVIDEND amount must be positive", "amount"})
-		}
-	case "SPLIT":
-		if tx.Symbol == "" {
-			errs = append(errs, APIError{"required", "symbol is required for SPLIT", "symbol"})
-		} else {
-			tx.InstrumentID = instrumentIDForSymbol(tx.Symbol)
-		}
-		positiveDecimal(tx.Quantity, "quantity", &errs)
-		if tx.Price != "" || tx.Fee != "" {
-			errs = append(errs, APIError{"invalid_fields", "SPLIT price and fee must be empty", "price"})
-		}
-		tx.Price, tx.Fee = "", ""
-		if err == nil && amount.Sign() != 0 {
-			errs = append(errs, APIError{"invalid_amount", "SPLIT amount must be zero", "amount"})
-		}
-	case "CASH_VOID":
-		if tx.Symbol != "" || tx.Quantity != "" || tx.Price != "" || tx.Fee != "" {
-			errs = append(errs, APIError{"invalid_fields", "CASH_VOID trade fields must be empty", "symbol"})
-		}
-		tx.Symbol, tx.Quantity, tx.Price, tx.Fee = "", "", "", ""
-		if tx.CorrectsSourceEventID == "" {
-			errs = append(errs, APIError{"required", "corrects_source_event_id is required for CASH_VOID", "corrects_source_event_id"})
-		}
-		if err == nil && amount.Sign() == 0 {
-			errs = append(errs, APIError{"invalid_amount", "CASH_VOID amount must be non-zero", "amount"})
-		}
-	case "FX_EXCHANGE":
-		if tx.Symbol != "" || tx.Quantity != "" || tx.Price != "" || tx.Fee != "" {
-			errs = append(errs, APIError{"invalid_fields", "FX_EXCHANGE trade fields must be empty", "symbol"})
-		}
-		tx.Symbol, tx.Quantity, tx.Price, tx.Fee = "", "", "", ""
-		if err == nil && amount.Sign() >= 0 {
-			errs = append(errs, APIError{"invalid_amount", "FX_EXCHANGE amount must be negative", "amount"})
-		}
-		if tx.CounterCurrency == "" {
-			errs = append(errs, APIError{"required", "counter_currency is required for FX_EXCHANGE", "counter_currency"})
-		} else if len(tx.CounterCurrency) != 3 || tx.CounterCurrency != strings.ToUpper(tx.CounterCurrency) || strings.IndexFunc(tx.CounterCurrency, func(r rune) bool { return r < 'A' || r > 'Z' }) >= 0 {
-			errs = append(errs, APIError{"invalid_currency", "counter_currency must be a three-letter uppercase code", "counter_currency"})
-		} else if tx.CounterCurrency == tx.Currency {
-			errs = append(errs, APIError{"invalid_currency", "FX_EXCHANGE currencies must be different", "counter_currency"})
-		}
-		if tx.CounterAmount == "" {
-			errs = append(errs, APIError{"required", "counter_amount is required for FX_EXCHANGE", "counter_amount"})
-		} else if counterAmount, counterErr := parseDecimal(tx.CounterAmount); counterErr != nil {
-			errs = append(errs, APIError{"invalid_decimal", "counter_amount must be a canonical decimal", "counter_amount"})
-		} else if counterAmount.Sign() <= 0 {
-			errs = append(errs, APIError{"invalid_amount", "FX_EXCHANGE counter_amount must be positive", "counter_amount"})
-		}
-	case "BUY", "SELL":
-		if tx.Symbol == "" {
-			errs = append(errs, APIError{"required", "symbol is required for trades", "symbol"})
-		} else {
-			tx.InstrumentID = instrumentIDForSymbol(tx.Symbol)
-		}
-		quantity, quantityErr := positiveDecimal(tx.Quantity, "quantity", &errs)
-		price, priceErr := positiveDecimal(tx.Price, "price", &errs)
-		fee, feeErr := nonNegativeDecimal(tx.Fee, "fee", &errs)
-		if err == nil && quantityErr == nil && priceErr == nil && feeErr == nil {
-			expected := new(big.Rat).Mul(quantity, price)
-			expected.Add(expected, fee)
-			if tx.Type == "BUY" {
-				expected.Neg(expected)
-			} else {
-				expected.Sub(new(big.Rat).Mul(quantity, price), fee)
-			}
-			if expected.Cmp(amount) != 0 {
-				errs = append(errs, APIError{"amount_mismatch", "amount must equal the signed trade cash impact including fee", "amount"})
-			}
-		}
-	default:
-		errs = append(errs, APIError{"invalid_type", "unsupported transaction type", "type"})
-	}
-	return tx, errs
-}
-
-func instrumentIDForSymbol(symbol string) string {
-	return "instrument_" + strings.ToLower(symbol)
-}
-
-func positiveDecimal(raw, field string, errs *[]APIError) (*big.Rat, error) {
-	v, err := parseDecimal(raw)
-	if err != nil {
-		*errs = append(*errs, APIError{"invalid_decimal", field + " must be a canonical decimal", field})
-	} else if v.Sign() <= 0 {
-		err = errors.New("not positive")
-		*errs = append(*errs, APIError{"invalid_decimal", field + " must be positive", field})
-	}
-	return v, err
-}
-
-func nonNegativeDecimal(raw, field string, errs *[]APIError) (*big.Rat, error) {
-	v, err := parseDecimal(raw)
-	if err != nil {
-		*errs = append(*errs, APIError{"invalid_decimal", field + " must be a canonical decimal", field})
-	} else if v.Sign() < 0 {
-		err = errors.New("negative")
-		*errs = append(*errs, APIError{"invalid_decimal", field + " must be non-negative", field})
-	}
-	return v, err
-}
-
 func parseDecimal(raw string) (*big.Rat, error) {
 	return exact.ParseDecimal(raw)
 }
 
-func unresolved(tx *Transaction) *Resolution {
-	if tx.AccountID != "account-main" {
-		return &Resolution{
-			Kind: "account", SourceField: "account_id", SourceValue: tx.AccountID,
-			RequiredAction: "select_account", CandidateIDs: []string{"account-main"},
-		}
-	}
-	if tx.Symbol != "" && tx.Symbol != "AAPL" {
-		return &Resolution{
-			Kind: "instrument", SourceField: "symbol", SourceValue: tx.Symbol,
-			RequiredAction: "select_instrument", CandidateIDs: []string{"instrument_aapl"},
-		}
-	}
-	return nil
-}
-
-func previewFingerprint(fileSHA, schemaVersion, mappingVersion, ledgerRevision string) string {
-	binding, _ := json.Marshal(map[string]string{
-		"file_sha256": fileSHA, "schema_version": schemaVersion,
-		"mapping_version": mappingVersion, "ledger_revision": ledgerRevision,
-	})
-	hash := sha256.Sum256(binding)
-	return hex.EncodeToString(hash[:])
-}
-
-func (s *Service) apply(ctx context.Context, req ApplyRequest) (*ApplyReceipt, *appError) {
-	if req.PreviewID == "" || req.IdempotencyKey == "" {
-		return nil, &appError{http.StatusBadRequest, APIError{Code: "required", Message: "preview_id and idempotency_key are required"}}
-	}
-	received := s.now().UTC()
-	requestBytes, _ := json.Marshal(req)
-	requestHash := sha256.Sum256(requestBytes)
-	requestSHA := hex.EncodeToString(requestHash[:])
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, internalError(err)
-	}
-	defer tx.Rollback()
-	var priorHash, priorJSON string
-	err = tx.QueryRowContext(ctx, `SELECT request_sha256, receipt_json FROM receipts WHERE idempotency_key=?`, req.IdempotencyKey).Scan(&priorHash, &priorJSON)
-	if err == nil {
-		if priorHash != requestSHA {
-			return nil, &appError{http.StatusConflict, APIError{Code: "idempotency_conflict", Message: "idempotency_key was already used with a different payload"}}
-		}
-		var receipt ApplyReceipt
-		if err := json.Unmarshal([]byte(priorJSON), &receipt); err != nil {
-			return nil, internalError(err)
-		}
-		return &receipt, nil
-	}
-	if !errors.Is(err, sql.ErrNoRows) {
-		return nil, internalError(err)
-	}
-	var previewJSON, fileSHA, expiresAt string
-	var previewRev int64
-	var canApply int
-	if err := tx.QueryRowContext(ctx, `SELECT preview_json,file_sha256,ledger_revision,can_apply,expires_at FROM previews WHERE preview_id=?`, req.PreviewID).Scan(&previewJSON, &fileSHA, &previewRev, &canApply, &expiresAt); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, &appError{http.StatusBadRequest, APIError{Code: "preview_not_found", Message: "preview_id does not exist"}}
-		}
-		return nil, internalError(err)
-	}
-	expires, err := time.Parse(time.RFC3339Nano, expiresAt)
-	if err != nil || !received.Before(expires) {
-		return nil, &appError{http.StatusConflict, APIError{Code: "stale_preview", Message: "preview expired; create a new preview"}}
-	}
-	if canApply == 0 {
-		return nil, &appError{http.StatusBadRequest, APIError{Code: "preview_has_errors", Message: "preview contains invalid rows"}}
-	}
-	var currentRev int64
-	if err := tx.QueryRowContext(ctx, `SELECT revision FROM ledger_meta WHERE singleton=1`).Scan(&currentRev); err != nil {
-		return nil, internalError(err)
-	}
-	if currentRev != previewRev {
-		return nil, &appError{http.StatusConflict, APIError{Code: "stale_preview", Message: "ledger revision changed; create a new preview"}}
-	}
-	var preview ImportPreview
-	if err := json.Unmarshal([]byte(previewJSON), &preview); err != nil {
-		return nil, internalError(err)
-	}
-	expectedFingerprint := previewFingerprint(preview.FileSHA256, preview.SchemaVersion, preview.MappingVersion, preview.LedgerRevision)
-	if preview.SchemaVersion != csvSchema || preview.MappingVersion != mappingSchema || preview.PreviewFingerprint != expectedFingerprint ||
-		preview.FileSHA256 != fileSHA || preview.LedgerRevision != revision(previewRev) {
-		return nil, &appError{http.StatusConflict, APIError{Code: "stale_preview", Message: "preview binding changed; create a new preview"}}
-	}
-	receiptID := s.id("receipt")
-	recorded := s.now().UTC()
-	applied := 0
-	for _, row := range preview.Rows {
-		if row.Status != "new" {
-			continue
-		}
-		e := row.Transaction
-		if e == nil {
-			return nil, internalError(errors.New("preview new row has no transaction"))
-		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO events(event_id,source_event_id,account_id,type,occurred_at,instrument_id,symbol,quantity,price,fee,currency,amount,counter_currency,counter_amount,corrects_source_event_id,receipt_id,recorded_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-			e.EventID, e.SourceEventID, e.AccountID, e.Type, e.OccurredAt, nullable(e.InstrumentID), nullable(e.Symbol), nullable(e.Quantity), nullable(e.Price), nullable(e.Fee), e.Currency, e.Amount, nullable(e.CounterCurrency), nullable(e.CounterAmount), nullable(e.CorrectsSourceEventID), receiptID, recorded.Format(time.RFC3339Nano)); err != nil {
-			return nil, internalError(err)
-		}
-		applied++
-	}
-	after := currentRev + int64(applied)
-	if _, err := tx.ExecContext(ctx, `UPDATE ledger_meta SET revision=?, recorded_at=?, last_verified_at=? WHERE singleton=1`, after, recorded.Format(time.RFC3339Nano), recorded.Format(time.RFC3339Nano)); err != nil {
-		return nil, internalError(err)
-	}
-	if _, err := snapshotFrom(ctx, tx); err != nil {
-		log.Printf("ledger invariant validation failed: %v", err)
-		return nil, &appError{http.StatusBadRequest, APIError{Code: "invalid_ledger", Message: "ledger invariant validation failed"}}
-	}
-	receipt := &ApplyReceipt{
-		ReceiptID: receiptID, PreviewID: req.PreviewID, IdempotencyKey: req.IdempotencyKey, FileSHA256: fileSHA,
-		LedgerRevisionBefore: revision(currentRev), LedgerRevisionAfter: revision(after), AppliedRows: applied,
-		SkippedDuplicateRows: preview.Totals.DuplicateRows, ReceivedAt: received.Format(time.RFC3339Nano), RecordedAt: recorded.Format(time.RFC3339Nano),
-	}
-	receiptBytes, _ := json.Marshal(receipt)
-	if _, err := tx.ExecContext(ctx, `INSERT INTO receipts(idempotency_key,request_sha256,receipt_id,receipt_json) VALUES(?,?,?,?)`, req.IdempotencyKey, requestSHA, receiptID, string(receiptBytes)); err != nil {
-		return nil, internalError(err)
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, internalError(err)
-	}
-	return receipt, nil
-}
-
-type lot struct {
-	quantity *big.Rat
-	cost     *big.Rat
-}
-
-type position struct {
-	instrument, symbol, currency string
-	lots                         []lot
-}
-
 func snapshotFrom(ctx context.Context, q queryer) (*PortfolioSnapshot, error) {
-	if err := requireCurrentLedgerReplay(ctx, q); err != nil {
-		return nil, err
-	}
-	return snapshotFromPolicy(ctx, q, fifoCostBasisPolicy, -1)
+	return ledger.Snapshot(ctx, sqlite.NewLedgerReader(q))
 }
 
 func snapshotFromPolicy(ctx context.Context, q queryer, policy string, throughRevision int64) (*PortfolioSnapshot, error) {
-	order := "occurred_at, sequence"
-	if policy == fifoCostBasisPolicy {
-		order = "rtrim(occurred_at,'Z'), sequence"
-	} else if policy != legacyFIFOCostBasisPolicy {
-		return nil, errors.New("unsupported ledger replay policy")
-	}
-	var rev int64
-	var recorded string
-	if err := q.QueryRowContext(ctx, `SELECT revision, recorded_at FROM ledger_meta WHERE singleton=1`).Scan(&rev, &recorded); err != nil {
-		return nil, err
-	}
-	if throughRevision >= 0 {
-		if throughRevision > rev {
-			return nil, errors.New("ledger replay cutoff exceeds current revision")
-		}
-		rev = throughRevision
-		recorded = zeroTime
-		if rev > 0 {
-			if err := q.QueryRowContext(ctx, `SELECT recorded_at FROM events WHERE sequence=?`, rev).Scan(&recorded); err != nil {
-				return nil, err
-			}
-		}
-	}
-	if !canonicalUTCString(recorded) {
-		return nil, errors.New("ledger recorded_at is not canonical UTC")
-	}
-	rows, err := q.QueryContext(ctx, `SELECT event_id,type,occurred_at,COALESCE(instrument_id,''),COALESCE(symbol,''),COALESCE(quantity,''),COALESCE(price,''),COALESCE(fee,''),currency,amount,COALESCE(counter_currency,''),COALESCE(counter_amount,''),receipt_id FROM events WHERE sequence<=? ORDER BY `+order, rev)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	cash := map[string]*big.Rat{}
-	realized := map[string]*big.Rat{}
-	positions := map[string]*position{}
-	eventIDs := []string{}
-	receiptIDs := []string{}
-	seenReceipt := map[string]bool{}
-	asOf := zeroTime
-	for rows.Next() {
-		var eventID, typ, occurredAt, instrument, symbol, quantityRaw, priceRaw, feeRaw, currency, amountRaw, counterCurrency, counterAmountRaw, receiptID string
-		if err := rows.Scan(&eventID, &typ, &occurredAt, &instrument, &symbol, &quantityRaw, &priceRaw, &feeRaw, &currency, &amountRaw, &counterCurrency, &counterAmountRaw, &receiptID); err != nil {
-			return nil, err
-		}
-		amount, err := parseDecimal(amountRaw)
-		if err != nil {
-			return nil, fmt.Errorf("event %s amount: %w", eventID, err)
-		}
-		addRat(cash, currency, amount)
-		eventIDs = append(eventIDs, eventID)
-		if !seenReceipt[receiptID] {
-			seenReceipt[receiptID] = true
-			receiptIDs = append(receiptIDs, receiptID)
-		}
-		if !canonicalUTCString(occurredAt) {
-			return nil, errors.New("ledger occurred_at is not canonical UTC")
-		}
-		if policy == fifoCostBasisPolicy || occurredAt > asOf {
-			asOf = occurredAt
-		}
-		if typ == "FX_EXCHANGE" {
-			counterAmount, err := parseDecimal(counterAmountRaw)
-			if err != nil {
-				return nil, fmt.Errorf("event %s counter amount: %w", eventID, err)
-			}
-			addRat(cash, counterCurrency, counterAmount)
-			continue
-		}
-		switch typ {
-		case "DEPOSIT", "WITHDRAWAL", "DIVIDEND", "FEE", "TAX", "CASH_VOID":
-			continue
-		}
-		quantity, err := parseDecimal(quantityRaw)
-		if err != nil {
-			return nil, err
-		}
-		key := instrument + "\x00" + currency
-		p := positions[key]
-		if typ == "SPLIT" {
-			if p == nil || len(p.lots) == 0 {
-				return nil, fmt.Errorf("SPLIT %s has no open holding", eventID)
-			}
-			for i := range p.lots {
-				p.lots[i].quantity.Mul(p.lots[i].quantity, quantity)
-			}
-			continue
-		}
-		price, err := parseDecimal(priceRaw)
-		if err != nil {
-			return nil, err
-		}
-		fee, err := parseDecimal(feeRaw)
-		if err != nil {
-			return nil, err
-		}
-		if p == nil {
-			p = &position{instrument: instrument, symbol: symbol, currency: currency}
-			positions[key] = p
-		}
-		if typ == "BUY" {
-			cost := new(big.Rat).Add(new(big.Rat).Mul(quantity, price), fee)
-			p.lots = append(p.lots, lot{new(big.Rat).Set(quantity), cost})
-			continue
-		}
-		remaining := new(big.Rat).Set(quantity)
-		allocatedCost := new(big.Rat)
-		for remaining.Sign() > 0 && len(p.lots) > 0 {
-			current := &p.lots[0]
-			take := new(big.Rat).Set(remaining)
-			if take.Cmp(current.quantity) > 0 {
-				take.Set(current.quantity)
-			}
-			allocation, err := fifoCostAllocation(current.cost, take, current.quantity)
-			if err != nil {
-				return nil, fmt.Errorf("SELL %s cost allocation: %w", eventID, err)
-			}
-			allocatedCost.Add(allocatedCost, allocation)
-			current.quantity.Sub(current.quantity, take)
-			current.cost.Sub(current.cost, allocation)
-			remaining.Sub(remaining, take)
-			if current.quantity.Sign() == 0 {
-				p.lots = p.lots[1:]
-			}
-		}
-		if remaining.Sign() != 0 {
-			return nil, fmt.Errorf("SELL %s exceeds available FIFO quantity", eventID)
-		}
-		addRat(realized, currency, new(big.Rat).Sub(amount, allocatedCost))
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	snapshot := &PortfolioSnapshot{
-		PortfolioID: "portfolio_main", LedgerRevision: revision(rev), CostBasisPolicy: policy, AsOf: asOf, RecordedAt: recorded,
-		LiveEnabled: false, ValuationStatus: "unavailable", Cash: []Money{}, Holdings: []Holding{}, RealizedPnL: []Money{},
-		Provenance: Provenance{EventIDs: eventIDs, ReceiptIDs: receiptIDs},
-	}
-	for _, currency := range sortedKeys(cash) {
-		amount, err := formatDecimal(cash[currency])
-		if err != nil {
-			return nil, err
-		}
-		snapshot.Cash = append(snapshot.Cash, Money{currency, amount})
-	}
-	for _, key := range sortedPositionKeys(positions) {
-		p := positions[key]
-		quantity, cost := new(big.Rat), new(big.Rat)
-		for _, lot := range p.lots {
-			quantity.Add(quantity, lot.quantity)
-			cost.Add(cost, lot.cost)
-		}
-		if quantity.Sign() == 0 {
-			continue
-		}
-		quantityString, err := formatDecimal(quantity)
-		if err != nil {
-			return nil, err
-		}
-		costString, err := formatDecimal(cost)
-		if err != nil {
-			return nil, err
-		}
-		snapshot.Holdings = append(snapshot.Holdings, Holding{p.instrument, p.symbol, quantityString, costString, p.currency})
-	}
-	for _, currency := range sortedKeys(realized) {
-		amount, err := formatDecimal(realized[currency])
-		if err != nil {
-			return nil, err
-		}
-		snapshot.RealizedPnL = append(snapshot.RealizedPnL, Money{currency, amount})
-	}
-	return snapshot, nil
+	return ledger.SnapshotAt(ctx, sqlite.NewLedgerReader(q), policy, throughRevision)
 }
 
 func fifoCostAllocation(cost, take, quantity *big.Rat) (*big.Rat, error) {
@@ -1910,15 +1127,15 @@ func quantizeHalfEven(value *big.Rat, scale int) *big.Rat {
 	return exact.QuantizeHalfEven(value, scale)
 }
 
+func formatDecimal(value *big.Rat) (string, error) {
+	return exact.FormatDecimal(value)
+}
+
 func addRat(values map[string]*big.Rat, key string, value *big.Rat) {
 	if values[key] == nil {
 		values[key] = new(big.Rat)
 	}
 	values[key].Add(values[key], value)
-}
-
-func formatDecimal(value *big.Rat) (string, error) {
-	return exact.FormatDecimal(value)
 }
 
 func sortedKeys(values map[string]*big.Rat) []string {
@@ -1927,21 +1144,6 @@ func sortedKeys(values map[string]*big.Rat) []string {
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
-	return keys
-}
-
-func sortedPositionKeys(values map[string]*position) []string {
-	keys := make([]string, 0, len(values))
-	for key := range values {
-		keys = append(keys, key)
-	}
-	sort.Slice(keys, func(i, j int) bool {
-		a, b := values[keys[i]], values[keys[j]]
-		if a.instrument == b.instrument {
-			return a.currency < b.currency
-		}
-		return a.instrument < b.instrument
-	})
 	return keys
 }
 
@@ -4042,16 +3244,11 @@ func writeJSON(w http.ResponseWriter, status int, body any) {
 	_ = json.NewEncoder(w).Encode(body)
 }
 
-func writeError(w http.ResponseWriter, err *appError) { writeJSON(w, err.status, err.body) }
-
-func internalError(err error) *appError {
-	log.Printf("internal error: %v", err)
-	return &appError{http.StatusInternalServerError, APIError{Code: "internal_error", Message: "internal server error"}}
-}
+func writeError(w http.ResponseWriter, err *appError) { writeJSON(w, err.Status, err.Body) }
 
 func readinessError(err error) *appError {
 	log.Printf("readiness check failed: %v", err)
-	return &appError{http.StatusServiceUnavailable, APIError{Code: "not_ready", Message: "service is not ready"}}
+	return &appError{Status: http.StatusServiceUnavailable, Body: APIError{Code: "not_ready", Message: "service is not ready"}}
 }
 
 func boolInt(v bool) int {

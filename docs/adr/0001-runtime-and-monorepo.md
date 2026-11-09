@@ -10,6 +10,8 @@ Kairos는 iOS·Android·web 클라이언트, 여러 증권 API, 정확한 원장
 
 ## Decision
 
+DDD·클린 아키텍처의 내부 책임과 의존성은 [ADR-0002](0002-domain-module-boundaries.md)를 따른다.
+
 ```text
 apps/client (Flutter: iOS, Android, web)
           |
@@ -110,3 +112,7 @@ Gate 진입 후 첫 로컬 적합성 검증은 Kind의 Podman provider로 수행
 - 백테스트와 실전 기대수익은 분리된다. promotion에 사용하는 simulation/risk parity는 Go authority와 contract test로 별도 증명한다.
 - local profile은 가장 작게 유지하지만 PostgreSQL 승격을 실제 migration으로 취급한다.
 - Kubernetes, Redis, Kafka, service mesh, plugin SDK, service-per-broker는 아직 만들지 않는다.
+
+## 확장 설계 연결
+
+MSA 추출, 복수 저장소, 인증·권한, 캐시, Kafka/RabbitMQ 단독·혼합 구성의 목표 계약은 [플랫폼 확장 설계](../architecture/scalability-and-platform.md)를 따른다. 후보 기술의 설치나 현재 profile의 지원을 뜻하지 않으며, 이 ADR의 PostgreSQL·원자성·Kubernetes 진입 gate를 유지한다.

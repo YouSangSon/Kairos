@@ -6,6 +6,7 @@ import (
 	"errors"
 	"math/big"
 	"net/http"
+	"omni-folio/services/core/internal/application/fault"
 	"time"
 )
 
@@ -35,71 +36,71 @@ type CurrentPortfolioValuation struct {
 
 func (s *Service) currentPortfolioValuation(ctx context.Context) (*CurrentPortfolioValuation, *appError) {
 	if s == nil || s.db == nil || s.now == nil {
-		return nil, internalError(errors.New("current portfolio valuation service is unavailable"))
+		return nil, fault.Internal(errors.New("current portfolio valuation service is unavailable"))
 	}
 	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
-		return nil, internalError(err)
+		return nil, fault.Internal(err)
 	}
 	defer tx.Rollback()
 
 	asOf := s.now().UTC()
 	inputs, err := readValuationFXInputs(ctx, tx, asOf)
 	if err != nil {
-		return nil, internalError(err)
+		return nil, fault.Internal(err)
 	}
 	prices, err := readValuationPriceInputs(ctx, tx, asOf)
 	if err != nil {
-		return nil, internalError(err)
+		return nil, fault.Internal(err)
 	}
 	result, appErr := s.currentPortfolioValuationTx(ctx, tx, asOf, inputs, prices)
 	if appErr != nil {
 		return nil, appErr
 	}
 	if err := tx.Commit(); err != nil {
-		return nil, internalError(err)
+		return nil, fault.Internal(err)
 	}
 	return result, nil
 }
 
 func (s *Service) currentPortfolioValuationTx(ctx context.Context, tx *sql.Tx, valuationTime time.Time, inputs valuationFXInputs, prices valuationPriceInputs) (*CurrentPortfolioValuation, *appError) {
 	if inputs.tx != tx || !inputs.knownAt.Equal(valuationTime) {
-		return nil, internalError(errors.New("FX inputs do not belong to the valuation observation"))
+		return nil, fault.Internal(errors.New("FX inputs do not belong to the valuation observation"))
 	}
 	if prices.tx != tx || !prices.knownAt.Equal(valuationTime) {
-		return nil, internalError(errors.New("price inputs do not belong to the valuation observation"))
+		return nil, fault.Internal(errors.New("price inputs do not belong to the valuation observation"))
 	}
 	// The server owns one cutoff inside the same read transaction as every required input.
 	valuationAsOf := valuationTime.Format(time.RFC3339Nano)
 	snapshot, err := snapshotFrom(ctx, tx)
 	if err != nil {
-		return nil, internalError(err)
+		return nil, fault.Internal(err)
 	}
 	ledgerRevision, _, err := s.proveLedgerEvents(ctx, tx)
 	if err != nil {
-		return nil, internalError(err)
+		return nil, fault.Internal(err)
 	}
 	if revision(ledgerRevision) != snapshot.LedgerRevision {
-		return nil, internalError(errors.New("ledger snapshot proof mismatch"))
+		return nil, fault.Internal(errors.New("ledger snapshot proof mismatch"))
 	}
 	// Keep legacy snapshot/backup replay unchanged; this read contract needs the exact event cutoff.
 	ledgerAsOfRaw := zeroTime
 	err = tx.QueryRowContext(ctx, `SELECT occurred_at FROM events ORDER BY rtrim(occurred_at,'Z') DESC,sequence DESC LIMIT 1`).Scan(&ledgerAsOfRaw)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return nil, internalError(err)
+		return nil, fault.Internal(err)
 	}
 	ledgerAsOf, ledgerAsOfErr := time.Parse(time.RFC3339Nano, ledgerAsOfRaw)
 	ledgerRecordedAt, ledgerRecordedAtErr := time.Parse(time.RFC3339Nano, snapshot.RecordedAt)
 	if ledgerAsOfErr != nil || ledgerRecordedAtErr != nil || !canonicalUTCString(ledgerAsOfRaw) || !canonicalUTCString(snapshot.RecordedAt) {
-		return nil, internalError(errors.New("ledger snapshot timestamps are invalid"))
+		return nil, fault.Internal(errors.New("ledger snapshot timestamps are invalid"))
 	}
 	// Import metadata and append order need not follow event recording clocks.
 	var futureRecord bool
 	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM events WHERE sequence<=? AND rtrim(recorded_at,'Z')>rtrim(?,'Z'))`, ledgerRevision, valuationAsOf).Scan(&futureRecord); err != nil {
-		return nil, internalError(err)
+		return nil, fault.Internal(err)
 	}
 	if valuationTime.Before(ledgerAsOf) || valuationTime.Before(ledgerRecordedAt) || futureRecord {
-		return nil, internalError(errors.New("server valuation cutoff precedes ledger state"))
+		return nil, fault.Internal(errors.New("server valuation cutoff precedes ledger state"))
 	}
 
 	fxObservations, fxTimes := inputs.observations, inputs.times
@@ -126,7 +127,7 @@ func (s *Service) currentPortfolioValuationTx(ctx context.Context, tx *sql.Tx, v
 	for _, cash := range snapshot.Cash {
 		amount, err := parseDecimal(cash.Amount)
 		if err != nil {
-			return nil, internalError(errors.New("cash amount is invalid"))
+			return nil, fault.Internal(errors.New("cash amount is invalid"))
 		}
 		if amount.Sign() == 0 || cash.Currency == currentPortfolioValuationBaseCurrency {
 			cashTotal.Add(cashTotal, amount)
@@ -151,7 +152,7 @@ func (s *Service) currentPortfolioValuationTx(ctx context.Context, tx *sql.Tx, v
 		}
 		rate, err := parseDecimal(observation.Rate)
 		if err != nil {
-			return nil, internalError(errors.New("FX rate is invalid"))
+			return nil, fault.Internal(errors.New("FX rate is invalid"))
 		}
 		cashTotal.Add(cashTotal, new(big.Rat).Mul(amount, rate))
 	}
@@ -178,7 +179,7 @@ func (s *Service) currentPortfolioValuationTx(ctx context.Context, tx *sql.Tx, v
 		quantity, quantityErr := parseDecimal(holding.Quantity)
 		price, priceErr := parseDecimal(observation.Price)
 		if quantityErr != nil || priceErr != nil {
-			return nil, internalError(errors.New("holding valuation decimal is invalid"))
+			return nil, fault.Internal(errors.New("holding valuation decimal is invalid"))
 		}
 		marketValue := new(big.Rat).Mul(quantity, price)
 		if holding.Currency != currentPortfolioValuationBaseCurrency {
@@ -201,7 +202,7 @@ func (s *Service) currentPortfolioValuationTx(ctx context.Context, tx *sql.Tx, v
 			}
 			rate, err := parseDecimal(fx.Rate)
 			if err != nil {
-				return nil, internalError(errors.New("FX rate is invalid"))
+				return nil, fault.Internal(errors.New("FX rate is invalid"))
 			}
 			marketValue.Mul(marketValue, rate)
 		}
@@ -224,7 +225,7 @@ func (s *Service) currentPortfolioValuationTx(ctx context.Context, tx *sql.Tx, v
 		holdingsText, holdingsErr := formatDecimal(holdingsTotal)
 		totalText, totalErr := formatDecimal(new(big.Rat).Add(cashTotal, holdingsTotal))
 		if cashErr != nil || holdingsErr != nil || totalErr != nil {
-			return nil, internalError(errors.New("current portfolio valuation is not an exact finite decimal"))
+			return nil, fault.Internal(errors.New("current portfolio valuation is not an exact finite decimal"))
 		}
 		result.CashValue = &Money{Currency: currentPortfolioValuationBaseCurrency, Amount: cashText}
 		result.HoldingsValue = &Money{Currency: currentPortfolioValuationBaseCurrency, Amount: holdingsText}
@@ -284,7 +285,7 @@ func appendCurrentValuationIssue(issues []APIError, candidate APIError) []APIErr
 
 func (s *Service) handleCurrentPortfolioValuation(w http.ResponseWriter, r *http.Request) {
 	if r.URL.RawQuery != "" {
-		writeError(w, &appError{http.StatusBadRequest, APIError{
+		writeError(w, &appError{Status: http.StatusBadRequest, Body: APIError{
 			Code: "invalid_query", Message: "current portfolio valuation does not accept query parameters",
 		}})
 		return

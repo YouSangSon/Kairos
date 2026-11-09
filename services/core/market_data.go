@@ -9,6 +9,7 @@ import (
 	"io"
 	"math/big"
 	"net/http"
+	"omni-folio/services/core/internal/application/fault"
 	"os"
 	"reflect"
 	"time"
@@ -154,48 +155,48 @@ func (s *Service) handleMarketDataCandles(w http.ResponseWriter, r *http.Request
 	query := r.URL.Query()
 	for key := range query {
 		if key != "symbol" && key != "interval" {
-			writeError(w, &appError{http.StatusBadRequest, APIError{Code: "invalid_query", Message: "unknown query parameter " + key, Field: key}})
+			writeError(w, &appError{Status: http.StatusBadRequest, Body: APIError{Code: "invalid_query", Message: "unknown query parameter " + key, Field: key}})
 			return
 		}
 	}
 	for _, key := range []string{"symbol", "interval"} {
 		values := query[key]
 		if len(values) == 0 || values[0] == "" {
-			writeError(w, &appError{http.StatusBadRequest, APIError{Code: "invalid_query", Message: key + " query parameter is required", Field: key}})
+			writeError(w, &appError{Status: http.StatusBadRequest, Body: APIError{Code: "invalid_query", Message: key + " query parameter is required", Field: key}})
 			return
 		}
 		if len(values) != 1 {
-			writeError(w, &appError{http.StatusBadRequest, APIError{Code: "invalid_query", Message: key + " query parameter must appear exactly once", Field: key}})
+			writeError(w, &appError{Status: http.StatusBadRequest, Body: APIError{Code: "invalid_query", Message: key + " query parameter must appear exactly once", Field: key}})
 			return
 		}
 	}
 	if s.marketData == nil {
-		writeError(w, &appError{http.StatusServiceUnavailable, APIError{Code: "market_data_unavailable", Message: "market data is unavailable"}})
+		writeError(w, &appError{Status: http.StatusServiceUnavailable, Body: APIError{Code: "market_data_unavailable", Message: "market data is unavailable"}})
 		return
 	}
 	series, err := s.marketData.Candles(r.Context(), query.Get("symbol"), query.Get("interval"))
 	if errors.Is(err, errMarketDataNotFound) {
-		writeError(w, &appError{http.StatusNotFound, APIError{Code: "market_data_not_found", Message: "market data was not found"}})
+		writeError(w, &appError{Status: http.StatusNotFound, Body: APIError{Code: "market_data_not_found", Message: "market data was not found"}})
 		return
 	}
 	if err != nil {
-		writeError(w, internalError(err))
+		writeError(w, fault.Internal(err))
 		return
 	}
 	if series == nil || len(series.Bars) == 0 {
-		writeError(w, internalError(errors.New("market data port returned no bars")))
+		writeError(w, fault.Internal(errors.New("market data port returned no bars")))
 		return
 	}
 	if series.Symbol != query.Get("symbol") || series.Interval != query.Get("interval") {
-		writeError(w, internalError(errors.New("market data port returned a mismatched series")))
+		writeError(w, fault.Internal(errors.New("market data port returned a mismatched series")))
 		return
 	}
 	if series.PriceAdjustment != marketDataAdjustmentUnspecified {
-		writeError(w, internalError(errors.New("local market data returned an unsupported price adjustment")))
+		writeError(w, fault.Internal(errors.New("local market data returned an unsupported price adjustment")))
 		return
 	}
 	if !validMarketDataIdentity(series) {
-		writeError(w, internalError(errors.New("local market data returned an invalid identity")))
+		writeError(w, fault.Internal(errors.New("local market data returned an invalid identity")))
 		return
 	}
 	writeJSON(w, http.StatusOK, struct {

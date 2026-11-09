@@ -36,7 +36,7 @@ func TestManualEntrySharedCSVPreviewAndIdempotentApply(t *testing.T) {
 				return n
 			}
 			before := count()
-			preview, appErr := svc.preview(context.Background(), []byte(entry.CSV))
+			preview, appErr := svc.Preview(context.Background(), []byte(entry.CSV))
 			if appErr != nil || !preview.CanApply || len(preview.Rows) != 1 || preview.Rows[0].Status != "new" {
 				t.Fatalf("manual entry did not reach the existing import boundary: preview=%+v err=%v", preview, appErr)
 			}
@@ -57,19 +57,19 @@ func TestManualEntrySharedCSVPreviewAndIdempotentApply(t *testing.T) {
 				}
 			}
 			request := ApplyRequest{PreviewID: preview.PreviewID, IdempotencyKey: "manual-" + entry.Name}
-			receipt, appErr := svc.apply(context.Background(), request)
+			receipt, appErr := svc.Apply(context.Background(), request)
 			if appErr != nil || receipt.AppliedRows != 1 || count() != before+1 {
 				t.Fatalf("manual entry was not applied exactly once: receipt=%+v err=%v", receipt, appErr)
 			}
-			retried, appErr := svc.apply(context.Background(), request)
+			retried, appErr := svc.Apply(context.Background(), request)
 			if appErr != nil || retried.ReceiptID != receipt.ReceiptID || retried.LedgerRevisionAfter != receipt.LedgerRevisionAfter || count() != before+1 {
 				t.Fatalf("same request produced a duplicate: receipt=%+v err=%v", retried, appErr)
 			}
-			duplicate, appErr := svc.preview(context.Background(), []byte(entry.CSV))
+			duplicate, appErr := svc.Preview(context.Background(), []byte(entry.CSV))
 			if appErr != nil || !duplicate.CanApply || duplicate.Totals.DuplicateRows != 1 {
 				t.Fatalf("same stable source identity was not a duplicate: preview=%+v err=%v", duplicate, appErr)
 			}
-			repeated, appErr := svc.apply(context.Background(), ApplyRequest{PreviewID: duplicate.PreviewID, IdempotencyKey: request.IdempotencyKey + "-repreview"})
+			repeated, appErr := svc.Apply(context.Background(), ApplyRequest{PreviewID: duplicate.PreviewID, IdempotencyKey: request.IdempotencyKey + "-repreview"})
 			if appErr != nil || repeated.AppliedRows != 0 || repeated.SkippedDuplicateRows != 1 || count() != before+1 {
 				t.Fatalf("repreview duplicated the source event: receipt=%+v err=%v", repeated, appErr)
 			}

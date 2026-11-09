@@ -1,14 +1,17 @@
 import 'dart:async';
 import 'dart:convert';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
-import 'package:omni_folio_client/api.dart';
-import 'package:omni_folio_client/app.dart';
-import 'package:omni_folio_client/models.dart';
-import 'package:omni_folio_client/instrument_ledger_page.dart';
+import 'package:omni_folio_client/core/data/json_codec.dart';
+import 'package:omni_folio_client/core/domain/api_exception.dart';
+import 'package:omni_folio_client/features/ledger/data/codecs.dart';
+import 'package:omni_folio_client/features/ledger/domain/models.dart';
+import 'package:omni_folio_client/features/ledger/presentation/instrument_ledger_page.dart';
+import 'package:omni_folio_client/features/market_data/domain/models.dart';
+import 'package:omni_folio_client/features/portfolio/domain/models.dart';
+import 'support/repositories.dart';
 
 const _holding = Holding(
   instrumentId: 'instrument_aapl',
@@ -59,7 +62,7 @@ Json _view() => {
   'trades': [_trade()],
 };
 
-class _Api implements OmniApi {
+class _Api implements TestRepositories {
   @override
   Future<PortfolioBenchmarks> portfolioBenchmarks() async =>
       throw UnimplementedError();
@@ -79,7 +82,7 @@ class _Api implements OmniApi {
     String currency,
   ) async {
     calls++;
-    return load?.call() ?? InstrumentLedger.fromJson(_view());
+    return load?.call() ?? decodeInstrumentLedger(_view());
   }
 
   @override
@@ -91,7 +94,7 @@ class _Api implements OmniApi {
 
 void main() {
   test('instrument ledger validates authority, bounds, money and nanos', () {
-    final view = InstrumentLedger.fromJson(_view());
+    final view = decodeInstrumentLedger(_view());
     expect(view.averageCost, '10.33333333');
     expect(view.trades.single.occurredAt, endsWith('.000000001Z'));
     final zero = _view()
@@ -100,10 +103,10 @@ void main() {
         'cost_basis': '0.000000005',
         'average_cost': '0',
       });
-    expect(InstrumentLedger.fromJson(zero).averageCost, '0');
+    expect(decodeInstrumentLedger(zero).averageCost, '0');
     final closed = _view()
       ..addAll({'quantity': '0', 'cost_basis': '0', 'average_cost': null});
-    expect(InstrumentLedger.fromJson(closed).averageCost, isNull);
+    expect(decodeInstrumentLedger(closed).averageCost, isNull);
     for (final change in <Json>[
       {'source': 'broker'},
       {'broker_freshness': 'live'},
@@ -132,7 +135,7 @@ void main() {
       },
     ]) {
       expect(
-        () => InstrumentLedger.fromJson(_view()..addAll(change)),
+        () => decodeInstrumentLedger(_view()..addAll(change)),
         throwsFormatException,
         reason: '$change',
       );
@@ -143,15 +146,13 @@ void main() {
     final body = _view()
       ..['ledger_recorded_at'] = '2026-01-01T00:00:00Z'
       ..['trades'] = [_trade()..['symbol'] = 'aapl'];
-    final view = InstrumentLedger.fromJson(body);
+    final view = decodeInstrumentLedger(body);
     expect(view.trades.single.recordedAt, '2026-01-11T13:00:00Z');
     expect(view.trades.single.symbol, 'aapl');
     expect(view.instrumentId, 'instrument_aapl');
     final opaque = 'instrument_ A ${List.filled(130, 'B').join()}';
     expect(
-      InstrumentLedger.fromJson(
-        _view()..['instrument_id'] = opaque,
-      ).instrumentId,
+      decodeInstrumentLedger(_view()..['instrument_id'] = opaque).instrumentId,
       opaque,
     );
   });
@@ -169,7 +170,7 @@ void main() {
         return http.Response(jsonEncode(body), 200);
       });
       addTearDown(client.close);
-      final api = RestOmniApi(client: client);
+      final api = RestTestRepositories(client: client);
       expect(
         (await api.instrumentLedger('instrument_aapl', 'USD')).costBasis,
         '31',
@@ -187,10 +188,10 @@ void main() {
   ) async {
     await tester.pumpWidget(
       MaterialApp(
-        home: AssetDetailPage(
+        home: testAssetDetailPage(
           api: _Api()
             ..load = () async =>
-                InstrumentLedger.fromJson(_view()..['symbol'] = 'aapl'),
+                decodeInstrumentLedger(_view()..['symbol'] = 'aapl'),
           holding: _holding,
         ),
       ),
@@ -235,13 +236,13 @@ void main() {
       await tester.tap(find.text('원장 기준과 표시 방법'));
       await tester.pumpAndSettle();
       expect(find.textContaining('rev_0000000001'), findsOneWidget);
-      api.load = () async => InstrumentLedger.fromJson(
+      api.load = () async => decodeInstrumentLedger(
         _view()..['instrument_id'] = 'instrument_other',
       );
       await tester.tap(find.byTooltip('종목 원장 새로고침'));
       await tester.pumpAndSettle();
       expect(find.textContaining('10.33333333'), findsOneWidget);
-      api.load = () async => InstrumentLedger.fromJson(
+      api.load = () async => decodeInstrumentLedger(
         _view()
           ..addAll({'quantity': '0', 'cost_basis': '0', 'average_cost': null}),
       );
@@ -288,7 +289,7 @@ void main() {
     await tester.pump();
     expect(find.byType(CircularProgressIndicator), findsOneWidget);
     await tester.pumpWidget(const SizedBox());
-    pending.complete(InstrumentLedger.fromJson(_view()));
+    pending.complete(decodeInstrumentLedger(_view()));
     await tester.pump();
     expect(tester.takeException(), isNull);
   });
@@ -309,7 +310,7 @@ void main() {
                 index == 0 ? _trade() : _trade(quantity: '1', amount: '-11'),
           ),
         });
-      final api = _Api()..load = () async => InstrumentLedger.fromJson(body);
+      final api = _Api()..load = () async => decodeInstrumentLedger(body);
       for (final brightness in Brightness.values) {
         await tester.pumpWidget(
           MaterialApp(

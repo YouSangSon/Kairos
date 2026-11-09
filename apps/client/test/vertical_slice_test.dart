@@ -1,454 +1,25 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
 import 'dart:ui' show SemanticsAction;
-
+import 'package:file_selector_platform_interface/file_selector_platform_interface.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:file_selector_platform_interface/file_selector_platform_interface.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
-import 'package:omni_folio_client/api.dart';
-import 'package:omni_folio_client/app.dart';
-import 'package:omni_folio_client/models.dart';
-import 'package:omni_folio_client/paper_monitor.dart';
-import 'package:omni_folio_client/paper_promotion_report.dart';
-import 'package:omni_folio_client/research_report.dart';
-import 'package:omni_folio_client/public_research.dart';
-
-Json fixture(String name) {
-  final body = File('../../contracts/fixtures/$name').readAsStringSync();
-  return jsonDecode(body) as Json;
-}
-
-class FakeApi implements OmniApi {
-  @override
-  Future<WatchlistReport> watchlist() async => WatchlistReport.fromJson({
-    'policy_version': 'watchlist_stored_prices_24h.v1',
-    'max_observation_age_seconds': 86400,
-    'observed_at': '2026-01-01T00:00:00Z',
-    'watchlist': {'revision': 0, 'updated_at': null, 'entries': <Json>[]},
-    'quotes': <Json>[],
-  });
-  @override
-  Future<WatchlistState> updateWatchlist(WatchlistChange change) async =>
-      throw UnimplementedError();
-
-  @override
-  Future<PortfolioTwrCheckpoints> portfolioTwrCheckpoints() =>
-      throw UnsupportedError('Not used by this fixture.');
-
-  @override
-  Future<OwnerDataPreview> previewOwnerData(String input) async =>
-      throw UnimplementedError();
-  @override
-  Future<OwnerDataReceipt> applyOwnerData(OwnerDataPreview review) async =>
-      throw UnimplementedError();
-
-  PortfolioBenchmarks? benchmarksValue;
-  Completer<PortfolioBenchmarks>? benchmarksCompleter;
-  int benchmarksCalls = 0;
-  bool failBenchmarks = false;
-  @override
-  Future<PortfolioBenchmarks> portfolioBenchmarks() async {
-    benchmarksCalls++;
-    if (failBenchmarks) throw const ApiException('private-benchmark-sentinel');
-    return benchmarksCompleter?.future ?? benchmarksValue!;
-  }
-
-  PortfolioTwr? twrValue;
-  Completer<PortfolioTwr>? twrCompleter;
-  int twrCalls = 0;
-  bool failTwr = false;
-  @override
-  Future<PortfolioTwr> portfolioTwr() async {
-    twrCalls++;
-    if (failTwr) throw const ApiException('private-twr-sentinel');
-    return twrCompleter?.future ?? twrValue!;
-  }
-
-  PortfolioXirr? xirrValue;
-  Completer<PortfolioXirr>? xirrCompleter;
-  int xirrCalls = 0;
-  bool failXirr = false;
-
-  @override
-  Future<PortfolioXirr> portfolioXirr() async {
-    xirrCalls += 1;
-    if (failXirr) throw const ApiException('private-xirr-sentinel');
-    return xirrCompleter?.future ?? xirrValue!;
-  }
-
-  FakeApi({
-    required this.statusValue,
-    required this.snapshotValue,
-    required this.previewValue,
-    required this.receiptValue,
-    required this.candlesValue,
-    required this.orderLogValue,
-    required this.activityValue,
-    this.currentValuationValue,
-    this.reconciliationValue,
-    this.fail = false,
-    this.failSnapshot = false,
-    this.failReconciliation = false,
-    this.failLocalOrders = false,
-    this.failActivities = false,
-    this.failCurrentValuation = false,
-    this.applyFailures = 0,
-    this.failureMessage = '서버를 다시 확인하세요.',
-  });
-
-  final ServiceStatus statusValue;
-  final PortfolioSnapshot snapshotValue;
-  final ImportPreview previewValue;
-  final ApplyReceipt receiptValue;
-  MarketCandles candlesValue;
-  LocalOrderLog orderLogValue;
-  LedgerActivityPage activityValue;
-  CurrentPortfolioValuation? currentValuationValue;
-  Completer<CurrentPortfolioValuation>? currentValuationCompleter;
-  int currentValuationCalls = 0;
-  BrokerReconciliation? reconciliationValue;
-  Completer<BrokerReconciliation?>? reconciliationCompleter;
-  int reconciliationCalls = 0;
-  Completer<LocalOrderLog>? localOrdersCompleter;
-  int localOrderCalls = 0;
-  Completer<LedgerActivityPage>? activityCompleter;
-  int activityCalls = 0;
-  Completer<MarketCandles>? candlesCompleter;
-  int candleCalls = 0;
-  Completer<ApplyReceipt>? applyCompleter;
-  final List<String> applyKeys = [];
-  final List<String> previewInputs = [];
-  bool fail;
-  bool failSnapshot;
-  bool failReconciliation;
-  bool failLocalOrders;
-  bool failActivities;
-  bool failCurrentValuation;
-  int applyFailures;
-  String failureMessage;
-
-  @override
-  Future<ApplyReceipt> apply(String previewId, String idempotencyKey) async {
-    applyKeys.add(idempotencyKey);
-    if (applyFailures > 0) {
-      applyFailures -= 1;
-      throw ApiException(failureMessage);
-    }
-    if (fail) throw ApiException(failureMessage);
-    return applyCompleter?.future ?? receiptValue;
-  }
-
-  @override
-  Future<ImportPreview> preview(String csv) async {
-    previewInputs.add(csv);
-    if (fail) throw ApiException(failureMessage);
-    return previewValue;
-  }
-
-  @override
-  Future<PortfolioSnapshot> snapshot() async {
-    if (fail || failSnapshot) {
-      throw ApiException(failureMessage);
-    }
-    return snapshotValue;
-  }
-
-  @override
-  Future<CurrentPortfolioValuation> currentPortfolioValuation() async {
-    currentValuationCalls += 1;
-    if (fail || failCurrentValuation) {
-      throw const ApiException('private-current-valuation-error');
-    }
-    return currentValuationCompleter?.future ?? currentValuationValue!;
-  }
-
-  @override
-  Future<InstrumentLedger> instrumentLedger(
-    String instrumentId,
-    String currency,
-  ) => throw UnsupportedError('Not used by this fixture.');
-
-  @override
-  Future<HoldingValuation> holdingValuation() =>
-      throw UnsupportedError('Not used by this fixture.');
-
-  @override
-  Future<MarketCandles> candles(String symbol) async {
-    candleCalls += 1;
-    if (fail) throw ApiException(failureMessage);
-    return candlesCompleter?.future ?? candlesValue;
-  }
-
-  @override
-  Future<BrokerReconciliation?> latestBrokerReconciliation() async {
-    reconciliationCalls += 1;
-    if (fail || failReconciliation) {
-      throw ApiException(failureMessage);
-    }
-    return reconciliationCompleter?.future ?? reconciliationValue;
-  }
-
-  @override
-  Future<LocalOrderLog> localOrders() async {
-    localOrderCalls += 1;
-    if (fail || failLocalOrders) {
-      throw const ApiException('kiwoom_account_secret');
-    }
-    return localOrdersCompleter?.future ?? orderLogValue;
-  }
-
-  @override
-  Future<PaperMonitor> paperMonitor() =>
-      throw UnsupportedError('Loaded only from the monitor detail page.');
-
-  @override
-  Future<PaperPromotionReport> paperPromotionReport() =>
-      throw UnsupportedError('Loaded only from the paper comparison page.');
-
-  @override
-  Future<ResearchReport> researchReport() =>
-      throw UnsupportedError('Loaded only from the research report page.');
-
-  @override
-  Future<PublicResearch> publicResearch(PublicResearchIdentity identity) =>
-      throw UnsupportedError('Loaded only from the public research page.');
-
-  @override
-  Future<LedgerActivityPage> ledgerActivities({String? cursor}) async {
-    activityCalls += 1;
-    if (fail || failActivities) {
-      throw const ApiException('account-main event-secret receipt-secret');
-    }
-    return activityCompleter?.future ?? activityValue;
-  }
-
-  @override
-  Future<ServiceStatus> status() async {
-    if (fail) throw ApiException(failureMessage);
-    return statusValue;
-  }
-}
-
-FakeApi goldenApi({
-  bool neverVerified = false,
-  ImportPreview? preview,
-  PortfolioSnapshot? snapshot,
-}) {
-  final previewValue =
-      preview ?? ImportPreview.fromJson(fixture('golden-preview.json'));
-  final snapshotValue =
-      snapshot ?? PortfolioSnapshot.fromJson(fixture('golden-snapshot.json'));
-  final receipt = ApplyReceipt.fromJson(fixture('golden-apply.json'));
-  return FakeApi(
-    statusValue: ServiceStatus.fromJson({
-      'live_enabled': false,
-      'mode': 'local_import_only',
-      'trust_state': neverVerified ? 'never_verified' : 'verified',
-      'ledger_revision': 'rev_0000000003',
-      'last_verified_at': neverVerified ? null : '2026-08-23T03:05:00Z',
-      'issues': const [],
-    }),
-    snapshotValue: snapshotValue,
-    currentValuationValue: currentPortfolioValuation(),
-    previewValue: previewValue,
-    receiptValue: receipt,
-    candlesValue: marketCandles(),
-    orderLogValue: LocalOrderLog.fromJson(localOrderLogJson(orders: const [])),
-    activityValue: LedgerActivityPage.fromJson(ledgerActivitiesJson()),
-  );
-}
-
-CurrentPortfolioValuation currentPortfolioValuation({
-  String status = 'stale_sample',
-  bool sample = true,
-  String ledgerRevision = 'rev_0000000003',
-  Object? cashValue = const {'currency': 'KRW', 'amount': '95530'},
-  Object? holdingsValue = const {'currency': 'KRW', 'amount': '61650'},
-  Object? totalValue = const {'currency': 'KRW', 'amount': '157180'},
-  List<Json>? issues,
-}) => CurrentPortfolioValuation.fromJson({
-  'scope': 'whole_portfolio',
-  'policy_version': 'current_base_portfolio_valuation_v1',
-  'max_observation_age_seconds': 86400,
-  'base_currency': 'KRW',
-  'valuation_as_of': '2026-01-11T14:00:00Z',
-  'ledger_revision': ledgerRevision,
-  'ledger_as_of': '2026-01-10T10:00:00Z',
-  'ledger_recorded_at': '2026-01-10T15:01:00Z',
-  'status': status,
-  'sample': sample,
-  'cash_value': cashValue,
-  'holdings_value': holdingsValue,
-  'total_value': totalValue,
-  'issues':
-      issues ??
-      const [
-        {
-          'code': 'sample_data',
-          'message': 'portfolio valuation uses stored local sample data',
-        },
-      ],
-});
-
-MarketCandles marketCandles({
-  String? instrumentId,
-  String? currency,
-  String barTimeBasis = 'unspecified',
-  String state = 'stale',
-  bool sample = true,
-  String priceAdjustment = 'unspecified',
-  String source = 'local_fixture',
-  String? sourceAsOf = '2026-08-22T20:00:00Z',
-  bool includeIssues = true,
-  List<Json>? bars,
-}) => MarketCandles.fromJson({
-  'instrument_id': instrumentId,
-  'currency': currency,
-  'bar_time_basis': barTimeBasis,
-  'symbol': 'AAPL',
-  'venue': 'XNAS',
-  'timezone': 'America/New_York',
-  'interval': '1d',
-  'price_adjustment': priceAdjustment,
-  'source': source,
-  'sample': sample,
-  'state': state,
-  'source_as_of': sourceAsOf,
-  'fetched_at': '2026-08-24T03:00:00Z',
-  'issues': !includeIssues
-      ? const []
-      : state == 'partial'
-      ? [
-          {'code': 'missing_session', 'message': '일부 세션이 없습니다.'},
-        ]
-      : source == 'local_fixture'
-      ? [
-          {
-            'code': 'sample_data',
-            'message': 'market data is a local sample and not live',
-          },
-        ]
-      : const [],
-  'bars': state == 'empty'
-      ? const []
-      : bars ??
-            [
-              {
-                'at': '2026-08-21T20:00:00Z',
-                'open': '100',
-                'high': '110',
-                'low': '90',
-                'close': '105',
-                'volume': '1200',
-              },
-              {
-                'at': '2026-08-22T20:00:00Z',
-                'open': '105',
-                'high': '112',
-                'low': '100',
-                'close': '101',
-                'volume': '900',
-              },
-            ],
-});
-
-Json brokerReconciliationJson() => {
-  'provider': 'kiwoom',
-  'environment': 'mock',
-  'exchange': 'KRX',
-  'freshness': 'unverified',
-  'fetched_at': '2026-01-10T15:00:59Z',
-  'recorded_at': '2026-01-10T15:01:00Z',
-  'ledger_revision': 'rev_0000000002',
-  'all_positions_match': false,
-  'position_differences': const [
-    {
-      'symbol': '000660',
-      'broker_quantity': '2',
-      'ledger_quantity': '0',
-      'difference': '2',
-      'match': false,
-    },
-    {
-      'symbol': '005930',
-      'broker_quantity': '10',
-      'ledger_quantity': '7',
-      'difference': '3',
-      'match': false,
-    },
-  ],
-};
-
-Json localOrderLogJson({List<Json>? orders}) => {
-  'source': 'local_order_log',
-  'broker_freshness': 'unverified',
-  'orders':
-      orders ??
-      const [
-        {
-          'mode': 'synthetic',
-          'symbol': '005930',
-          'side': 'BUY',
-          'order_type': 'LIMIT',
-          'quantity': '2',
-          'limit_price': '70000',
-          'filled_quantity': '0',
-          'currency': 'KRW',
-          'status': 'SUBMIT_UNKNOWN',
-          'pending_action': 'SUBMIT',
-          'last_recorded_at': '2026-01-10T15:01:00Z',
-        },
-      ],
-};
-
-Json ledgerActivitiesJson({List<Json>? events, String? nextCursor}) => {
-  'source': 'local_ledger',
-  'broker_freshness': 'unverified',
-  'ledger_revision': 'rev_0000000004',
-  'recorded_at': '2026-01-10T15:01:00Z',
-  'events':
-      events ??
-      const [
-        {
-          'type': 'FX_EXCHANGE',
-          'occurred_at': '2026-01-03T00:00:00Z',
-          'recorded_at': '2026-01-10T15:01:00Z',
-          'symbol': null,
-          'quantity': null,
-          'price': null,
-          'fee': null,
-          'currency': 'USD',
-          'amount': '-100',
-          'counter_currency': 'KRW',
-          'counter_amount': '137000',
-          'is_correction': false,
-        },
-        {
-          'type': 'BUY',
-          'occurred_at': '2026-01-02T00:00:00Z',
-          'recorded_at': '2026-01-10T15:01:00Z',
-          'symbol': 'AAPL',
-          'quantity': '2',
-          'price': '10',
-          'fee': '0',
-          'currency': 'USD',
-          'amount': '-20',
-          'counter_currency': null,
-          'counter_amount': null,
-          'is_correction': false,
-        },
-      ],
-  'next_cursor': nextCursor,
-};
-
-Future<void> pumpUi(WidgetTester tester) async {
-  await tester.pump();
-  await tester.pump(const Duration(milliseconds: 300));
-}
+import 'package:omni_folio_client/core/data/http_transport.dart';
+import 'package:omni_folio_client/core/data/json_codec.dart';
+import 'package:omni_folio_client/core/domain/api_exception.dart';
+import 'package:omni_folio_client/features/connections/data/codecs.dart';
+import 'package:omni_folio_client/features/connections/domain/models.dart';
+import 'package:omni_folio_client/features/ledger/data/codecs.dart';
+import 'package:omni_folio_client/features/ledger/domain/models.dart';
+import 'package:omni_folio_client/features/market_data/data/codecs.dart';
+import 'package:omni_folio_client/features/market_data/domain/models.dart';
+import 'package:omni_folio_client/features/portfolio/data/codecs.dart';
+import 'package:omni_folio_client/features/portfolio/domain/models.dart';
+import 'support/fixtures.dart';
+import 'support/repositories.dart';
 
 void main() {
   testWidgets('Korean typography resolves and font/icon assets are available', (
@@ -468,7 +39,7 @@ void main() {
       await rootBundle.loadString('assets/fonts/OFL.txt'),
       contains('SIL OPEN FONT LICENSE Version 1.1'),
     );
-    await tester.pumpWidget(OmniFolioApp(api: goldenApi()));
+    await tester.pumpWidget(testApp(api: goldenApi()));
     await pumpUi(tester);
     for (final label in ['현금 잔액', 'USD 778', '홈', '연결']) {
       final paragraphs = find.descendant(
@@ -483,10 +54,8 @@ void main() {
   });
 
   test('golden preview and snapshot parse canonical decimal strings', () {
-    final preview = ImportPreview.fromJson(fixture('golden-preview.json'));
-    final snapshot = PortfolioSnapshot.fromJson(
-      fixture('golden-snapshot.json'),
-    );
+    final preview = decodeImportPreview(fixture('golden-preview.json'));
+    final snapshot = decodePortfolioSnapshot(fixture('golden-snapshot.json'));
 
     expect(preview.canApply, isTrue);
     expect(preview.schemaVersion, 'omni-folio.csv.v1');
@@ -499,7 +68,7 @@ void main() {
       'fifo_utc_nanosecond_exact_else_half_even_residual_8_v2',
     );
     expect(
-      () => PortfolioSnapshot.fromJson({
+      () => decodePortfolioSnapshot({
         ...fixture('golden-snapshot.json'),
         'cost_basis_policy': 'fifo_exact_else_half_even_residual_8_v1',
       }),
@@ -509,11 +78,11 @@ void main() {
     expect(snapshot.receiptCount, 1);
 
     expect(
-      () => Money.fromJson({'currency': 'USD', 'amount': 778}),
+      () => decodeMoney({'currency': 'USD', 'amount': 778}),
       throwsFormatException,
     );
     expect(
-      () => ImportPreview.fromJson({
+      () => decodeImportPreview({
         ...fixture('golden-preview.json'),
         'rows': [
           {'row_number': 2, 'status': 'new'},
@@ -523,7 +92,7 @@ void main() {
       throwsFormatException,
     );
     expect(
-      () => ServiceStatus.fromJson({
+      () => decodeServiceStatus({
         'live_enabled': false,
         'mode': 'local_import_only',
         'trust_state': 'verified',
@@ -534,7 +103,7 @@ void main() {
       throwsFormatException,
     );
     expect(
-      () => ServiceStatus.fromJson({
+      () => decodeServiceStatus({
         'live_enabled': true,
         'mode': 'live',
         'trust_state': 'verified',
@@ -545,7 +114,7 @@ void main() {
       throwsFormatException,
     );
     expect(
-      () => ServiceStatus.fromJson({
+      () => decodeServiceStatus({
         'live_enabled': false,
         'mode': 'local_import_only',
         'trust_state': 'verified',
@@ -556,14 +125,14 @@ void main() {
       throwsFormatException,
     );
     expect(
-      () => PortfolioSnapshot.fromJson({
+      () => decodePortfolioSnapshot({
         ...fixture('golden-snapshot.json'),
         'valuation_status': 'live',
       }),
       throwsFormatException,
     );
     expect(
-      () => PortfolioSnapshot.fromJson({
+      () => decodePortfolioSnapshot({
         ...fixture('golden-snapshot.json'),
         'cost_basis_policy': 'unversioned',
       }),
@@ -588,7 +157,7 @@ void main() {
       {'event_ids': [], 'receipt_ids': [], 'raw_id': 'must-not-accept'},
     ]) {
       expect(
-        () => PortfolioSnapshot.fromJson({
+        () => decodePortfolioSnapshot({
           ...fixture('golden-snapshot.json'),
           'provenance': provenance,
         }),
@@ -596,7 +165,7 @@ void main() {
       );
     }
     expect(
-      () => PortfolioSnapshot.fromJson(missingProvenance),
+      () => decodePortfolioSnapshot(missingProvenance),
       throwsFormatException,
     );
     expect(marketCandles().bars.last.close, '101');
@@ -611,7 +180,7 @@ void main() {
     expect(() => marketCandles(state: 'success'), throwsFormatException);
     expect(() => marketCandles(sourceAsOf: null), throwsFormatException);
     expect(() => marketCandles(includeIssues: false), throwsFormatException);
-    final providerCandles = MarketCandles.fromJson({
+    final providerCandles = decodeMarketCandles({
       'symbol': 'AAPL',
       'venue': 'XNAS',
       'timezone': 'America/New_York',
@@ -637,7 +206,7 @@ void main() {
     expect(providerCandles.source, 'provider_neutral_fixture');
     expect(providerCandles.priceAdjustment, 'provider_adjusted');
     expect(
-      () => MarketCandles.fromJson({
+      () => decodeMarketCandles({
         'symbol': 'AAPL',
         'venue': 'XNAS',
         'timezone': 'America/New_York',
@@ -668,7 +237,7 @@ void main() {
       throwsFormatException,
     );
     expect(
-      () => MarketCandles.fromJson({
+      () => decodeMarketCandles({
         'symbol': 'AAPL',
         'venue': 'XNAS',
         'timezone': 'America/New_York',
@@ -700,7 +269,7 @@ void main() {
       throwsFormatException,
     );
     expect(
-      () => MarketCandles.fromJson({
+      () => decodeMarketCandles({
         'symbol': 'AAPL',
         'venue': 'XNAS',
         'timezone': 'America/New_York',
@@ -739,7 +308,7 @@ void main() {
       throwsFormatException,
     );
     expect(
-      () => MarketBar.fromJson({
+      () => decodeMarketBar({
         'at': '2026-08-22T20:00:00Z',
         'open': '100',
         'high': '99',
@@ -750,7 +319,7 @@ void main() {
       throwsFormatException,
     );
     expect(
-      () => MarketBar.fromJson({
+      () => decodeMarketBar({
         'at': '2026-08-22T20:00:00Z',
         'open': '1',
         'high': '9007199254740992',
@@ -761,7 +330,7 @@ void main() {
       throwsFormatException,
     );
     expect(
-      () => MarketBar.fromJson({
+      () => decodeMarketBar({
         'at': '2026-08-22T20:00:00Z',
         'open': '1${List.filled(400, '0').join()}',
         'high': '1${List.filled(400, '0').join()}',
@@ -775,7 +344,7 @@ void main() {
 
   test('cash void preview requires a closed correction target', () {
     expect(
-      () => ImportPreview.fromJson({
+      () => decodeImportPreview({
         ...fixture('golden-preview.json'),
         'rows': [
           {
@@ -799,7 +368,7 @@ void main() {
   });
 
   test('POST network failures use the stable connection message', () async {
-    final api = RestOmniApi(
+    final api = RestTestRepositories(
       client: MockClient((_) async => throw StateError('socket detail')),
     );
 
@@ -863,7 +432,7 @@ void main() {
 
   test('candles use the fixed daily interval and strict parser', () async {
     late Uri request;
-    final api = RestOmniApi(
+    final api = RestTestRepositories(
       client: MockClient((value) async {
         request = value.url;
         return http.Response(
@@ -909,7 +478,7 @@ void main() {
   });
 
   test('candles reject a response for another symbol', () async {
-    final api = RestOmniApi(
+    final api = RestTestRepositories(
       client: MockClient(
         (_) async => http.Response(
           jsonEncode({
@@ -943,18 +512,18 @@ void main() {
   });
 
   test('broker reconciliation parser rejects unsafe or inconsistent data', () {
-    final parsed = BrokerReconciliation.fromJson(brokerReconciliationJson());
+    final parsed = decodeBrokerReconciliation(brokerReconciliationJson());
     expect(parsed.positionDifferences.last.difference, '3');
     expect(parsed.allPositionsMatch, isFalse);
     expect(
-      () => BrokerReconciliation.fromJson({
+      () => decodeBrokerReconciliation({
         ...brokerReconciliationJson(),
         'account_ref': 'kiwoom_account_secret',
       }),
       throwsFormatException,
     );
     expect(
-      () => BrokerReconciliation.fromJson({
+      () => decodeBrokerReconciliation({
         ...brokerReconciliationJson(),
         'position_differences': [
           {
@@ -968,7 +537,7 @@ void main() {
       throwsFormatException,
     );
     expect(
-      () => BrokerReconciliation.fromJson({
+      () => decodeBrokerReconciliation({
         ...brokerReconciliationJson(),
         'all_positions_match': true,
       }),
@@ -979,10 +548,10 @@ void main() {
   test(
     'local order lifecycle parser rejects identifiers and invalid state',
     () {
-      final parsed = LocalOrderLog.fromJson(localOrderLogJson());
+      final parsed = decodeLocalOrderLog(localOrderLogJson());
       expect(parsed.orders.single.status, 'SUBMIT_UNKNOWN');
       expect(parsed.orders.single.pendingAction, 'SUBMIT');
-      final resolved = LocalOrderLog.fromJson(
+      final resolved = decodeLocalOrderLog(
         localOrderLogJson(
           orders: [
             {
@@ -996,14 +565,14 @@ void main() {
       );
       expect(resolved.orders.single.pendingAction, 'none');
       expect(
-        () => LocalOrderLog.fromJson({
+        () => decodeLocalOrderLog({
           ...localOrderLogJson(),
           'account_ref': 'kiwoom_account_secret',
         }),
         throwsFormatException,
       );
       expect(
-        () => LocalOrderLog.fromJson({
+        () => decodeLocalOrderLog({
           ...localOrderLogJson(),
           'orders': [
             {
@@ -1015,7 +584,7 @@ void main() {
         throwsFormatException,
       );
       expect(
-        () => LocalOrderLog.fromJson({
+        () => decodeLocalOrderLog({
           ...localOrderLogJson(),
           'orders': [
             {
@@ -1027,7 +596,7 @@ void main() {
         throwsFormatException,
       );
       expect(
-        () => LocalOrderLog.fromJson({
+        () => decodeLocalOrderLog({
           ...localOrderLogJson(),
           'orders': [
             {
@@ -1045,7 +614,7 @@ void main() {
 
   test('local orders use the fixed read-only path', () async {
     late http.Request request;
-    final api = RestOmniApi(
+    final api = RestTestRepositories(
       client: MockClient((value) async {
         request = value;
         return http.Response(jsonEncode(localOrderLogJson()), 200);
@@ -1059,7 +628,7 @@ void main() {
   });
 
   test('ledger activities parse a closed exact-money contract', () {
-    final page = LedgerActivityPage.fromJson(ledgerActivitiesJson());
+    final page = decodeLedgerActivityPage(ledgerActivitiesJson());
     expect(page.source, 'local_ledger');
     expect(page.events.first.type, 'FX_EXCHANGE');
     expect(page.events.first.counterCurrency, 'KRW');
@@ -1139,13 +708,13 @@ void main() {
       },
     ];
     for (final value in invalid) {
-      expect(() => LedgerActivityPage.fromJson(value), throwsFormatException);
+      expect(() => decodeLedgerActivityPage(value), throwsFormatException);
     }
   });
 
   test('ledger activities use the fixed read-only path', () async {
     late http.Request request;
-    final api = RestOmniApi(
+    final api = RestTestRepositories(
       client: MockClient((value) async {
         request = value;
         return http.Response(jsonEncode(ledgerActivitiesJson()), 200);
@@ -1162,7 +731,7 @@ void main() {
     'latest broker reconciliation uses the fixed path and maps 404 to empty',
     () async {
       late Uri request;
-      final api = RestOmniApi(
+      final api = RestTestRepositories(
         client: MockClient((value) async {
           request = value.url;
           return http.Response(jsonEncode(brokerReconciliationJson()), 200);
@@ -1173,7 +742,7 @@ void main() {
       expect(request.query, isEmpty);
       expect(result!.ledgerRevision, 'rev_0000000002');
 
-      final empty = RestOmniApi(
+      final empty = RestTestRepositories(
         client: MockClient(
           (_) async => http.Response(
             jsonEncode({
@@ -1199,7 +768,7 @@ void main() {
     addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
     final semantics = tester.ensureSemantics();
     try {
-      await tester.pumpWidget(OmniFolioApp(api: goldenApi()));
+      await tester.pumpWidget(testApp(api: goldenApi()));
       await pumpUi(tester);
       await tester.tap(find.text('내역'));
       await pumpUi(tester);
@@ -1237,7 +806,7 @@ void main() {
     tester,
   ) async {
     final api = goldenApi()..failActivities = true;
-    await tester.pumpWidget(OmniFolioApp(api: api));
+    await tester.pumpWidget(testApp(api: api));
     await pumpUi(tester);
     await tester.tap(find.text('내역'));
     await pumpUi(tester);
@@ -1267,7 +836,7 @@ void main() {
     tester,
   ) async {
     final api = goldenApi();
-    await tester.pumpWidget(OmniFolioApp(api: api));
+    await tester.pumpWidget(testApp(api: api));
     await pumpUi(tester);
     await tester.tap(find.text('내역'));
     await pumpUi(tester);
@@ -1286,7 +855,7 @@ void main() {
 
   testWidgets('live-disabled trust banner remains explicit', (tester) async {
     final api = goldenApi(neverVerified: true);
-    await tester.pumpWidget(OmniFolioApp(api: api));
+    await tester.pumpWidget(testApp(api: api));
     await pumpUi(tester);
 
     expect(find.textContaining('아직 확인되지 않음'), findsOneWidget);
@@ -1311,7 +880,7 @@ void main() {
     try {
       final api = goldenApi(
         neverVerified: true,
-        snapshot: PortfolioSnapshot.fromJson({
+        snapshot: decodePortfolioSnapshot({
           ...fixture('golden-snapshot.json'),
           'ledger_revision': 'rev_0000000000',
           'cash': const [],
@@ -1320,7 +889,7 @@ void main() {
           'provenance': {'event_ids': const [], 'receipt_ids': const []},
         }),
       );
-      await tester.pumpWidget(OmniFolioApp(api: api));
+      await tester.pumpWidget(testApp(api: api));
       await pumpUi(tester);
 
       final import = find.widgetWithText(ElevatedButton, '거래 내역 가져오기');
@@ -1355,7 +924,7 @@ void main() {
     tester,
   ) async {
     final api = goldenApi(
-      snapshot: PortfolioSnapshot.fromJson({
+      snapshot: decodePortfolioSnapshot({
         ...fixture('golden-snapshot.json'),
         'cash': const [],
         'holdings': const [],
@@ -1363,7 +932,7 @@ void main() {
         'provenance': {'event_ids': const [], 'receipt_ids': const []},
       }),
     );
-    await tester.pumpWidget(OmniFolioApp(api: api));
+    await tester.pumpWidget(testApp(api: api));
     await pumpUi(tester);
 
     expect(find.textContaining('로컬 기록 확인 완료'), findsOneWidget);
@@ -1377,7 +946,7 @@ void main() {
       List<Json> cash = const [],
       List<Json> holdings = const [],
       List<Json> realizedPnl = const [],
-    }) => PortfolioSnapshot.fromJson({
+    }) => decodePortfolioSnapshot({
       ...fixture('golden-snapshot.json'),
       'cash': cash,
       'holdings': holdings,
@@ -1420,7 +989,7 @@ void main() {
 
     for (final (name, value) in cases) {
       await tester.pumpWidget(
-        OmniFolioApp(
+        testApp(
           key: ValueKey(name),
           api: goldenApi(neverVerified: true, snapshot: value),
         ),
@@ -1448,10 +1017,10 @@ void main() {
       final semantics = tester.ensureSemantics();
       try {
         final api = goldenApi()
-          ..reconciliationValue = BrokerReconciliation.fromJson(
+          ..reconciliationValue = decodeBrokerReconciliation(
             brokerReconciliationJson(),
           );
-        await tester.pumpWidget(OmniFolioApp(api: api));
+        await tester.pumpWidget(testApp(api: api));
         await pumpUi(tester);
         expect(api.reconciliationCalls, 1);
 
@@ -1500,7 +1069,7 @@ void main() {
       final semantics = tester.ensureSemantics();
       try {
         final api = goldenApi()
-          ..orderLogValue = LocalOrderLog.fromJson(
+          ..orderLogValue = decodeLocalOrderLog(
             localOrderLogJson(
               orders: const [
                 {
@@ -1533,7 +1102,7 @@ void main() {
             ),
           );
 
-        await tester.pumpWidget(OmniFolioApp(api: api));
+        await tester.pumpWidget(testApp(api: api));
         await pumpUi(tester);
 
         expect(api.localOrderCalls, 1);
@@ -1569,7 +1138,7 @@ void main() {
   testWidgets(
     'overview hides an empty local history instead of claiming safety',
     (tester) async {
-      await tester.pumpWidget(OmniFolioApp(api: goldenApi()));
+      await tester.pumpWidget(testApp(api: goldenApi()));
       await pumpUi(tester);
 
       expect(find.text('로컬 기록에는 미확정 주문이 없습니다'), findsNothing);
@@ -1589,7 +1158,7 @@ void main() {
       final pending = Completer<LocalOrderLog>();
       final api = goldenApi()..localOrdersCompleter = pending;
 
-      await tester.pumpWidget(OmniFolioApp(api: api));
+      await tester.pumpWidget(testApp(api: api));
       await pumpUi(tester);
 
       expect(find.byType(ListView), findsOneWidget);
@@ -1606,7 +1175,7 @@ void main() {
       await pumpUi(tester);
       expect(api.localOrderCalls, 1);
 
-      pending.complete(LocalOrderLog.fromJson(localOrderLogJson()));
+      pending.complete(decodeLocalOrderLog(localOrderLogJson()));
       await pumpUi(tester);
       expect(api.localOrderCalls, 1);
       await tester.dragUntilVisible(
@@ -1631,7 +1200,7 @@ void main() {
       final pending = Completer<BrokerReconciliation?>();
       final api = goldenApi()..reconciliationCompleter = pending;
 
-      await tester.pumpWidget(OmniFolioApp(api: api));
+      await tester.pumpWidget(testApp(api: api));
       await pumpUi(tester);
 
       expect(find.byType(ListView), findsOneWidget);
@@ -1657,9 +1226,7 @@ void main() {
       await pumpUi(tester);
       expect(api.reconciliationCalls, 1);
 
-      pending.complete(
-        BrokerReconciliation.fromJson(brokerReconciliationJson()),
-      );
+      pending.complete(decodeBrokerReconciliation(brokerReconciliationJson()));
       await pumpUi(tester);
       expect(api.reconciliationCalls, 1);
       expect(tester.takeException(), isNull);
@@ -1671,7 +1238,7 @@ void main() {
   ) async {
     final pending = Completer<BrokerReconciliation?>();
     final api = goldenApi()..reconciliationCompleter = pending;
-    await tester.pumpWidget(OmniFolioApp(api: api));
+    await tester.pumpWidget(testApp(api: api));
     await pumpUi(tester);
 
     await tester.pumpWidget(const SizedBox.shrink());
@@ -1685,12 +1252,12 @@ void main() {
     tester,
   ) async {
     final api = goldenApi()
-      ..reconciliationValue = BrokerReconciliation.fromJson({
+      ..reconciliationValue = decodeBrokerReconciliation({
         ...brokerReconciliationJson(),
         'all_positions_match': true,
         'position_differences': const [],
       });
-    await tester.pumpWidget(OmniFolioApp(api: api));
+    await tester.pumpWidget(testApp(api: api));
     await pumpUi(tester);
     await tester.drag(find.byType(ListView), const Offset(0, -900));
     await tester.pumpAndSettle();
@@ -1705,10 +1272,10 @@ void main() {
       final semantics = tester.ensureSemantics();
       try {
         final api = goldenApi()
-          ..reconciliationValue = BrokerReconciliation.fromJson(
+          ..reconciliationValue = decodeBrokerReconciliation(
             brokerReconciliationJson(),
           );
-        await tester.pumpWidget(OmniFolioApp(api: api));
+        await tester.pumpWidget(testApp(api: api));
         await pumpUi(tester);
         await tester.tap(find.text('연결'));
         await pumpUi(tester);
@@ -1731,10 +1298,10 @@ void main() {
   testWidgets('reconciliation error offers a retry', (tester) async {
     final api = goldenApi()
       ..failReconciliation = true
-      ..reconciliationValue = BrokerReconciliation.fromJson(
+      ..reconciliationValue = decodeBrokerReconciliation(
         brokerReconciliationJson(),
       );
-    await tester.pumpWidget(OmniFolioApp(api: api));
+    await tester.pumpWidget(testApp(api: api));
     await pumpUi(tester);
     expect(find.textContaining('증권사 잔고 대조 확인 실패'), findsOneWidget);
     await tester.tap(find.text('연결'));
@@ -1755,10 +1322,10 @@ void main() {
     tester,
   ) async {
     final api = goldenApi()
-      ..reconciliationValue = BrokerReconciliation.fromJson(
+      ..reconciliationValue = decodeBrokerReconciliation(
         brokerReconciliationJson(),
       );
-    await tester.pumpWidget(OmniFolioApp(api: api));
+    await tester.pumpWidget(testApp(api: api));
     await pumpUi(tester);
     await tester.tap(find.text('연결'));
     await pumpUi(tester);
@@ -1800,8 +1367,8 @@ void main() {
       final semantics = tester.ensureSemantics();
       try {
         final api = goldenApi()
-          ..orderLogValue = LocalOrderLog.fromJson(localOrderLogJson());
-        await tester.pumpWidget(OmniFolioApp(api: api));
+          ..orderLogValue = decodeLocalOrderLog(localOrderLogJson());
+        await tester.pumpWidget(testApp(api: api));
         await pumpUi(tester);
         await tester.tap(find.text('연결'));
         await pumpUi(tester);
@@ -1836,7 +1403,7 @@ void main() {
       final semantics = tester.ensureSemantics();
       try {
         final api = goldenApi()
-          ..orderLogValue = LocalOrderLog.fromJson(
+          ..orderLogValue = decodeLocalOrderLog(
             localOrderLogJson(
               orders: const [
                 {
@@ -1855,7 +1422,7 @@ void main() {
               ],
             ),
           );
-        await tester.pumpWidget(OmniFolioApp(api: api));
+        await tester.pumpWidget(testApp(api: api));
         await pumpUi(tester);
         await tester.tap(find.text('연결'));
         await pumpUi(tester);
@@ -1885,8 +1452,8 @@ void main() {
     tester,
   ) async {
     final api = goldenApi()
-      ..orderLogValue = LocalOrderLog.fromJson(localOrderLogJson());
-    await tester.pumpWidget(OmniFolioApp(api: api));
+      ..orderLogValue = decodeLocalOrderLog(localOrderLogJson());
+    await tester.pumpWidget(testApp(api: api));
     await pumpUi(tester);
     await tester.tap(find.text('연결'));
     await pumpUi(tester);
@@ -1907,7 +1474,7 @@ void main() {
     'empty local order refresh failure remains visible and retryable',
     (tester) async {
       final api = goldenApi();
-      await tester.pumpWidget(OmniFolioApp(api: api));
+      await tester.pumpWidget(testApp(api: api));
       await pumpUi(tester);
       await tester.tap(find.text('연결'));
       await pumpUi(tester);
@@ -1929,7 +1496,7 @@ void main() {
     tester,
   ) async {
     final api = goldenApi()..failSnapshot = true;
-    await tester.pumpWidget(OmniFolioApp(api: api));
+    await tester.pumpWidget(testApp(api: api));
     await pumpUi(tester);
 
     await tester.tap(find.text('거래 내역 가져오기'));
@@ -1950,7 +1517,7 @@ void main() {
     addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
     final api = goldenApi()
       ..failSnapshot = true
-      ..orderLogValue = LocalOrderLog.fromJson(
+      ..orderLogValue = decodeLocalOrderLog(
         localOrderLogJson(
           orders: const [
             {
@@ -1969,7 +1536,7 @@ void main() {
           ],
         ),
       );
-    await tester.pumpWidget(OmniFolioApp(api: api));
+    await tester.pumpWidget(testApp(api: api));
     await pumpUi(tester);
 
     expect(find.text('아직 스냅샷이 없습니다'), findsOneWidget);
@@ -1982,7 +1549,7 @@ void main() {
 
   testWidgets('error offers retry and recovers', (tester) async {
     final api = goldenApi()..fail = true;
-    await tester.pumpWidget(OmniFolioApp(api: api));
+    await tester.pumpWidget(testApp(api: api));
     await pumpUi(tester);
     expect(find.text('스냅샷을 불러오지 못했습니다'), findsOneWidget);
 
@@ -1998,7 +1565,7 @@ void main() {
       ..failureMessage = secret
       ..fail = true;
 
-    await tester.pumpWidget(OmniFolioApp(api: api));
+    await tester.pumpWidget(testApp(api: api));
     await pumpUi(tester);
 
     expect(find.textContaining(secret), findsNothing);
@@ -2009,7 +1576,7 @@ void main() {
     tester,
   ) async {
     final api = goldenApi();
-    await tester.pumpWidget(OmniFolioApp(api: api));
+    await tester.pumpWidget(testApp(api: api));
     await pumpUi(tester);
     await tester.dragUntilVisible(
       find.text('USD 778'),
@@ -2040,7 +1607,7 @@ void main() {
       tester.binding.platformDispatcher.clearPlatformBrightnessTestValue,
     );
     try {
-      await tester.pumpWidget(OmniFolioApp(api: goldenApi()));
+      await tester.pumpWidget(testApp(api: goldenApi()));
       await pumpUi(tester);
 
       expect(
@@ -2083,7 +1650,7 @@ void main() {
       tester.binding.platformDispatcher.clearAccessibilityFeaturesTestValue,
     );
 
-    await tester.pumpWidget(OmniFolioApp(api: goldenApi()));
+    await tester.pumpWidget(testApp(api: goldenApi()));
     expect(find.byIcon(Icons.hourglass_empty), findsOneWidget);
     expect(find.byType(CircularProgressIndicator), findsNothing);
     await pumpUi(tester);
@@ -2114,7 +1681,7 @@ void main() {
     addTearDown(tester.view.resetDevicePixelRatio);
     addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
 
-    await tester.pumpWidget(OmniFolioApp(api: goldenApi()..fail = true));
+    await tester.pumpWidget(testApp(api: goldenApi()..fail = true));
     await pumpUi(tester);
 
     expect(find.text('스냅샷을 불러오지 못했습니다'), findsOneWidget);
@@ -2130,7 +1697,7 @@ void main() {
     FileSelectorPlatform.instance = picker;
     addTearDown(() => FileSelectorPlatform.instance = previous);
     final api = goldenApi();
-    await tester.pumpWidget(OmniFolioApp(api: api));
+    await tester.pumpWidget(testApp(api: api));
     await pumpUi(tester);
     await tester.tap(find.text('내역'));
     await pumpUi(tester);
@@ -2411,7 +1978,7 @@ void main() {
   ) async {
     final api = goldenApi();
     api.applyFailures = 1;
-    await tester.pumpWidget(OmniFolioApp(api: api));
+    await tester.pumpWidget(testApp(api: api));
     await pumpUi(tester);
     await tester.tap(find.text('내역'));
     await pumpUi(tester);
@@ -2463,7 +2030,7 @@ void main() {
       }
 
       final api = goldenApi()..applyFailures = 1;
-      await tester.pumpWidget(OmniFolioApp(api: api));
+      await tester.pumpWidget(testApp(api: api));
       await pumpUi(tester);
       await tester.tap(find.text('내역'));
       await pumpUi(tester);
@@ -2529,7 +2096,7 @@ void main() {
   ) async {
     final initialActivities = Completer<LedgerActivityPage>();
     final api = goldenApi()..activityCompleter = initialActivities;
-    await tester.pumpWidget(OmniFolioApp(api: api));
+    await tester.pumpWidget(testApp(api: api));
     await pumpUi(tester);
     await tester.tap(find.text('내역'));
     await tester.pump();
@@ -2542,7 +2109,7 @@ void main() {
     await tester.pump();
 
     initialActivities.complete(
-      LedgerActivityPage.fromJson(ledgerActivitiesJson(events: const [])),
+      decodeLedgerActivityPage(ledgerActivitiesJson(events: const [])),
     );
     await pumpUi(tester);
 
@@ -2554,7 +2121,7 @@ void main() {
   ) async {
     final pendingApply = Completer<ApplyReceipt>();
     final api = goldenApi()..applyCompleter = pendingApply;
-    await tester.pumpWidget(OmniFolioApp(api: api));
+    await tester.pumpWidget(testApp(api: api));
     await pumpUi(tester);
     await tester.tap(find.text('내역'));
     await pumpUi(tester);
@@ -2585,7 +2152,7 @@ void main() {
       addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
       final semantics = tester.ensureSemantics();
 
-      final preview = ImportPreview.fromJson({
+      final preview = decodeImportPreview({
         ...fixture('golden-preview.json'),
         'mapping_version': 'canonical-transaction.v4',
         'rows': [
@@ -2618,7 +2185,7 @@ void main() {
           'unresolved_rows': 0,
         },
       });
-      await tester.pumpWidget(OmniFolioApp(api: goldenApi(preview: preview)));
+      await tester.pumpWidget(testApp(api: goldenApi(preview: preview)));
       await pumpUi(tester);
       await tester.tap(find.text('내역'));
       await pumpUi(tester);
@@ -2672,7 +2239,7 @@ void main() {
       'counter_currency': 'KRW',
       'counter_amount': '137000',
     };
-    final complete = ImportPreview.fromJson(previewWith(validTransaction));
+    final complete = decodeImportPreview(previewWith(validTransaction));
     expect(complete.rows.single.counterCurrency, 'KRW');
     expect(complete.rows.single.counterAmount, '137000');
 
@@ -2689,7 +2256,7 @@ void main() {
       final invalid = {...validTransaction, ...changes};
       invalid.removeWhere((_, value) => value == null);
       expect(
-        () => ImportPreview.fromJson(previewWith(invalid)),
+        () => decodeImportPreview(previewWith(invalid)),
         throwsFormatException,
         reason: 'accepted invalid FX fields: $changes',
       );
@@ -2706,7 +2273,7 @@ void main() {
     addTearDown(tester.view.resetDevicePixelRatio);
     addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
     final semantics = tester.ensureSemantics();
-    final preview = ImportPreview.fromJson({
+    final preview = decodeImportPreview({
       ...fixture('golden-preview.json'),
       'mapping_version': 'canonical-transaction.v4',
       'rows': [
@@ -2734,7 +2301,7 @@ void main() {
         'unresolved_rows': 0,
       },
     });
-    await tester.pumpWidget(OmniFolioApp(api: goldenApi(preview: preview)));
+    await tester.pumpWidget(testApp(api: goldenApi(preview: preview)));
     await pumpUi(tester);
     await tester.tap(find.text('내역'));
     await pumpUi(tester);
@@ -2760,7 +2327,7 @@ void main() {
 
   testWidgets('editing CSV invalidates an existing preview', (tester) async {
     final api = goldenApi();
-    await tester.pumpWidget(OmniFolioApp(api: api));
+    await tester.pumpWidget(testApp(api: api));
     await pumpUi(tester);
     await tester.tap(find.text('내역'));
     await pumpUi(tester);
@@ -2781,7 +2348,7 @@ void main() {
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
     final api = goldenApi();
-    await tester.pumpWidget(OmniFolioApp(api: api));
+    await tester.pumpWidget(testApp(api: api));
     await pumpUi(tester);
     await tester.tap(find.text('내역'));
     await pumpUi(tester);
@@ -2821,7 +2388,7 @@ void main() {
     final semantics = tester.ensureSemantics();
     const secret = 'account-main provider-request-42';
     final api = goldenApi()..failureMessage = secret;
-    await tester.pumpWidget(OmniFolioApp(api: api));
+    await tester.pumpWidget(testApp(api: api));
     await pumpUi(tester);
     await tester.tap(find.text('내역'));
     await pumpUi(tester);
@@ -2858,7 +2425,7 @@ void main() {
     'holding opens stale sample chart with semantics and exact table',
     (tester) async {
       final semantics = tester.ensureSemantics();
-      await tester.pumpWidget(OmniFolioApp(api: goldenApi()));
+      await tester.pumpWidget(testApp(api: goldenApi()));
       await pumpUi(tester);
       await tester.tap(find.text('보유'));
       await pumpUi(tester);
@@ -2971,7 +2538,7 @@ void main() {
         ],
       );
 
-    await tester.pumpWidget(OmniFolioApp(api: api));
+    await tester.pumpWidget(testApp(api: api));
     await pumpUi(tester);
     await tester.tap(find.text('보유'));
     await pumpUi(tester);
@@ -3046,7 +2613,7 @@ void main() {
     tester,
   ) async {
     final api = goldenApi();
-    await tester.pumpWidget(OmniFolioApp(api: api));
+    await tester.pumpWidget(testApp(api: api));
     await pumpUi(tester);
     await tester.tap(find.text('보유'));
     await pumpUi(tester);
@@ -3087,7 +2654,7 @@ void main() {
         priceAdjustment: 'provider_adjusted',
         source: 'kiwoom',
       );
-      await tester.pumpWidget(OmniFolioApp(api: api));
+      await tester.pumpWidget(testApp(api: api));
       await pumpUi(tester);
       await tester.tap(find.text('보유'));
       await pumpUi(tester);
@@ -3128,7 +2695,7 @@ void main() {
         instrumentId: 'another',
         currency: 'USD',
       );
-      await tester.pumpWidget(OmniFolioApp(api: api));
+      await tester.pumpWidget(testApp(api: api));
       await pumpUi(tester);
       await tester.tap(find.text('보유'));
       await pumpUi(tester);
@@ -3161,7 +2728,7 @@ void main() {
   );
 
   testWidgets('asset detail discloses legacy unknown basis', (tester) async {
-    await tester.pumpWidget(OmniFolioApp(api: goldenApi()));
+    await tester.pumpWidget(testApp(api: goldenApi()));
     await pumpUi(tester);
     await tester.tap(find.text('보유'));
     await pumpUi(tester);
@@ -3174,7 +2741,7 @@ void main() {
 
   testWidgets('asset detail error offers retry', (tester) async {
     final api = goldenApi();
-    await tester.pumpWidget(OmniFolioApp(api: api));
+    await tester.pumpWidget(testApp(api: api));
     await pumpUi(tester);
     await tester.tap(find.text('보유'));
     await pumpUi(tester);
@@ -3212,7 +2779,7 @@ void main() {
     final api = goldenApi()
       ..failureMessage = secret
       ..candlesCompleter = pending;
-    await tester.pumpWidget(OmniFolioApp(api: api));
+    await tester.pumpWidget(testApp(api: api));
     await pumpUi(tester);
     await tester.tap(find.text('보유'));
     await pumpUi(tester);
@@ -3231,7 +2798,7 @@ void main() {
     (tester) async {
       final semantics = tester.ensureSemantics();
       final api = goldenApi()..candlesCompleter = Completer<MarketCandles>();
-      await tester.pumpWidget(OmniFolioApp(api: api));
+      await tester.pumpWidget(testApp(api: api));
       await pumpUi(tester);
       await tester.tap(find.text('보유'));
       await pumpUi(tester);
@@ -3267,7 +2834,7 @@ void main() {
         priceAdjustment: 'provider_adjusted',
         source: 'kiwoom',
       );
-    await tester.pumpWidget(OmniFolioApp(api: api));
+    await tester.pumpWidget(testApp(api: api));
     await pumpUi(tester);
     await tester.tap(find.text('보유'));
     await pumpUi(tester);
@@ -3296,7 +2863,7 @@ void main() {
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
 
-    await tester.pumpWidget(OmniFolioApp(api: goldenApi()));
+    await tester.pumpWidget(testApp(api: goldenApi()));
     await pumpUi(tester);
 
     expect(find.byType(NavigationRail), findsOneWidget);
@@ -3308,7 +2875,7 @@ void main() {
   });
 
   testWidgets('overview leads with useful portfolio data', (tester) async {
-    await tester.pumpWidget(OmniFolioApp(api: goldenApi()));
+    await tester.pumpWidget(testApp(api: goldenApi()));
     await pumpUi(tester);
 
     expect(find.text('내 투자 기록'), findsOneWidget);
@@ -3335,7 +2902,7 @@ void main() {
       addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
       final semantics = tester.ensureSemantics();
       try {
-        await tester.pumpWidget(OmniFolioApp(api: goldenApi()));
+        await tester.pumpWidget(testApp(api: goldenApi()));
         await pumpUi(tester);
 
         await tester.dragUntilVisible(
@@ -3367,7 +2934,7 @@ void main() {
     'current valuation is optional, retains known-good on error, and replaces it with unavailable',
     () async {
       final api = goldenApi();
-      final controller = PortfolioController(api);
+      final controller = testPortfolioController(api);
       addTearDown(controller.dispose);
 
       await controller.refresh();
@@ -3408,7 +2975,7 @@ void main() {
     () async {
       final pending = Completer<CurrentPortfolioValuation>();
       final api = goldenApi()..currentValuationCompleter = pending;
-      final controller = PortfolioController(api);
+      final controller = testPortfolioController(api);
       addTearDown(controller.dispose);
 
       final refresh = controller.refresh();
@@ -3440,7 +3007,7 @@ void main() {
         issues: const [],
       );
 
-    await tester.pumpWidget(OmniFolioApp(api: api));
+    await tester.pumpWidget(testApp(api: api));
     await pumpUi(tester);
     await tester.dragUntilVisible(
       find.text('원장 갱신 전 저장 평가'),
@@ -3457,7 +3024,7 @@ void main() {
     final semantics = tester.ensureSemantics();
     try {
       await tester.pumpWidget(
-        OmniFolioApp(api: goldenApi()..failCurrentValuation = true),
+        testApp(api: goldenApi()..failCurrentValuation = true),
       );
       await pumpUi(tester);
       final title = find.text('전체 평가를 불러오지 못했습니다');
@@ -3494,7 +3061,7 @@ void main() {
             },
           ],
         );
-      await tester.pumpWidget(OmniFolioApp(api: api));
+      await tester.pumpWidget(testApp(api: api));
       await pumpUi(tester);
       final title = find.text('전체 평가를 계산할 수 없음');
       await tester.dragUntilVisible(
@@ -3518,7 +3085,7 @@ void main() {
     addTearDown(tester.view.resetDevicePixelRatio);
     final api = goldenApi(
       neverVerified: true,
-      snapshot: PortfolioSnapshot.fromJson({
+      snapshot: decodePortfolioSnapshot({
         ...fixture('golden-snapshot.json'),
         'ledger_revision': 'rev_0000000000',
         'cash': const [],
@@ -3528,7 +3095,7 @@ void main() {
       }),
     );
 
-    await tester.pumpWidget(OmniFolioApp(api: api));
+    await tester.pumpWidget(testApp(api: api));
     await pumpUi(tester);
 
     expect(
@@ -3540,7 +3107,7 @@ void main() {
   testWidgets(
     'realized gain shows a signed Korean status with positive color',
     (tester) async {
-      await tester.pumpWidget(OmniFolioApp(api: goldenApi()));
+      await tester.pumpWidget(testApp(api: goldenApi()));
       await pumpUi(tester);
 
       final gain = find.text('실현 이익 USD +78.6');
@@ -3553,14 +3120,14 @@ void main() {
     'realized loss shows a signed Korean status with negative color',
     (tester) async {
       final api = goldenApi(
-        snapshot: PortfolioSnapshot.fromJson({
+        snapshot: decodePortfolioSnapshot({
           ...fixture('golden-snapshot.json'),
           'realized_pnl': [
             {'currency': 'USD', 'amount': '-12.5'},
           ],
         }),
       );
-      await tester.pumpWidget(OmniFolioApp(api: api));
+      await tester.pumpWidget(testApp(api: api));
       await pumpUi(tester);
 
       final loss = find.text('실현 손실 USD -12.5');
@@ -3573,7 +3140,7 @@ void main() {
     'mixed-currency realized PnL keeps each signed status and color',
     (tester) async {
       final api = goldenApi(
-        snapshot: PortfolioSnapshot.fromJson({
+        snapshot: decodePortfolioSnapshot({
           ...fixture('golden-snapshot.json'),
           'realized_pnl': [
             {'currency': 'USD', 'amount': '10'},
@@ -3581,7 +3148,7 @@ void main() {
           ],
         }),
       );
-      await tester.pumpWidget(OmniFolioApp(api: api));
+      await tester.pumpWidget(testApp(api: api));
       await pumpUi(tester);
 
       final gain = find.text('실현 이익 USD +10');
@@ -3596,7 +3163,7 @@ void main() {
   testWidgets(
     'snapshot provenance counts precede realized PnL without raw IDs',
     (tester) async {
-      await tester.pumpWidget(OmniFolioApp(api: goldenApi()));
+      await tester.pumpWidget(testApp(api: goldenApi()));
       await pumpUi(tester);
 
       final provenance = find.text('최근 원장 기록 · 이벤트 3건 · 가져오기 1건');
@@ -3626,12 +3193,12 @@ void main() {
       },
     );
     final api = goldenApi(
-      snapshot: PortfolioSnapshot.fromJson({
+      snapshot: decodePortfolioSnapshot({
         ...fixture('golden-snapshot.json'),
         'holdings': holdings,
       }),
     );
-    await tester.pumpWidget(OmniFolioApp(api: api));
+    await tester.pumpWidget(testApp(api: api));
     await pumpUi(tester);
 
     await tester.dragUntilVisible(
@@ -3652,7 +3219,7 @@ void main() {
   ) async {
     final semantics = tester.ensureSemantics();
     try {
-      await tester.pumpWidget(OmniFolioApp(api: goldenApi()));
+      await tester.pumpWidget(testApp(api: goldenApi()));
       await pumpUi(tester);
       await tester.tap(find.text('보유'));
       await pumpUi(tester);
@@ -3707,7 +3274,7 @@ class _CsvFile extends XFile {
 }
 
 Future<void> _openCsvImport(WidgetTester tester, FakeApi api) async {
-  await tester.pumpWidget(OmniFolioApp(api: api));
+  await tester.pumpWidget(testApp(api: api));
   await pumpUi(tester);
   await tester.tap(find.text('내역'));
   await pumpUi(tester);

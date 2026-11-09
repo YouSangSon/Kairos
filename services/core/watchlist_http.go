@@ -11,11 +11,11 @@ import (
 func watchlistError(err error) *appError {
 	switch {
 	case errors.Is(err, errWatchlistInput):
-		return &appError{http.StatusBadRequest, APIError{Code: "watchlist_invalid", Message: "watchlist input does not meet the declared contract"}}
+		return &appError{Status: http.StatusBadRequest, Body: APIError{Code: "watchlist_invalid", Message: "watchlist input does not meet the declared contract"}}
 	case errors.Is(err, errWatchlistChanged):
-		return &appError{http.StatusConflict, APIError{Code: "watchlist_changed", Message: "watchlist changed; reload before editing"}}
+		return &appError{Status: http.StatusConflict, Body: APIError{Code: "watchlist_changed", Message: "watchlist changed; reload before editing"}}
 	default:
-		return &appError{http.StatusServiceUnavailable, APIError{Code: "watchlist_unavailable", Message: "watchlist could not be confirmed; retry the same change or reload"}}
+		return &appError{Status: http.StatusServiceUnavailable, Body: APIError{Code: "watchlist_unavailable", Message: "watchlist could not be confirmed; retry the same change or reload"}}
 	}
 }
 

@@ -110,7 +110,7 @@ format:
 	"$(DART)" format apps/client/lib apps/client/test apps/client/integration_test apps/client/test_driver
 
 format-check:
-	test -z "$$($(GOFMT) -l services/core/*.go)"
+	formatted="$$($(GOFMT) -l services/core)" && test -z "$$formatted"
 	cd apps/client && "$(DART)" format --output=none --set-exit-if-changed lib test integration_test test_driver
 
 lint:

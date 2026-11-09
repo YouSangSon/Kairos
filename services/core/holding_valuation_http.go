@@ -9,7 +9,7 @@ import (
 func (s *Service) handleHoldingValuation(w http.ResponseWriter, r *http.Request) {
 	query, err := url.ParseQuery(r.URL.RawQuery)
 	if err != nil || len(query) > 1 || (len(query) == 1 && len(query["as_of"]) != 1) {
-		writeError(w, &appError{http.StatusBadRequest, APIError{Code: "invalid_query", Message: "holding valuation query is invalid"}})
+		writeError(w, &appError{Status: http.StatusBadRequest, Body: APIError{Code: "invalid_query", Message: "holding valuation query is invalid"}})
 		return
 	}
 	asOf := s.now().UTC().Format(time.RFC3339Nano)

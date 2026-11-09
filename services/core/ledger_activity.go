@@ -13,6 +13,10 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"omni-folio/services/core/internal/adapters/sqlite"
+	"omni-folio/services/core/internal/application/fault"
+	"omni-folio/services/core/internal/application/ledger"
+	"omni-folio/services/core/internal/ledgerdomain"
 	"strconv"
 )
 
@@ -72,7 +76,7 @@ func (s *Service) handleLedgerActivities(w http.ResponseWriter, r *http.Request)
 			writeError(w, invalidActivityQuery())
 			return
 		}
-		writeError(w, internalError(err))
+		writeError(w, fault.Internal(err))
 		return
 	}
 	writeJSON(w, http.StatusOK, result)
@@ -114,7 +118,7 @@ func (s *Service) parseLedgerActivityQuery(r *http.Request) (int, *ledgerActivit
 }
 
 func invalidActivityQuery() *appError {
-	return &appError{http.StatusBadRequest, APIError{Code: "invalid_query", Message: "ledger activity query must match the contract"}}
+	return &appError{Status: http.StatusBadRequest, Body: APIError{Code: "invalid_query", Message: "ledger activity query must match the contract"}}
 }
 
 func (s *Service) encodeLedgerActivityCursor(cursor ledgerActivityCursor) string {
@@ -321,26 +325,18 @@ func (s *Service) validateStoredLedgerEvent(ctx context.Context, tx queryer, sto
 	if stored.eventID == "" || stored.receiptID == "" || !canonicalUTCString(stored.recordedAt) {
 		return errors.New("stored ledger event metadata is invalid")
 	}
-	values := map[string]string{
-		"source_event_id": stored.sourceEventID, "account_id": stored.accountID, "type": stored.typ,
-		"occurred_at": stored.occurredAt, "symbol": stored.symbol, "quantity": stored.quantity,
-		"price": stored.price, "fee": stored.fee, "currency": stored.currency, "amount": stored.amount,
-		"counter_currency": stored.counterCurrency, "counter_amount": stored.counterAmount,
-		"corrects_source_event_id": stored.correctsSourceEventID,
-	}
-	validator := &Service{id: func(string) string { return stored.eventID }}
-	normalized, fieldErrors := validator.normalize(nil, func(_ []string, name string) string { return values[name] })
 	want := &Transaction{
 		EventID: stored.eventID, SourceEventID: stored.sourceEventID, AccountID: stored.accountID,
 		Type: stored.typ, OccurredAt: stored.occurredAt, InstrumentID: stored.instrumentID, Symbol: stored.symbol,
 		Quantity: stored.quantity, Price: stored.price, Fee: stored.fee, Currency: stored.currency, Amount: stored.amount,
 		CounterCurrency: stored.counterCurrency, CounterAmount: stored.counterAmount, CorrectsSourceEventID: stored.correctsSourceEventID,
 	}
-	if len(fieldErrors) != 0 || !sameTransaction(normalized, want) {
+	normalized, fieldErrors := ledgerdomain.Normalize(*want)
+	if len(fieldErrors) != 0 || !ledger.SameTransaction(normalized, want) {
 		return errors.New("stored ledger event is not canonical")
 	}
 	if stored.typ == "CASH_VOID" {
-		if _, validationErr, err := validateCashVoid(ctx, tx, want, false); err != nil {
+		if _, validationErr, err := ledger.ValidateCashVoid(ctx, sqlite.NewLedgerReader(tx), want, false); err != nil {
 			return err
 		} else if validationErr != nil {
 			return errors.New("stored cash void failed validation")

@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"omni-folio/services/core/internal/ledgerdomain"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -83,7 +84,7 @@ func decodeOwnerPriceSeries(ctx context.Context, raw []byte) (*OwnerPriceSeriesI
 	scalars, err := json.Marshal(fields)
 	var input OwnerPriceSeriesInput
 	if err != nil || json.Unmarshal(scalars, &input) != nil || input.SchemaVersion != ownerPriceSeriesSchema || !safeOrderID(input.SourceVersion) ||
-		!safeOrderID(input.InstrumentID) || !safeOrderID(input.Symbol) || !safeOrderID(input.Venue) || input.Symbol != strings.ToUpper(input.Symbol) || input.Venue != strings.ToUpper(input.Venue) || instrumentIDForSymbol(input.Symbol) != input.InstrumentID || !currencyCodePattern.MatchString(input.Currency) || input.PriceAdjustment != ownerPriceAdjustment || len(input.FetchedAt) > 30 || !canonicalUTCString(input.FetchedAt) {
+		!safeOrderID(input.InstrumentID) || !safeOrderID(input.Symbol) || !safeOrderID(input.Venue) || input.Symbol != strings.ToUpper(input.Symbol) || input.Venue != strings.ToUpper(input.Venue) || ledgerdomain.InstrumentIDForSymbol(input.Symbol) != input.InstrumentID || !currencyCodePattern.MatchString(input.Currency) || input.PriceAdjustment != ownerPriceAdjustment || len(input.FetchedAt) > 30 || !canonicalUTCString(input.FetchedAt) {
 		return nil, nil, "", errOwnerPriceInput
 	}
 	d := json.NewDecoder(bytes.NewReader(points))

@@ -5,6 +5,9 @@ import (
 	"math/big"
 	"os"
 	"testing"
+
+	"omni-folio/services/core/internal/exact"
+	"omni-folio/services/core/internal/portfoliodomain"
 )
 
 func TestPortfolioTWRIndependentChainFixtures(t *testing.T) {
@@ -35,7 +38,7 @@ func TestPortfolioTWRIndependentChainFixtures(t *testing.T) {
 				if v == nil || c == nil {
 					t.Fatal("invalid fixture")
 				}
-				factor = twrChain(factor, v, c)
+				factor = portfoliodomain.TWRChain(factor, v, c)
 				if factor == nil {
 					t.Fatal("valid reference rejected")
 				}
@@ -43,7 +46,7 @@ func TestPortfolioTWRIndependentChainFixtures(t *testing.T) {
 					t.Fatalf("prefix%d got %s %v want %s", index, got, err, test.PrefixExpected[index])
 				}
 			}
-			got, err := formatDecimal(quantizeHalfEven(new(big.Rat).Sub(factor, big.NewRat(1, 1)), 12))
+			got, err := exact.FormatDecimal(exact.QuantizeHalfEven(new(big.Rat).Sub(factor, big.NewRat(1, 1)), 12))
 			if err != nil || got != test.Expected {
 				t.Fatalf("got %s %v want %s", got, err, test.Expected)
 			}
@@ -55,7 +58,7 @@ func TestPortfolioTWRChainBudgetAndProjectionReconciliation(t *testing.T) {
 	one := big.NewRat(1, 1)
 	huge := new(big.Rat).SetInt(new(big.Int).Lsh(big.NewInt(1), 8193))
 	for _, input := range [][3]*big.Rat{{one, one, new(big.Rat)}, {one, big.NewRat(-1, 1), one}, {huge, one, one}, {one, one, huge}} {
-		if twrChain(input[0], input[1], input[2]) != nil {
+		if portfoliodomain.TWRChain(input[0], input[1], input[2]) != nil {
 			t.Fatal("invalid capital or oversized arithmetic accepted")
 		}
 	}
