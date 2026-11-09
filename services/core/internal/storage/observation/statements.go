@@ -19,9 +19,10 @@ type Statement struct {
 }
 
 type ReadResolver struct {
-	registry   *Registry
-	owner      string
-	statements map[string]Statement
+	registry      *Registry
+	owner         string
+	statements    map[string]Statement
+	migrationOnly bool
 }
 
 type ImportResolver struct {
@@ -52,8 +53,12 @@ func (r *Registry) WatchlistReader(statements []Statement) (*ReadResolver, error
 	return r.reader("watchlist", statements)
 }
 
+func (r *Registry) TradingReader(statements []Statement) (*ReadResolver, error) {
+	return r.reader("trading", statements)
+}
+
 func (r *Registry) reader(owner string, statements []Statement) (*ReadResolver, error) {
-	result := &ReadResolver{r, owner, make(map[string]Statement)}
+	result := &ReadResolver{registry: r, owner: owner, statements: make(map[string]Statement)}
 	for _, statement := range statements {
 		if err := validateStatement(owner, statement, false); err != nil {
 			return nil, err
@@ -91,10 +96,25 @@ func (r *ReadResolver) Resolve(ref storage.ObservationRef) (*ReadHandle, error) 
 	if err != nil {
 		return nil, err
 	}
+	if (s.purpose == migration) != r.migrationOnly {
+		return nil, ErrReference
+	}
+	if r.owner == "trading" && !r.migrationOnly && s.purpose != backup {
+		return nil, ErrReference
+	}
 	if r.owner == "watchlist" && s.purpose != watchlist && s.purpose != backup {
 		return nil, ErrReference
 	}
 	return &ReadHandle{s, r.statements}, nil
+}
+
+func (r *Registry) MigrationTradingReader(statements []Statement) (*ReadResolver, error) {
+	reader, err := r.reader("trading", statements)
+	if err != nil {
+		return nil, err
+	}
+	reader.migrationOnly = true
+	return reader, nil
 }
 
 func (r *ReadResolver) Cutoff(ref storage.ObservationRef) (time.Time, error) {
@@ -189,8 +209,10 @@ func validateStatement(owner string, statement Statement, write bool) error {
 	if statement.Arguments < 0 || (write && operation != "INSERT") || (!write && operation != "SELECT") {
 		return ErrStatement
 	}
-	if write && !strings.Contains(statement.SQL, "INTO owner_price_series_versions") {
-		return ErrStatement
+	if write {
+		if err := ownership.ValidateOwnerPriceWrite(statement.SQL); err != nil {
+			return ErrStatement
+		}
 	}
 	if err := ownership.ValidateSQL(owner, statement.SQL, statement.Objects); err != nil {
 		return fmt.Errorf("%w: %v", ErrStatement, err)

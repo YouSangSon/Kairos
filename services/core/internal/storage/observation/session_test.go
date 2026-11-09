@@ -265,3 +265,12 @@ func TestOwnerPriceImportPurposeRollbackAndCommitFailure(t *testing.T) {
 		t.Fatalf("failed import persisted %d rows: %v", count, err)
 	}
 }
+
+func TestOwnerPriceWriterRejectsCommentAndMigrationAliasTargets(t *testing.T) {
+	registry := New(nil, time.Now)
+	for _, query := range []string{`INSERT INTO owner_fx_series_versions(value) VALUES(?) /* INTO owner_price_series_versions */`, `INSERT INTO owner_price_series_versions_new(value) VALUES(?)`, `INSERT INTO owner_price_series_versions(value) SELECT value FROM owner_fx_series_versions`} {
+		if _, err := registry.OwnerPriceWriter(nil, []Statement{{SQL: query, Arguments: 1}}); err == nil {
+			t.Errorf("accepted %q", query)
+		}
+	}
+}

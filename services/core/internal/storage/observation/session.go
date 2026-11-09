@@ -22,6 +22,7 @@ const (
 	watchlist
 	ownerPriceImport
 	backup
+	migration
 )
 
 type Registry struct {
@@ -79,9 +80,11 @@ func (r *Registry) observeAt(ctx context.Context, use purpose, readOnly bool, at
 		return err
 	}
 	ref := storage.NewObservationRef()
-	cutoff := r.now().UTC()
+	var cutoff time.Time
 	if at != nil {
 		cutoff = at.UTC()
+	} else {
+		cutoff = r.now().UTC()
 	}
 	s := &session{tx: tx, cutoff: cutoff, purpose: use, active: true, rows: make(map[*scopedRows]struct{})}
 	r.mu.Lock()
