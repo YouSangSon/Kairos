@@ -8,7 +8,6 @@ import (
 
 const portfolioTWRCheckpointsPolicy = "twr_cash_flow_checkpoints.v1"
 const twrCheckpointRateLimit = 2500
-const twrCheckpointResponseLimit = 3 * (1 << 20)
 
 func twrCheckpointRate(factor *big.Rat) (string, error) {
 	// An 8192-bit prefix may exceed the scalar final-rate limit before a later loss.
