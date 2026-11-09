@@ -1,4 +1,4 @@
-package portfoliodomain
+package domain
 
 import (
 	"context"
@@ -12,7 +12,7 @@ import (
 )
 
 func TestPortfolioXIRRIndependentGoldenCashFlows(t *testing.T) {
-	raw, err := os.ReadFile("../../../../contracts/fixtures/portfolio-xirr-cases.json")
+	raw, err := os.ReadFile("../../../../../../../contracts/fixtures/portfolio-xirr-cases.json")
 	if err != nil {
 		t.Fatal(err)
 	}

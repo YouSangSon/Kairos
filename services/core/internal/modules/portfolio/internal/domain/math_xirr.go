@@ -1,4 +1,4 @@
-package portfoliodomain
+package domain
 
 import (
 	"context"

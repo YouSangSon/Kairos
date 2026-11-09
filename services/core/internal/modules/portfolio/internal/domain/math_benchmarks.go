@@ -1,4 +1,4 @@
-package portfoliodomain
+package domain
 
 import (
 	"errors"
@@ -6,12 +6,6 @@ import (
 
 	"omni-folio/services/core/internal/exact"
 )
-
-type BenchmarkRateResult struct {
-	Status string  `json:"status"`
-	Rate   *string `json:"rate"`
-	Issue  *string `json:"issue"`
-}
 
 func UnavailableBenchmarkRate(issue string) BenchmarkRateResult {
 	return BenchmarkRateResult{Status: "unavailable", Issue: &issue}
