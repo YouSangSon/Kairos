@@ -33,3 +33,10 @@ type BackupProof struct {
 	BrokerSnapshots       int
 	BrokerReconciliations int
 }
+
+type BrokerRecovery struct {
+	SHA256          string
+	Snapshots       int
+	Reconciliations int
+	LedgerRevision  int64
+}

@@ -203,3 +203,19 @@ func (s *Service) VerifyBackup(ctx context.Context, ref storage.ObservationRef, 
 	}
 	return contracts.BackupProof{Snapshot: *snapshot, BrokerSHA256: broker.SHA256, BrokerSnapshots: broker.Snapshots, BrokerReconciliations: broker.Reconciliations}, nil
 }
+
+func (s *Service) VerifyBrokerBackup(ctx context.Context, ref storage.ObservationRef) (contracts.BrokerRecovery, error) {
+	q, err := s.observed(ref)
+	if err != nil {
+		return contracts.BrokerRecovery{}, err
+	}
+	var revision int64
+	if err := q.QueryRowContext(ctx, `SELECT revision FROM ledger_meta WHERE singleton=1`).Scan(&revision); err != nil {
+		return contracts.BrokerRecovery{}, err
+	}
+	broker, err := proveBrokerRecovery(ctx, q)
+	if err != nil {
+		return contracts.BrokerRecovery{}, err
+	}
+	return contracts.BrokerRecovery{SHA256: broker.SHA256, Snapshots: broker.Snapshots, Reconciliations: broker.Reconciliations, LedgerRevision: revision}, nil
+}

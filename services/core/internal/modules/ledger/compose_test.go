@@ -20,7 +20,7 @@ import (
 	"omni-folio/services/core/migrations"
 )
 
-func testLedger(t *testing.T) (contracts.Service, *sql.DB, *observation.Registry) {
+func testLedgerAtSchema(t *testing.T, schema int) (contracts.Service, *sql.DB, *observation.Registry) {
 	t.Helper()
 	db, err := sql.Open("sqlite3", filepath.Join(t.TempDir(), "ledger.db")+"?_foreign_keys=on")
 	if err != nil {
@@ -32,7 +32,11 @@ func testLedger(t *testing.T) (contracts.Service, *sql.DB, *observation.Registry
 			t.Error(err)
 		}
 	})
-	for _, name := range []string{"001_init.sql", "003_broker_snapshots.sql", "005_ledger_events.sql", "008_cash_void.sql", "009_fx_exchange.sql", "022_ledger_replay_policy.sql"} {
+	files := []string{"001_init.sql", "003_broker_snapshots.sql", "005_ledger_events.sql", "008_cash_void.sql", "009_fx_exchange.sql"}
+	if schema >= 22 {
+		files = append(files, "022_ledger_replay_policy.sql")
+	}
+	for _, name := range files {
 		script, err := migrations.Files.ReadFile(name)
 		if err != nil {
 			t.Fatal(err)
@@ -42,7 +46,7 @@ func testLedger(t *testing.T) (contracts.Service, *sql.DB, *observation.Registry
 		}
 	}
 	// Only ledger owner migrations are needed by this module fixture.
-	for version := 1; version <= 27; version++ {
+	for version := 1; version <= schema; version++ {
 		if _, err := db.Exec(`INSERT INTO schema_migrations VALUES(?,?)`, version, "2026-01-10T15:00:00Z"); err != nil {
 			t.Fatal(err)
 		}
@@ -55,6 +59,11 @@ func testLedger(t *testing.T) (contracts.Service, *sql.DB, *observation.Registry
 		t.Fatal(err)
 	}
 	return api, db, registry
+}
+
+func testLedger(t *testing.T) (contracts.Service, *sql.DB, *observation.Registry) {
+	t.Helper()
+	return testLedgerAtSchema(t, 27)
 }
 
 func TestObservationFactsKeepProofSplitsAndRestatedFlows(t *testing.T) {
@@ -272,6 +281,26 @@ func TestBackupArchivalUsesLegacyFIFOWithCurrentReplayState(t *testing.T) {
 		}
 		if len(archival.Snapshot.Holdings) != 1 || archival.Snapshot.Holdings[0].CostBasis != "10" || archival.Snapshot.CostBasisPolicy != "fifo_exact_else_half_even_residual_8_v1" {
 			t.Fatalf("archival replay adopted current FIFO: %+v", archival.Snapshot)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestLegacyV11BrokerProofDoesNotRequireLedgerReplayTables(t *testing.T) {
+	api, db, registry := testLedgerAtSchema(t, 17)
+	var found int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE name='ledger_replay_state'`).Scan(&found); err != nil || found != 0 {
+		t.Fatalf("legacy fixture unexpectedly has replay state: %d %v", found, err)
+	}
+	if err := registry.VerifyBackup(context.Background(), func(ref storage.ObservationRef, _ time.Time) error {
+		proof, err := api.VerifyBrokerBackup(context.Background(), ref)
+		if err != nil {
+			return err
+		}
+		if proof.LedgerRevision != 0 || proof.Snapshots != 0 || proof.Reconciliations != 0 || proof.SHA256 != "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" {
+			t.Fatalf("legacy broker proof changed: %+v", proof)
 		}
 		return nil
 	}); err != nil {
