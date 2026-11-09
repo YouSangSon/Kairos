@@ -4,6 +4,10 @@ import "omni-folio/services/core/internal/storage/observation"
 
 func ReadStatements() []observation.Statement {
 	return []observation.Statement{
+		{SQL: `SELECT sql FROM sqlite_master WHERE name=? AND type=? AND tbl_name=?`, Arguments: 3, Objects: []string{"broker_snapshots", "broker_snapshots_latest_idx", "broker_snapshots_no_update", "broker_snapshots_no_delete", "broker_snapshot_reconciliations", "broker_snapshot_reconciliations_latest_idx", "broker_snapshot_reconciliations_no_update", "broker_snapshot_reconciliations_no_delete", "events_no_update", "events_no_delete", "events"}, ObjectArguments: []int{0, 2}},
+		{SQL: `SELECT COUNT(*) FROM sqlite_temp_master WHERE name=? OR tbl_name=?`, Arguments: 2, Objects: []string{"broker_snapshots", "broker_snapshots_latest_idx", "broker_snapshots_no_update", "broker_snapshots_no_delete", "broker_snapshot_reconciliations", "broker_snapshot_reconciliations_latest_idx", "broker_snapshot_reconciliations_no_update", "broker_snapshot_reconciliations_no_delete", "events_no_update", "events_no_delete", "events"}, ObjectArguments: []int{0, 1}},
+		{SQL: `SELECT COUNT(*) FROM sqlite_master WHERE tbl_name=? AND type IN ('index','trigger')`, Arguments: 1, Objects: []string{"broker_snapshots", "broker_snapshots_latest_idx", "broker_snapshots_no_update", "broker_snapshots_no_delete", "broker_snapshot_reconciliations", "broker_snapshot_reconciliations_latest_idx", "broker_snapshot_reconciliations_no_update", "broker_snapshot_reconciliations_no_delete", "events_no_update", "events_no_delete", "events"}, ObjectArguments: []int{0}},
+
 		{SQL: `SELECT occurred_at FROM events ORDER BY rtrim(occurred_at,'Z') DESC,sequence DESC LIMIT 1`, Arguments: 0},
 		{SQL: `SELECT EXISTS(SELECT 1 FROM events WHERE sequence<=? AND rtrim(recorded_at,'Z')>rtrim(?,'Z'))`, Arguments: 2},
 		{SQL: `SELECT e.type,e.occurred_at,COALESCE(e.instrument_id,''),COALESCE(e.symbol,''),COALESCE(e.quantity,''),e.currency,e.amount,COALESCE(e.counter_currency,''),COALESCE(e.counter_amount,'') FROM events e

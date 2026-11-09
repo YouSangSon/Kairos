@@ -4,14 +4,21 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"omni-folio/services/core/internal/modules/ledger/contracts"
 	"omni-folio/services/core/internal/modules/ledger/internal/application"
 	"omni-folio/services/core/internal/modules/ledger/internal/domain"
-	"omni-folio/services/core/internal/modules/ledger/internal/fault"
 	"omni-folio/services/core/internal/storage/observation"
 )
 
+type Rows interface {
+	Next() bool
+	Scan(...any) error
+	Err() error
+	Close() error
+}
+
 type Querier interface {
-	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+	QueryContext(context.Context, string, ...any) (Rows, error)
 	QueryRowContext(context.Context, string, ...any) observation.Scanner
 }
 
@@ -77,13 +84,16 @@ func (r *ledgerReader) EventRecordedAt(ctx context.Context, revision int64) (str
 	return at, err
 }
 func (r *ledgerReader) ReplayEvents(ctx context.Context, policy string, revision int64) ([]ledgerdomain.ReplayEvent, error) {
-	order := "occurred_at, sequence"
-	if policy == ledgerdomain.FIFOCostBasisPolicy {
-		order = "rtrim(occurred_at,'Z'), sequence"
-	} else if policy != ledgerdomain.LegacyFIFOCostBasisPolicy {
+	var rows Rows
+	var err error
+	switch policy {
+	case ledgerdomain.FIFOCostBasisPolicy:
+		rows, err = r.q.QueryContext(ctx, `SELECT event_id,type,occurred_at,COALESCE(instrument_id,''),COALESCE(symbol,''),COALESCE(quantity,''),COALESCE(price,''),COALESCE(fee,''),currency,amount,COALESCE(counter_currency,''),COALESCE(counter_amount,''),receipt_id FROM events WHERE sequence<=? ORDER BY rtrim(occurred_at,'Z'), sequence`, revision)
+	case ledgerdomain.LegacyFIFOCostBasisPolicy:
+		rows, err = r.q.QueryContext(ctx, `SELECT event_id,type,occurred_at,COALESCE(instrument_id,''),COALESCE(symbol,''),COALESCE(quantity,''),COALESCE(price,''),COALESCE(fee,''),currency,amount,COALESCE(counter_currency,''),COALESCE(counter_amount,''),receipt_id FROM events WHERE sequence<=? ORDER BY occurred_at, sequence`, revision)
+	default:
 		return nil, errors.New("unsupported ledger replay policy")
 	}
-	rows, err := r.q.QueryContext(ctx, `SELECT event_id,type,occurred_at,COALESCE(instrument_id,''),COALESCE(symbol,''),COALESCE(quantity,''),COALESCE(price,''),COALESCE(fee,''),currency,amount,COALESCE(counter_currency,''),COALESCE(counter_amount,''),receipt_id FROM events WHERE sequence<=? ORDER BY `+order, revision)
 	if err != nil {
 		return nil, err
 	}
@@ -148,7 +158,7 @@ func nullable(value string) any {
 }
 func notFound(err error) error {
 	if errors.Is(err, sql.ErrNoRows) {
-		return fault.ErrNotFound
+		return contracts.ErrNotFound
 	}
 	return err
 }

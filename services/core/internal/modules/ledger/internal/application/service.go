@@ -6,12 +6,10 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"log"
 	"math/big"
 	"omni-folio/services/core/internal/exact"
 	"omni-folio/services/core/internal/modules/ledger/contracts"
 	"omni-folio/services/core/internal/modules/ledger/internal/domain"
-	"omni-folio/services/core/internal/modules/ledger/internal/fault"
 	"time"
 )
 
@@ -30,10 +28,10 @@ type UseCases struct {
 func New(store Repository, now func() time.Time, id func(string) string, ttl func() time.Duration) *UseCases {
 	return &UseCases{store, now, id, ttl}
 }
-func (s *UseCases) PreviewImport(ctx context.Context, input contracts.ImportInput) (*ImportPreview, *fault.Error) {
+func (s *UseCases) PreviewImport(ctx context.Context, input contracts.ImportInput) (*ImportPreview, *contracts.Error) {
 	var result *ImportPreview
 	err := s.store.Write(ctx, func(scope WriteScope) error {
-		var err *fault.Error
+		var err *contracts.Error
 		result, err = s.previewInScope(ctx, scope, input)
 		if err != nil {
 			return err
@@ -41,18 +39,18 @@ func (s *UseCases) PreviewImport(ctx context.Context, input contracts.ImportInpu
 		return nil
 	})
 	if err != nil {
-		return nil, fault.As(err)
+		return nil, contracts.AsError(err)
 	}
 	return result, nil
 }
-func (s *UseCases) ApplyImport(ctx context.Context, req ApplyRequest) (*ApplyReceipt, *fault.Error) {
+func (s *UseCases) ApplyImport(ctx context.Context, req ApplyRequest) (*ApplyReceipt, *contracts.Error) {
 	if req.PreviewID == "" || req.IdempotencyKey == "" {
-		return nil, &fault.Error{Kind: contracts.InvalidInput, Body: APIError{Code: "required", Message: "preview_id and idempotency_key are required"}}
+		return nil, &contracts.Error{Kind: contracts.InvalidInput, Body: APIError{Code: "required", Message: "preview_id and idempotency_key are required"}}
 	}
 	received := s.now().UTC()
 	var result *ApplyReceipt
 	err := s.store.Write(ctx, func(scope WriteScope) error {
-		var err *fault.Error
+		var err *contracts.Error
 		result, err = s.applyInScope(ctx, scope, req, received)
 		if err != nil {
 			return err
@@ -60,14 +58,14 @@ func (s *UseCases) ApplyImport(ctx context.Context, req ApplyRequest) (*ApplyRec
 		return nil
 	})
 	if err != nil {
-		return nil, fault.As(err)
+		return nil, contracts.AsError(err)
 	}
 	return result, nil
 }
-func (s *UseCases) previewInScope(ctx context.Context, tx WriteScope, input contracts.ImportInput) (*ImportPreview, *fault.Error) {
+func (s *UseCases) previewInScope(ctx context.Context, tx WriteScope, input contracts.ImportInput) (*ImportPreview, *contracts.Error) {
 	rev, err := tx.CurrentRevision(ctx)
 	if err != nil {
-		return nil, fault.Internal(err)
+		return nil, contracts.InternalError(err)
 	}
 	rows, parseErr := s.normalizeRows(ctx, tx, input.Rows)
 	if parseErr != nil {
@@ -95,15 +93,15 @@ func (s *UseCases) previewInScope(ctx context.Context, tx WriteScope, input cont
 	preview.PreviewFingerprint = PreviewFingerprint(preview.FileSHA256, preview.SchemaVersion, preview.MappingVersion, preview.LedgerRevision)
 	encoded, err := json.Marshal(preview)
 	if err != nil {
-		return nil, fault.Internal(err)
+		return nil, contracts.InternalError(err)
 	}
 	if err := tx.RecordPreview(ctx, StoredPreview{PreviewID: preview.PreviewID, FileSHA256: preview.FileSHA256, LedgerRevision: rev, CanApply: preview.CanApply, JSON: string(encoded), ExpiresAt: created.Add(s.ttl()).Format(time.RFC3339Nano), CreatedAt: created.Format(time.RFC3339Nano)}); err != nil {
-		return nil, fault.Internal(err)
+		return nil, contracts.InternalError(err)
 	}
 	return preview, nil
 }
 
-func (s *UseCases) normalizeRows(ctx context.Context, q Reader, records []contracts.ImportRow) ([]PreviewRow, *fault.Error) {
+func (s *UseCases) normalizeRows(ctx context.Context, q Reader, records []contracts.ImportRow) ([]PreviewRow, *contracts.Error) {
 	seen := map[string]PreviewRow{}
 	seenCorrectionTargets := map[string]bool{}
 	result := make([]PreviewRow, 0, len(records))
@@ -147,19 +145,19 @@ func (s *UseCases) normalizeRows(ctx context.Context, q Reader, records []contra
 			if tx.Type == "CASH_VOID" {
 				target, validationErr, err := ValidateCashVoid(ctx, q, tx, false)
 				if err != nil {
-					return nil, fault.Internal(err)
+					return nil, contracts.InternalError(err)
 				}
 				if validationErr != nil {
-					return nil, fault.Internal(errors.New("stored cash void failed validation"))
+					return nil, contracts.InternalError(errors.New("stored cash void failed validation"))
 				}
 				row.CorrectionTarget = target
 			}
-		case errors.Is(err, fault.ErrNotFound):
+		case errors.Is(err, contracts.ErrNotFound):
 			row.Status, row.Transaction = "new", tx
 			if tx.Type == "CASH_VOID" {
 				target, validationErr, err := ValidateCashVoid(ctx, q, tx, true)
 				if err != nil {
-					return nil, fault.Internal(err)
+					return nil, contracts.InternalError(err)
 				}
 				if validationErr != nil {
 					row.Status, row.Errors = "error", []APIError{*validationErr}
@@ -174,7 +172,7 @@ func (s *UseCases) normalizeRows(ctx context.Context, q Reader, records []contra
 				}
 			}
 		case err != nil:
-			return nil, fault.Internal(err)
+			return nil, contracts.InternalError(err)
 		}
 		if row.Status != "error" {
 			seen[key] = row
@@ -195,7 +193,7 @@ func SameTransaction(a, b *Transaction) bool {
 
 func ValidateCashVoid(ctx context.Context, q Reader, correction *Transaction, requireUnused bool) (*CorrectionTarget, *APIError, error) {
 	target, err := q.TransactionBySource(ctx, correction.AccountID, correction.CorrectsSourceEventID)
-	if errors.Is(err, fault.ErrNotFound) {
+	if errors.Is(err, contracts.ErrNotFound) {
 		return nil, invalidCorrection(), nil
 	}
 	if err != nil {
@@ -250,7 +248,7 @@ func PreviewFingerprint(fileSHA, schemaVersion, mappingVersion, ledgerRevision s
 	return hex.EncodeToString(hash[:])
 }
 
-func (s *UseCases) applyInScope(ctx context.Context, tx WriteScope, req ApplyRequest, received time.Time) (*ApplyReceipt, *fault.Error) {
+func (s *UseCases) applyInScope(ctx context.Context, tx WriteScope, req ApplyRequest, received time.Time) (*ApplyReceipt, *contracts.Error) {
 	requestBytes, _ := json.Marshal(req)
 	requestHash := sha256.Sum256(requestBytes)
 	requestSHA := hex.EncodeToString(requestHash[:])
@@ -258,47 +256,47 @@ func (s *UseCases) applyInScope(ctx context.Context, tx WriteScope, req ApplyReq
 	priorHash, priorJSON := prior.RequestSHA256, prior.JSON
 	if err == nil {
 		if priorHash != requestSHA {
-			return nil, &fault.Error{Kind: contracts.Conflict, Body: APIError{Code: "idempotency_conflict", Message: "idempotency_key was already used with a different payload"}}
+			return nil, &contracts.Error{Kind: contracts.Conflict, Body: APIError{Code: "idempotency_conflict", Message: "idempotency_key was already used with a different payload"}}
 		}
 		var receipt ApplyReceipt
 		if err := json.Unmarshal([]byte(priorJSON), &receipt); err != nil {
-			return nil, fault.Internal(err)
+			return nil, contracts.InternalError(err)
 		}
 		return &receipt, nil
 	}
-	if !errors.Is(err, fault.ErrNotFound) {
-		return nil, fault.Internal(err)
+	if !errors.Is(err, contracts.ErrNotFound) {
+		return nil, contracts.InternalError(err)
 	}
 	stored, err := tx.Preview(ctx, req.PreviewID)
 	if err != nil {
-		if errors.Is(err, fault.ErrNotFound) {
-			return nil, &fault.Error{Kind: contracts.InvalidInput, Body: APIError{Code: "preview_not_found", Message: "preview_id does not exist"}}
+		if errors.Is(err, contracts.ErrNotFound) {
+			return nil, &contracts.Error{Kind: contracts.InvalidInput, Body: APIError{Code: "preview_not_found", Message: "preview_id does not exist"}}
 		}
-		return nil, fault.Internal(err)
+		return nil, contracts.InternalError(err)
 	}
 	previewJSON, fileSHA, expiresAt, previewRev := stored.JSON, stored.FileSHA256, stored.ExpiresAt, stored.LedgerRevision
 	expires, err := time.Parse(time.RFC3339Nano, expiresAt)
 	if err != nil || !received.Before(expires) {
-		return nil, &fault.Error{Kind: contracts.Conflict, Body: APIError{Code: "stale_preview", Message: "preview expired; create a new preview"}}
+		return nil, &contracts.Error{Kind: contracts.Conflict, Body: APIError{Code: "stale_preview", Message: "preview expired; create a new preview"}}
 	}
 	if !stored.CanApply {
-		return nil, &fault.Error{Kind: contracts.InvalidInput, Body: APIError{Code: "preview_has_errors", Message: "preview contains invalid rows"}}
+		return nil, &contracts.Error{Kind: contracts.InvalidInput, Body: APIError{Code: "preview_has_errors", Message: "preview contains invalid rows"}}
 	}
 	currentRev, err := tx.CurrentRevision(ctx)
 	if err != nil {
-		return nil, fault.Internal(err)
+		return nil, contracts.InternalError(err)
 	}
 	if currentRev != previewRev {
-		return nil, &fault.Error{Kind: contracts.Conflict, Body: APIError{Code: "stale_preview", Message: "ledger revision changed; create a new preview"}}
+		return nil, &contracts.Error{Kind: contracts.Conflict, Body: APIError{Code: "stale_preview", Message: "ledger revision changed; create a new preview"}}
 	}
 	var preview ImportPreview
 	if err := json.Unmarshal([]byte(previewJSON), &preview); err != nil {
-		return nil, fault.Internal(err)
+		return nil, contracts.InternalError(err)
 	}
 	expectedFingerprint := PreviewFingerprint(preview.FileSHA256, preview.SchemaVersion, preview.MappingVersion, preview.LedgerRevision)
 	if preview.SchemaVersion != csvSchema || preview.MappingVersion != mappingSchema || preview.PreviewFingerprint != expectedFingerprint ||
 		preview.FileSHA256 != fileSHA || preview.LedgerRevision != ledgerdomain.Revision(previewRev) {
-		return nil, &fault.Error{Kind: contracts.Conflict, Body: APIError{Code: "stale_preview", Message: "preview binding changed; create a new preview"}}
+		return nil, &contracts.Error{Kind: contracts.Conflict, Body: APIError{Code: "stale_preview", Message: "preview binding changed; create a new preview"}}
 	}
 	receiptID := s.id("receipt")
 	recorded := s.now().UTC()
@@ -309,20 +307,19 @@ func (s *UseCases) applyInScope(ctx context.Context, tx WriteScope, req ApplyReq
 		}
 		e := row.Transaction
 		if e == nil {
-			return nil, fault.Internal(errors.New("preview new row has no transaction"))
+			return nil, contracts.InternalError(errors.New("preview new row has no transaction"))
 		}
 		if err := tx.RecordEvent(ctx, *e, receiptID, recorded.Format(time.RFC3339Nano)); err != nil {
-			return nil, fault.Internal(err)
+			return nil, contracts.InternalError(err)
 		}
 		applied++
 	}
 	after := currentRev + int64(applied)
 	if err := tx.RecordAppliedRevision(ctx, after, recorded.Format(time.RFC3339Nano)); err != nil {
-		return nil, fault.Internal(err)
+		return nil, contracts.InternalError(err)
 	}
 	if _, err := Snapshot(ctx, tx); err != nil {
-		log.Printf("ledger invariant validation failed: %v", err)
-		return nil, &fault.Error{Kind: contracts.InvalidInput, Body: APIError{Code: "invalid_ledger", Message: "ledger invariant validation failed"}}
+		return nil, &contracts.Error{Kind: contracts.InvalidInput, Body: APIError{Code: "invalid_ledger", Message: "ledger invariant validation failed"}}
 	}
 	receipt := &ApplyReceipt{
 		ReceiptID: receiptID, PreviewID: req.PreviewID, IdempotencyKey: req.IdempotencyKey, FileSHA256: fileSHA,
@@ -331,7 +328,7 @@ func (s *UseCases) applyInScope(ctx context.Context, tx WriteScope, req ApplyReq
 	}
 	receiptBytes, _ := json.Marshal(receipt)
 	if err := tx.RecordReceipt(ctx, StoredReceipt{IdempotencyKey: req.IdempotencyKey, RequestSHA256: requestSHA, ReceiptID: receiptID, JSON: string(receiptBytes)}); err != nil {
-		return nil, fault.Internal(err)
+		return nil, contracts.InternalError(err)
 	}
 	return receipt, nil
 }

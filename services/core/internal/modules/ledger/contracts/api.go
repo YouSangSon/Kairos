@@ -18,6 +18,9 @@ type Queries interface {
 	AdmittedPriceIdentities(context.Context, storage.ObservationRef) (AdmittedPrices, error)
 }
 type Broker interface {
+	VerifyBrokerSync(context.Context) error
+	CheckBrokerBinding(context.Context, string) error
+	RecordMockBrokerSnapshot(context.Context, string, string, *BrokerSnapshot) (*BrokerKnownGoodSnapshot, error)
 	RecordBrokerSnapshot(context.Context, string, *BrokerSnapshot) (*BrokerKnownGoodSnapshot, error)
 	LatestBrokerSnapshot(context.Context, BrokerEnvironment, BrokerExchange, string) (*BrokerKnownGoodSnapshot, error)
 	Reconciliation(context.Context) (*BrokerReconciliationView, error)

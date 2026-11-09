@@ -46,17 +46,16 @@ func testLedger(t *testing.T) (contracts.Service, *sql.DB, *observation.Registry
 	}
 	now := func() time.Time { return time.Date(2026, 1, 10, 15, 0, 0, 0, time.UTC) }
 	registry := observation.New(db, now)
-	resolver, err := registry.LedgerReader(ledger.ReadStatements())
+	serial := 0
+	api, err := ledger.Compose(ledger.Config{DB: db, Now: now, ID: func(prefix string) string { serial++; return fmt.Sprintf("%s_%d", prefix, serial) }, PreviewTTL: func() time.Duration { return 15 * time.Minute }, Observations: registry})
 	if err != nil {
 		t.Fatal(err)
 	}
-	serial := 0
-	api := ledger.Compose(ledger.Config{DB: db, Now: now, ID: func(prefix string) string { serial++; return fmt.Sprintf("%s_%d", prefix, serial) }, PreviewTTL: func() time.Duration { return 15 * time.Minute }, Reader: resolver})
 	return api, db, registry
 }
 
 func TestObservationFactsKeepProofSplitsAndRestatedFlows(t *testing.T) {
-	api, _, registry := testLedger(t)
+	api, db, registry := testLedger(t)
 	input := []byte("source_event_id,account_id,type,occurred_at,symbol,quantity,price,fee,currency,amount,corrects_source_event_id\n" +
 		"deposit,account-main,DEPOSIT,2026-01-01T00:00:00Z,,,,,USD,100,\n" +
 		"buy,account-main,BUY,2026-01-02T00:00:00Z,AAPL,1,10,0,USD,-10,\n" +
@@ -112,6 +111,20 @@ func TestObservationFactsKeepProofSplitsAndRestatedFlows(t *testing.T) {
 	if _, err := api.AdmittedPriceIdentities(context.Background(), storage.ObservationRef{}); err == nil {
 		t.Fatal("zero observation accepted")
 	}
+	earlyRegistry := observation.New(db, func() time.Time { return time.Date(2026, 1, 9, 0, 0, 0, 0, time.UTC) })
+	earlyAPI, err := ledger.Compose(ledger.Config{DB: db, Observations: earlyRegistry})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := earlyRegistry.ReadValuation(context.Background(), func(ref storage.ObservationRef, _ time.Time) error {
+		facts, err := earlyAPI.ValuationFacts(context.Background(), ref)
+		if err == nil && !facts.FutureRecorded {
+			t.Fatal("future recorded event was hidden")
+		}
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
 	foreign, _, other := testLedger(t)
 	if err := other.ReadValuation(context.Background(), func(ref storage.ObservationRef, _ time.Time) error {
 		if _, err := api.ValuationFacts(context.Background(), ref); err == nil {
@@ -145,11 +158,17 @@ func TestBrokerSnapshotAndReconciliationCommitTogether(t *testing.T) {
 	if _, err := db.Exec(`DROP TRIGGER reject_test_reconciliation`); err != nil {
 		t.Fatal(err)
 	}
+	if err := api.VerifyBrokerSync(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := api.CheckBrokerBinding(context.Background(), snapshot.AccountRef); err != nil {
+		t.Fatal(err)
+	}
 	first, err := api.RecordBrokerSnapshot(context.Background(), "account-main", snapshot)
 	if err != nil {
 		t.Fatal(err)
 	}
-	again, err := api.RecordBrokerSnapshot(context.Background(), "account-main", snapshot)
+	again, err := api.RecordMockBrokerSnapshot(context.Background(), "account-main", snapshot.AccountRef, snapshot)
 	if err != nil || !reflect.DeepEqual(first, again) {
 		t.Fatalf("snapshot retry changed: %+v %v", again, err)
 	}

@@ -116,17 +116,12 @@ func (s *Service) ledgerActivities(ctx context.Context, limit int, cursor *ledge
 		pageRevision, pageRecordedAt = cursor.LedgerRevision, revisionRecordedAt
 	}
 
-	query := `SELECT sequence,type,occurred_at,recorded_at,COALESCE(symbol,''),COALESCE(quantity,''),COALESCE(price,''),COALESCE(fee,''),currency,amount,COALESCE(counter_currency,''),COALESCE(counter_amount,'')
-		FROM events WHERE sequence<=?`
-	args := []any{pageRevision}
-	if cursor != nil {
-		query += ` AND (rtrim(occurred_at,'Z')<rtrim(?,'Z') OR (occurred_at=? AND sequence<?))`
-		args = append(args, cursor.OccurredAt, cursor.OccurredAt, cursor.Sequence)
+	var rows *sql.Rows
+	if cursor == nil {
+		rows, err = tx.QueryContext(ctx, `SELECT sequence,type,occurred_at,recorded_at,COALESCE(symbol,''),COALESCE(quantity,''),COALESCE(price,''),COALESCE(fee,''),currency,amount,COALESCE(counter_currency,''),COALESCE(counter_amount,'') FROM events WHERE sequence<=? ORDER BY rtrim(occurred_at,'Z') DESC,sequence DESC LIMIT ?`, pageRevision, limit+1)
+	} else {
+		rows, err = tx.QueryContext(ctx, `SELECT sequence,type,occurred_at,recorded_at,COALESCE(symbol,''),COALESCE(quantity,''),COALESCE(price,''),COALESCE(fee,''),currency,amount,COALESCE(counter_currency,''),COALESCE(counter_amount,'') FROM events WHERE sequence<=? AND (rtrim(occurred_at,'Z')<rtrim(?,'Z') OR (occurred_at=? AND sequence<?)) ORDER BY rtrim(occurred_at,'Z') DESC,sequence DESC LIMIT ?`, pageRevision, cursor.OccurredAt, cursor.OccurredAt, cursor.Sequence, limit+1)
 	}
-	// Canonical UTC without Z sorts fractional seconds correctly, including whole-second prefixes.
-	query += ` ORDER BY rtrim(occurred_at,'Z') DESC,sequence DESC LIMIT ?`
-	args = append(args, limit+1)
-	rows, err := tx.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}

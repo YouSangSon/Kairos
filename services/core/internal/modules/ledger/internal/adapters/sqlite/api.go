@@ -49,3 +49,13 @@ func (s *Service) PreviewImport(ctx context.Context, raw []byte) (*contracts.Imp
 func (s *Service) CanonicalInstrumentID(symbol string) string {
 	return ledgerdomain.InstrumentIDForSymbol(symbol)
 }
+
+func (s *Service) VerifyBrokerSync(ctx context.Context) error {
+	return preflightKiwoomMockSync(ctx, newQueryer(s.db))
+}
+func (s *Service) CheckBrokerBinding(ctx context.Context, account string) error {
+	return requireKiwoomMockBinding(ctx, newQueryer(s.db), account)
+}
+func (s *Service) RecordMockBrokerSnapshot(ctx context.Context, account, expected string, snapshot *contracts.BrokerSnapshot) (*contracts.BrokerKnownGoodSnapshot, error) {
+	return s.recordKiwoomMockSnapshot(ctx, account, expected, snapshot)
+}
