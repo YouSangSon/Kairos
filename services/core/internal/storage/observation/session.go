@@ -44,6 +44,8 @@ func New(db *sql.DB, now func() time.Time) *Registry {
 	return &Registry{db: db, now: now, sessions: make(map[storage.ObservationRef]*session)}
 }
 
+func (r *Registry) MatchesDB(db *sql.DB) bool { return r != nil && db != nil && r.db == db }
+
 func (r *Registry) ReadValuation(ctx context.Context, work func(storage.ObservationRef, time.Time) error) error {
 	return r.ReadValuationAt(ctx, nil, work)
 }
