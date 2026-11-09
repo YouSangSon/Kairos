@@ -271,7 +271,7 @@ const (
 	paperFillPolicyVersion            = paperdomain.FillPolicyVersion
 	paperPerformancePolicySchema      = "paper-strategy-performance-policy.v1"
 	noStrategySelection               = "no_strategy"
-	canonicalPaperTimeLayout          = time.RFC3339Nano
+	canonicalPaperTimeLayout          = "2006-01-02T15:04:05.000000000Z"
 )
 
 var (
