@@ -236,6 +236,7 @@ func TestOwnerPriceWriteRequiresExactCurrentTarget(t *testing.T) {
 	for _, query := range []string{
 		`INSERT INTO owner_fx_series_versions(version) VALUES(?) /* INTO owner_price_series_versions */`,
 		`INSERT INTO owner_price_series_versions_new(version) VALUES(?)`,
+		`INSERT INTO owner_price_series_versions(version) SELECT version FROM owner_fx_series_versions`,
 	} {
 		if err := ownership.ValidateOwnerPriceWrite(query); err == nil {
 			t.Errorf("accepted %s", query)
@@ -243,5 +244,34 @@ func TestOwnerPriceWriteRequiresExactCurrentTarget(t *testing.T) {
 	}
 	if err := ownership.ValidateOwnerPriceWrite(`INSERT INTO owner_price_series_versions(version) VALUES(?)`); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestSQLGateRejectsEmptyOrQuotedUnknownFunction(t *testing.T) {
+	for _, query := range []string{`SELECT ""() FROM events`, `SELECT "123"() FROM events`} {
+		if err := ownership.ValidateSQL("ledger", query, nil); err == nil {
+			t.Errorf("accepted %s", query)
+		}
+	}
+}
+
+func TestSQLGateRecognizesOnlyTransparentPrivateForwarders(t *testing.T) {
+	source := `package sqlite;import "context";type raw interface{QueryContext(context.Context,string,...any)(any,error)};type reader struct{q raw};func(r reader)QueryContext(ctx context.Context,query string,args ...any)(any,error){return r.q.QueryContext(ctx,query,args...)};func read(q reader){q.QueryContext(context.Background(),"SELECT event_id FROM events")}`
+	root := fixtureSources(t, map[string]string{"modules/ledger/internal/adapters/sqlite/a.go": source})
+	violations, err := inspectSQLSources(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(violations) != 0 {
+		t.Fatal(violations)
+	}
+	source = strings.Replace(source, "r.q.QueryContext(ctx,query,args...)", "r.q.QueryContext(ctx,query+extra,args...)", 1)
+	root = fixtureSources(t, map[string]string{"modules/ledger/internal/adapters/sqlite/a.go": source})
+	violations, err = inspectSQLSources(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(strings.Join(violations, "\n"), "unresolved SQL") {
+		t.Fatal(violations)
 	}
 }

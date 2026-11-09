@@ -150,7 +150,7 @@ func sqlTableReferences(tokens []sqlToken) ([]sqlReference, bool, error) {
 	tablesAtDepth := map[int]int{}
 	for i := 0; i < len(tokens); i++ {
 		token := tokens[i]
-		if !token.literal && i+1 < len(tokens) && tokens[i+1].text == "(" && (unicode.IsLetter(rune(token.text[0])) || token.text[0] == '_') {
+		if !token.literal && i+1 < len(tokens) && tokens[i+1].text == "(" && (token.quoted || len(token.text) > 0 && (unicode.IsLetter(rune(token.text[0])) || token.text[0] == '_')) {
 			if !approvedSQLFunctions[token.text] && (token.quoted || !sqlParentheses[token.text]) {
 				return nil, false, fmt.Errorf("unapproved SQL function %s", token.text)
 			}
@@ -659,12 +659,57 @@ func ValidateOwnerPriceWrite(source string) error {
 	if len(tokens) < 3 || tokens[0].quoted || tokens[0].text != "insert" || tokens[1].quoted || tokens[1].text != "into" {
 		return fmt.Errorf("owner-price write requires fixed INSERT INTO")
 	}
-	target, _, err := tableAt(tokens, 2)
+	target, index, err := tableAt(tokens, 2)
 	if err != nil {
 		return err
 	}
 	if target != "owner_price_series_versions" {
 		return fmt.Errorf("owner-price write targets unapproved table %s", target)
+	}
+	if index >= len(tokens) || tokens[index].text != "(" {
+		return fmt.Errorf("owner-price write requires fixed columns")
+	}
+	index++
+	columns := 0
+	for {
+		if index >= len(tokens) || tokens[index].literal || tokens[index].text == "" || !(unicode.IsLetter(rune(tokens[index].text[0])) || tokens[index].text[0] == '_') {
+			return fmt.Errorf("invalid owner-price column")
+		}
+		columns++
+		index++
+		if index < len(tokens) && tokens[index].text == "," {
+			index++
+			continue
+		}
+		if index >= len(tokens) || tokens[index].text != ")" {
+			return fmt.Errorf("invalid owner-price columns")
+		}
+		index++
+		break
+	}
+	if index+1 >= len(tokens) || tokens[index].quoted || tokens[index].text != "values" || tokens[index+1].text != "(" {
+		return fmt.Errorf("owner-price write requires bound VALUES")
+	}
+	index += 2
+	arguments := 0
+	for {
+		if index >= len(tokens) || tokens[index].text != "?" || tokens[index].literal {
+			return fmt.Errorf("owner-price VALUES must contain only bound arguments")
+		}
+		arguments++
+		index++
+		if index < len(tokens) && tokens[index].text == "," {
+			index++
+			continue
+		}
+		if index >= len(tokens) || tokens[index].text != ")" {
+			return fmt.Errorf("invalid owner-price VALUES")
+		}
+		index++
+		break
+	}
+	if columns != arguments || index != len(tokens) {
+		return fmt.Errorf("owner-price write has unapproved shape")
 	}
 	return validateSQLTokens("marketdata", tokens, nil, false)
 }

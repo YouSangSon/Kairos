@@ -50,6 +50,12 @@ func TestModuleGateRejectsBoundaryViolations(t *testing.T) {
 		{"composition private", "composition/a.go", `package composition; import _ "omni-folio/services/core/internal/modules/ledger/internal/adapters/sqlite"`, "private"},
 		{"ordinary root DB injection", "modules/ledger/api.go", `package ledger; import "database/sql"; type Config struct { DB *sql.DB }`, "construction"},
 		{"module dot alias", "modules/trading/internal/adapters/cli/a.go", `package cli; import . "omni-folio/services/core/internal/modules/marketdata/contracts"`, "dot import"},
+		{"dispatch helper factory", "modules/trading/internal/adapters/kiwoom/a.go", `package kiwoom; func NewAnything(){NewMockDispatch()}`, "dispatch outside"},
+		{"dispatch compose callback", "modules/trading/compose.go", `package trading; import k "omni-folio/services/core/internal/modules/trading/internal/adapters/kiwoom";func Compose(){factory:=k.NewMockDispatch;_ = factory}`, "constructor callback"},
+		{"SDK constructor outside sealed adapter", "modules/trading/compose.go", `package trading;import sdk "omni-folio/services/core/internal/providers/kiwoom";func Compose(){sdk.NewMockOrders(nil)}`, "sealed dispatch"},
+		{"SDK submit outside sealed adapter", "modules/trading/internal/application/a.go", `package application;func submit(){orders.SubmitMockLimitOrder()}`, "sealed dispatch"},
+		{"SDK submit method value", "modules/trading/internal/adapters/kiwoom/dispatch.go", `package kiwoom;type MockDispatch struct{};func(MockDispatch)SubmitLimitOrder(){submit:=orders.SubmitMockLimitOrder;_ = submit}`, "sealed dispatch"},
+		{"SDK constructor method value", "modules/trading/internal/adapters/kiwoom/dispatch.go", `package kiwoom;import sdk "omni-folio/services/core/internal/providers/kiwoom";func NewMockDispatch(){factory:=sdk.NewMockOrders;_ = factory}`, "sealed dispatch"},
 		{"dispatch arbitrary adapter caller", "modules/trading/internal/adapters/kiwoom/a.go", `package kiwoom; func business(){NewMockDispatch()}`, "dispatch outside"},
 		{"dispatch factory outside adapter", "modules/trading/internal/application/a.go", `package application; import k "omni-folio/services/core/internal/modules/trading/internal/adapters/kiwoom"; var factory=k.NewMockDispatch`, "dispatch"},
 		{"dispatch arbitrary compose helper", "modules/trading/compose.go", `package trading; import k "omni-folio/services/core/internal/modules/trading/internal/adapters/kiwoom"; func Helper(){ k.NewMockDispatch() }`, "dispatch"},
@@ -70,13 +76,15 @@ func TestModuleGateRejectsBoundaryViolations(t *testing.T) {
 
 func TestModuleGateAllowsPrivateInwardComposition(t *testing.T) {
 	root := fixtureSources(t, map[string]string{
-		"modules/ledger/contracts/api.go":                     `package contracts; import "context"; type Snapshot struct { Revision int64 }; type Reader interface { Snapshot(context.Context) (Snapshot,error) }`,
-		"modules/marketdata/contracts/read.go":                `package contracts; import "context"; import s "omni-folio/services/core/internal/storage/contracts"; type Reader interface { Read(context.Context,s.ObservationRef) (string,error) }`,
-		"modules/trading/internal/adapters/kiwoom/factory.go": `package kiwoom; func NewProduction(){NewMockDispatch()};func NewMockDispatch(){}`,
-		"modules/ledger/internal/domain/nested/value.go":      `package nested; import "omni-folio/services/core/internal/exact"; var _=exact.Parse`,
-		"modules/portfolio/internal/application/read.go":      `package application; import l "omni-folio/services/core/internal/modules/ledger/contracts"; type Ledger interface { Snapshot() l.Snapshot }`,
-		"modules/ledger/compose.go":                           `package ledger; import "database/sql"; import a "omni-folio/services/core/internal/modules/ledger/internal/adapters/sqlite"; import "omni-folio/services/core/internal/modules/ledger/contracts"; type Config struct { DB *sql.DB }; func Compose(c Config) contracts.Reader { return a.New(c.DB) }`,
-		"composition/core.go":                                 `package composition; import l "omni-folio/services/core/internal/modules/ledger"; var _=l.Compose`,
+		"modules/ledger/contracts/api.go":                      `package contracts; import "context"; type Snapshot struct { Revision int64 }; type Reader interface { Snapshot(context.Context) (Snapshot,error) }`,
+		"modules/marketdata/contracts/read.go":                 `package contracts; import "context"; import s "omni-folio/services/core/internal/storage/contracts"; type Reader interface { Read(context.Context,s.ObservationRef) (string,error) }`,
+		"modules/trading/internal/adapters/kiwoom/dispatch.go": `package kiwoom;import sdk "omni-folio/services/core/internal/providers/kiwoom";type MockDispatch struct{};func NewMockDispatch(){sdk.NewMockOrders(nil)};func(MockDispatch)SubmitLimitOrder(){orders.SubmitMockLimitOrder()}`,
+		"modules/trading/internal/adapters/kiwoom/factory.go":  `package kiwoom; type FactoryConfig struct{}`,
+		"modules/ledger/internal/domain/nested/value.go":       `package nested; import "omni-folio/services/core/internal/exact"; var _=exact.Parse`,
+		"modules/portfolio/internal/application/read.go":       `package application; import l "omni-folio/services/core/internal/modules/ledger/contracts"; type Ledger interface { Snapshot() l.Snapshot }`,
+		"modules/ledger/compose.go":                            `package ledger; import "database/sql"; import a "omni-folio/services/core/internal/modules/ledger/internal/adapters/sqlite"; import "omni-folio/services/core/internal/modules/ledger/contracts"; type Config struct { DB *sql.DB }; func Compose(c Config) contracts.Reader { return a.New(c.DB) }`,
+		"modules/marketdata/compose.go":                        `package marketdata;import "database/sql";import "errors";import "omni-folio/services/core/internal/storage/observation";import s "omni-folio/services/core/internal/modules/marketdata/internal/adapters/sqlite";import a "omni-folio/services/core/internal/modules/marketdata/internal/application";import c "omni-folio/services/core/internal/modules/marketdata/contracts";type Config struct{DB *sql.DB;Observations *observation.Registry};func Compose(config Config) c.Reader {if !config.Observations.MatchesDB(config.DB)||config.Observations==nil{return nil};reader,err:=config.Observations.MarketReader(s.ReadStatements());if err!=nil{_ = errors.New("bad");return nil};return a.New(reader)};func ComposeOwnerPrice(atomic c.Reader)c.Reader{return a.New(atomic)}`,
+		"composition/core.go":                                  `package composition; import l "omni-folio/services/core/internal/modules/ledger"; var _=l.Compose`,
 	})
 	violations, _, err := inspectDependencies(root)
 	if err != nil {

@@ -126,6 +126,15 @@ func inspectDependencies(root string) ([]string, map[string]bool, error) {
 			}
 		}
 		violations = append(violations, inspectModuleDeclarations(relative, file, imports)...)
+		directCalls := map[*ast.SelectorExpr]bool{}
+		ast.Inspect(file, func(node ast.Node) bool {
+			if call, ok := node.(*ast.CallExpr); ok {
+				if selector, ok := call.Fun.(*ast.SelectorExpr); ok {
+					directCalls[selector] = true
+				}
+			}
+			return true
+		})
 		factoryDefinitions := map[*ast.Ident]bool{}
 		for _, decl := range file.Decls {
 			if function, ok := decl.(*ast.FuncDecl); ok {
@@ -140,6 +149,11 @@ func inspectDependencies(root string) ([]string, map[string]bool, error) {
 			if !ok {
 				return true
 			}
+			if selector.Sel.Name == "NewMockOrders" || selector.Sel.Name == "SubmitMockLimitOrder" {
+				if !approvedSDKDispatch(relative, file, selector.Pos(), selector.Sel.Name) || !directCalls[selector] {
+					violations = append(violations, relative+" references mock order SDK outside sealed dispatch adapter")
+				}
+			}
 			pkg, ok := selector.X.(*ast.Ident)
 			if !ok {
 				return true
@@ -150,6 +164,9 @@ func inspectDependencies(root string) ([]string, map[string]bool, error) {
 				case "Now", "Since", "Until", "After", "AfterFunc", "NewTimer", "NewTicker", "Tick", "Sleep", "LoadLocation":
 					violations = append(violations, relative+" uses impure time."+selector.Sel.Name)
 				}
+			}
+			if strings.HasPrefix(relative, "modules/") && selector.Sel.Name == "NewMockDispatch" && !directCalls[selector] {
+				violations = append(violations, relative+" uses dispatch constructor callback")
 			}
 			if strings.HasSuffix(imports[pkg.Name], "/adapters/kiwoom") && selector.Sel.Name == "NewMockDispatch" && !approvedDispatchFactory(relative, file, selector.Pos()) {
 				violations = append(violations, relative+" constructs dispatch outside bootstrap")
@@ -256,4 +273,21 @@ func TestAllProductionPackageDependencies(t *testing.T) {
 	for _, violation := range violations {
 		t.Error(violation)
 	}
+}
+
+func approvedSDKDispatch(path string, file *ast.File, pos token.Pos, symbol string) bool {
+	if path != "modules/trading/internal/adapters/kiwoom/dispatch.go" {
+		return false
+	}
+	for _, decl := range file.Decls {
+		function, ok := decl.(*ast.FuncDecl)
+		if !ok || pos < function.Pos() || pos > function.End() {
+			continue
+		}
+		if symbol == "NewMockOrders" {
+			return function.Name.Name == "NewMockDispatch" && function.Recv == nil
+		}
+		return function.Name.Name == "SubmitLimitOrder" && function.Recv != nil
+	}
+	return false
 }

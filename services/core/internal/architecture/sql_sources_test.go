@@ -223,7 +223,7 @@ func inspectSQLSources(root string) ([]string, error) {
 						index = 1
 					}
 					if index >= 0 && index < len(call.Args) {
-						if approvedSQLForwarder(source.path, source.file, call.Pos()) {
+						if approvedSQLForwarder(source.path, source.file, call.Pos()) || transparentSQLForwarder(source.path, source.file, call) {
 							return true
 						}
 						sql, known := constantString(call.Args[index], source.constants, map[string]bool{})
@@ -350,7 +350,7 @@ func inspectSchemaInventory(root string) ([]string, error) {
 }
 
 func approvedSQLForwarder(path string, file *ast.File, pos token.Pos) bool {
-	if path != "storage/observation/statements.go" {
+	if path != "storage/observation/statements.go" && path != "storage/observation/rows.go" {
 		return false
 	}
 	for _, decl := range file.Decls {
@@ -366,7 +366,73 @@ func approvedSQLForwarder(path string, file *ast.File, pos token.Pos) bool {
 		if !ok {
 			return false
 		}
+		if path == "storage/observation/rows.go" {
+			return name.Name == "scopedScanner" && function.Name.Name == "Scan"
+		}
 		return name.Name == "ReadHandle" && (function.Name.Name == "Query" || function.Name.Name == "QueryContext" || function.Name.Name == "QueryOne") || name.Name == "ImportHandle" && function.Name.Name == "Execute"
+	}
+	return false
+}
+
+func transparentSQLForwarder(path string, file *ast.File, call *ast.CallExpr) bool {
+	owner, layer := modulePath(path)
+	if owner == "" || layer != "adapters" || !strings.Contains(path, "/internal/adapters/sqlite/") {
+		return false
+	}
+	for _, decl := range file.Decls {
+		function, ok := decl.(*ast.FuncDecl)
+		if !ok || function.Recv == nil || function.Body == nil || call.Pos() < function.Pos() || call.Pos() > function.End() || len(function.Body.List) != 1 {
+			continue
+		}
+		var expected []string
+		switch function.Name.Name {
+		case "QueryContext":
+			expected = []string{"QueryContext"}
+		case "QueryRowContext":
+			expected = []string{"QueryRowContext", "QueryOne"}
+		case "ExecContext":
+			expected = []string{"ExecContext", "Execute"}
+		default:
+			return false
+		}
+		returned, ok := function.Body.List[0].(*ast.ReturnStmt)
+		if !ok || len(returned.Results) != 1 || returned.Results[0] != call {
+			return false
+		}
+		selector, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || !slices.Contains(expected, selector.Sel.Name) {
+			return false
+		}
+		field, ok := selector.X.(*ast.SelectorExpr)
+		if !ok {
+			return false
+		}
+		receiver, ok := field.X.(*ast.Ident)
+		if !ok || len(function.Recv.List[0].Names) != 1 || receiver.Name != function.Recv.List[0].Names[0].Name {
+			return false
+		}
+		var parameters []string
+		for _, field := range function.Type.Params.List {
+			for _, name := range field.Names {
+				parameters = append(parameters, name.Name)
+			}
+		}
+		if len(parameters) != 3 || len(call.Args) != 3 || !call.Ellipsis.IsValid() {
+			return false
+		}
+		for index, arg := range call.Args {
+			name, ok := arg.(*ast.Ident)
+			if !ok || name.Name != parameters[index] {
+				return false
+			}
+		}
+		queryField := function.Type.Params.List[1]
+		queryType, ok := queryField.Type.(*ast.Ident)
+		if !ok || queryType.Name != "string" {
+			return false
+		}
+		_, variadic := function.Type.Params.List[2].Type.(*ast.Ellipsis)
+		return variadic
 	}
 	return false
 }

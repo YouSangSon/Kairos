@@ -91,6 +91,9 @@ func moduleImportViolation(relative, name string) string {
 			return "domain layer imports forbidden " + name
 		}
 	case "application":
+		if name == internalPrefix+"storage/contracts" {
+			return ""
+		}
 		if target != "" && (targetLayer == "contracts" || target == owner && (targetLayer == "domain" || targetLayer == "application")) {
 			return ""
 		}
@@ -112,6 +115,9 @@ func moduleImportViolation(relative, name string) string {
 			return "module construction must be in compose.go"
 		}
 	case "adapters":
+		if name == internalPrefix+"codec" || name == internalPrefix+"providers/kiwoom" {
+			return ""
+		}
 		if strings.HasPrefix(name, internalPrefix) && target == "" && name != internalPrefix+"exact" && !strings.HasPrefix(name, internalPrefix+"storage/") {
 			return "adapter imports legacy implementation outside module boundary " + name
 		}
@@ -130,9 +136,7 @@ func approvedDispatchFactory(path string, file *ast.File, pos token.Pos) bool {
 		if !ok || function.Body == nil || pos < function.Pos() || pos > function.End() {
 			continue
 		}
-		if strings.HasPrefix(path, "modules/trading/internal/adapters/kiwoom/") && strings.HasPrefix(function.Name.Name, "New") {
-			return true
-		}
+
 		return path == "modules/trading/compose.go" && function.Name.Name == "Compose"
 	}
 	return false
@@ -155,11 +159,33 @@ func inspectModuleDeclarations(path string, file *ast.File, imports map[string]s
 			if group, ok := declaration.(*ast.GenDecl); ok && group.Tok == token.VAR {
 				violations = append(violations, path+" module construction cannot expose package state")
 			}
+			if group, ok := declaration.(*ast.GenDecl); ok && group.Tok == token.TYPE {
+				for _, spec := range group.Specs {
+					typ := spec.(*ast.TypeSpec)
+					if !typ.Name.IsExported() {
+						continue
+					}
+					if typ.Name.Name == "Config" || typ.Name.Name == "Dependencies" {
+						structure, ok := typ.Type.(*ast.StructType)
+						if !ok {
+							violations = append(violations, path+" construction config must be a struct")
+							continue
+						}
+						for _, field := range structure.Fields.List {
+							if forbiddenConstructionInput(field.Type, imports) {
+								violations = append(violations, path+" construction config exposes private or scoped capability")
+							}
+						}
+					} else if forbiddenContractResult(typ.Type, imports) {
+						violations = append(violations, path+" construction result exposes private capability")
+					}
+				}
+			}
 			function, ok := declaration.(*ast.FuncDecl)
 			if !ok {
 				continue
 			}
-			if function.Name.Name != "Compose" || function.Recv != nil {
+			if (function.Name.Name != "Compose" && !(owner == "marketdata" && function.Name.Name == "ComposeOwnerPrice")) || function.Recv != nil {
 				violations = append(violations, path+" module root permits Compose construction only")
 				continue
 			}
@@ -171,20 +197,28 @@ func inspectModuleDeclarations(path string, file *ast.File, imports map[string]s
 				}
 			}
 			ast.Inspect(function.Body, func(node ast.Node) bool {
-				if condition, ok := node.(*ast.IfStmt); ok {
-					binary, valid := condition.Cond.(*ast.BinaryExpr)
-					if !valid || binary.Op != token.NEQ || !isNil(binary.Y) || !isErrorIdentifier(binary.X) {
-						violations = append(violations, path+" contains business condition in construction")
-					}
+				if condition, ok := node.(*ast.IfStmt); ok && !constructionCondition(condition.Cond) {
+					violations = append(violations, path+" contains business condition in construction")
 				}
+
 				if call, ok := node.(*ast.CallExpr); ok {
 					switch function := call.Fun.(type) {
 					case *ast.SelectorExpr:
-						if !strings.HasPrefix(function.Sel.Name, "New") && function.Sel.Name != "Compose" && function.Sel.Name != "Errorf" {
+						if !constructionCall(function.Sel.Name) {
 							violations = append(violations, path+" calls business function in construction "+function.Sel.Name)
 						}
+					case *ast.Ident:
+						if function.Name != "new" && function.Name != "make" {
+							violations = append(violations, path+" calls arbitrary callback in construction "+function.Name)
+						}
+					default:
+						violations = append(violations, path+" calls arbitrary callback in construction")
 					}
 				}
+				if _, ok := node.(*ast.FuncLit); ok {
+					violations = append(violations, path+" defines callback implementation in construction")
+				}
+
 				switch node.(type) {
 				case *ast.ForStmt, *ast.RangeStmt, *ast.SwitchStmt, *ast.TypeSwitchStmt, *ast.GoStmt, *ast.DeferStmt:
 					violations = append(violations, path+" contains business control flow in construction")
@@ -258,6 +292,10 @@ func forbiddenContractResult(expr ast.Expr, imports map[string]string) bool {
 			}
 		case *ast.FuncType:
 			bad = true
+		case *ast.InterfaceType:
+			if value.Methods.NumFields() == 0 {
+				bad = true
+			}
 		case *ast.ChanType:
 			bad = true
 		case *ast.SelectorExpr:
@@ -339,4 +377,69 @@ func moduleCycles(packages map[string]map[string]bool) []string {
 		}
 	}
 	return importCycles(graph)
+}
+
+func constructionCall(name string) bool {
+	if strings.HasPrefix(name, "New") || name == "Compose" || name == "Errorf" {
+		return true
+	}
+	switch name {
+	case "MatchesDB", "LedgerReader", "MarketReader", "WatchlistReader", "OwnerPriceWriter", "ReadStatements", "OwnerPriceStatements":
+		return true
+	}
+	return false
+}
+func constructionCondition(expr ast.Expr) bool {
+	switch value := expr.(type) {
+	case *ast.ParenExpr:
+		return constructionCondition(value.X)
+	case *ast.BinaryExpr:
+		if value.Op == token.LOR || value.Op == token.LAND {
+			return constructionCondition(value.X) && constructionCondition(value.Y)
+		}
+		if value.Op != token.EQL && value.Op != token.NEQ {
+			return false
+		}
+		if !isNil(value.Y) {
+			return false
+		}
+		if isErrorIdentifier(value.X) {
+			return true
+		}
+		_, ok := value.X.(*ast.SelectorExpr)
+		return ok
+	case *ast.UnaryExpr:
+		if value.Op == token.NOT {
+			return constructionCondition(value.X)
+		}
+	case *ast.CallExpr:
+		selector, ok := value.Fun.(*ast.SelectorExpr)
+		return ok && selector.Sel.Name == "MatchesDB"
+	}
+	return false
+}
+
+func forbiddenConstructionInput(expr ast.Expr, imports map[string]string) bool {
+	bad := false
+	ast.Inspect(expr, func(node ast.Node) bool {
+		if selector, ok := node.(*ast.SelectorExpr); ok {
+			if pkg, ok := selector.X.(*ast.Ident); ok {
+				path := imports[pkg.Name]
+				if path == "database/sql" && selector.Sel.Name != "DB" {
+					bad = true
+				}
+				if path == internalPrefix+"providers/kiwoom" && selector.Sel.Name != "Client" {
+					bad = true
+				}
+				if path == internalPrefix+"storage/observation" && selector.Sel.Name != "Registry" && selector.Sel.Name != "ReadResolver" && selector.Sel.Name != "ImportResolver" {
+					bad = true
+				}
+				if strings.Contains(path, "/modules/") && !strings.HasSuffix(path, "/contracts") {
+					bad = true
+				}
+			}
+		}
+		return true
+	})
+	return bad
 }
