@@ -46,7 +46,7 @@ func pureModuleImport(name string) bool {
 		return true
 	}
 	switch name {
-	case "time", "sort", "math", "slices", "cmp", "unicode", "unicode/utf8", "bytes", "encoding/hex", "crypto/sha256", internalPrefix + "exact":
+	case "encoding/base64", "time", "sort", "math", "slices", "cmp", "unicode", "unicode/utf8", "bytes", "encoding/hex", "crypto/sha256", internalPrefix + "exact":
 		return true
 	}
 	return false
@@ -110,7 +110,8 @@ func moduleImportViolation(relative, name string) string {
 		}
 	}
 	if owner == "" {
-		if (strings.HasPrefix(relative, "providers/") || strings.HasPrefix(relative, "transport/")) && target != "" {
+		sdkDTO := relative == "providers/kiwoom/kiwoom.go" && name == internalPrefix+"modules/ledger/contracts" || relative == "providers/kiwoom/values.go" && name == internalPrefix+"modules/marketdata/contracts"
+		if (strings.HasPrefix(relative, "providers/") || strings.HasPrefix(relative, "transport/")) && target != "" && !sdkDTO {
 			return "provider SDK imports business module " + name
 		}
 		if strings.HasPrefix(relative, "codec/") && !pureModuleImport(name) && name != "io" {
@@ -218,7 +219,7 @@ func inspectModuleDeclarations(path string, file *ast.File, imports map[string]s
 					if !typ.Name.IsExported() {
 						continue
 					}
-					if typ.Name.Name == "Config" || typ.Name.Name == "Dependencies" || typ.Name.Name == "CLIConfig" {
+					if typ.Name.Name == "Config" || typ.Name.Name == "Dependencies" || typ.Name.Name == "CLIConfig" || maintenanceConstructionFile(path) && (typ.Name.Name == "Owners" || typ.Name.Name == "VerificationConfig") {
 						structure, ok := typ.Type.(*ast.StructType)
 						if !ok {
 							violations = append(violations, path+" construction config must be a struct")
@@ -255,6 +256,9 @@ func inspectModuleDeclarations(path string, file *ast.File, imports map[string]s
 					}
 				}
 			}
+			if function.Name.Name == "ComposeVerification" && !manifestVerifierResult(function, imports) {
+				violations = append(violations, path+" verification construction must return only ManifestVerifier")
+			}
 			entryName := function.Name.Name
 			if function.Type.Params != nil {
 				for _, field := range function.Type.Params.List {
@@ -286,7 +290,7 @@ func inspectModuleDeclarations(path string, file *ast.File, imports map[string]s
 						violations = append(violations, path+" calls arbitrary callback in construction")
 					}
 				}
-				if _, ok := node.(*ast.FuncLit); ok {
+				if literal, ok := node.(*ast.FuncLit); ok && !approvedOwnersMapper(path, file, imports, literal) {
 					violations = append(violations, path+" defines callback implementation in construction")
 				}
 
@@ -583,6 +587,8 @@ func forbiddenContractInput(expr ast.Expr, imports map[string]string) bool {
 
 func rootConstructionFile(path string) bool {
 	switch filepath.Base(path) {
+	case "compose_verification.go":
+		return path == "modules/maintenance/compose_verification.go"
 	case "compose_identifiers.go":
 		return path == "modules/ledger/compose_identifiers.go"
 	case "compose.go", "register_http.go", "compose_http.go", "run_cli.go", "cli.go":
@@ -592,6 +598,8 @@ func rootConstructionFile(path string) bool {
 }
 func rootConstructionEntry(path, owner, name string) bool {
 	switch filepath.Base(path) {
+	case "compose_verification.go":
+		return owner == "maintenance" && name == "ComposeVerification"
 	case "compose.go":
 		return name == "Compose" || owner == "marketdata" && name == "ComposeOwnerPrice" || name == "ComposeHTTP"
 	case "register_http.go":

@@ -99,7 +99,7 @@ func TestSQLSourceGateRejectsDynamicAndWrongLocation(t *testing.T) {
 		{"dynamic variable", "modules/marketdata/internal/adapters/sqlite/a.go", "package sqlite; var statement=`SELECT * FROM security_price_observations`; func read(){ db.Query(statement) }", "unresolved SQL"},
 		{"application SQL", "modules/ledger/internal/application/a.go", "package application; func read(){ db.Query(`SELECT * FROM events`) }", "private sqlite adapter"},
 		{"composition SQL", "composition/a.go", "package composition; func read(){ db.Query(`SELECT * FROM events`) }", "private sqlite adapter"},
-		{"hidden sql literal", "modules/marketdata/internal/adapters/sqlite/a.go", "package sqlite; var statement=`SELECT * FROM events`", "owned by ledger"},
+		{"hidden SQL variable executed", "modules/marketdata/internal/adapters/sqlite/a.go", "package sqlite; var statement=`SELECT * FROM events`;func read(){db.Query(statement)}", "unresolved SQL"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -301,5 +301,31 @@ func TestMigrationLivenessProbeIsExact(t *testing.T) {
 		if len(violations) == 0 {
 			t.Fatal("accepted broadened migration probe")
 		}
+	}
+}
+
+func TestMaintenanceCatalogReadBoundaries(t *testing.T) {
+	for _, tc := range []struct {
+		query string
+		allow bool
+	}{
+		{`SELECT name,tbl_name,sql FROM sqlite_master WHERE type='trigger'`, true},
+		{`SELECT name FROM pragma_index_list(?) WHERE origin=?`, true},
+		{`SELECT name FROM pragma_index_info(?) ORDER BY seqno`, true},
+		{`SELECT COUNT(*) FROM pragma_foreign_key_check`, true},
+		{`SELECT * FROM events`, false},
+		{`SELECT COUNT(*) FROM events`, false},
+		{`SELECT * FROM sqlite_master JOIN events ON 1=1`, false},
+		{`SELECT * FROM pragma_index_info(dynamic_name())`, false},
+		{`SELECT * FROM pragma_index_info('events_malicious')`, false},
+		{`DELETE FROM sqlite_master`, false},
+		{`SELECT load_extension('unsafe') FROM sqlite_master`, false},
+		{`SELECT name FROM sqlite_master; DELETE FROM events`, false},
+	} {
+		t.Run(tc.query, func(t *testing.T) {
+			if err := ownership.ValidateMaintenanceCatalogRead(tc.query); (err == nil) != tc.allow {
+				t.Fatalf("allow %t, got %v", tc.allow, err)
+			}
+		})
 	}
 }

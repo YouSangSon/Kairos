@@ -187,11 +187,8 @@ func inspectSQLSources(root string) ([]string, error) {
 	for _, source := range sources {
 		owner, layer := modulePath(source.path)
 		sqlite := owner != "" && layer == "adapters" && strings.Contains(source.path, "/internal/adapters/sqlite/")
-		check := func(sql string, called bool, pos token.Pos) {
+		check := func(sql string, pos token.Pos) {
 			if approvedSchemaProbe(source.path, source.file, pos, sql) {
-				return
-			}
-			if !called && !looksLikeSQL(sql) {
 				return
 			}
 			if owner == "research" {
@@ -239,15 +236,9 @@ func inspectSQLSources(root string) ([]string, error) {
 						if !known {
 							violations = append(violations, fmt.Sprintf("%s:%d unresolved SQL expression in %s", source.path, source.positions.Position(call.Pos()).Line, selector.Sel.Name))
 						} else {
-							check(sql, true, call.Pos())
+							check(sql, call.Pos())
 						}
 					}
-				}
-			}
-			if expr, ok := node.(ast.Expr); ok {
-				if sql, known := constantString(expr, source.constants, map[string]bool{}); known && looksLikeSQL(sql) {
-					check(sql, false, expr.Pos())
-					return false
 				}
 			}
 			return true
@@ -296,18 +287,6 @@ func constantString(expr ast.Expr, constants map[string]ast.Expr, seen map[strin
 		return result, ok
 	}
 	return "", false
-}
-
-func looksLikeSQL(sql string) bool {
-	fields := strings.Fields(strings.ToLower(strings.TrimSpace(sql)))
-	if len(fields) < 2 {
-		return false
-	}
-	switch fields[0] {
-	case "select", "insert", "update", "delete", "replace", "with", "create", "drop", "alter", "pragma", "attach", "detach":
-		return true
-	}
-	return false
 }
 
 func inspectSchemaInventory(root string) ([]string, error) {

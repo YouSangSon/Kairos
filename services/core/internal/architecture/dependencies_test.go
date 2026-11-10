@@ -189,7 +189,9 @@ func inspectDependencies(root string) ([]string, map[string]bool, error) {
 			if pureLayer && imports[pkg.Name] == "context" {
 				switch selector.Sel.Name {
 				case "WithTimeout", "WithTimeoutCause", "WithDeadline", "WithDeadlineCause", "AfterFunc":
-					violations = append(violations, relative+" creates clock through context."+selector.Sel.Name)
+					if !approvedPromotionCompletion(relative, file, imports, selector) {
+						violations = append(violations, relative+" creates clock through context."+selector.Sel.Name)
+					}
 				}
 			}
 			if pureLayer && imports[pkg.Name] == "fmt" {

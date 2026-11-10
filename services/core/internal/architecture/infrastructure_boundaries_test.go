@@ -57,7 +57,7 @@ func TestOuterInfrastructureBoundaries(t *testing.T) {
 		})
 	}
 	for _, path := range []string{"files/private/a.go", "modules/ledger/construction/cli.go"} {
-		violations, err := inspectSQLSources(fixtureSources(t, map[string]string{path: `package infrastructure;const query="SELECT * FROM events"`}))
+		violations, err := inspectSQLSources(fixtureSources(t, map[string]string{path: `package infrastructure;func read(){db.Query("SELECT * FROM events")}`}))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -69,6 +69,8 @@ func TestOuterInfrastructureBoundaries(t *testing.T) {
 
 func TestAllowedOuterInfrastructure(t *testing.T) {
 	sources := map[string]string{
+		"providers/kiwoom/kiwoom.go":                         `package kiwoom;import ledger "omni-folio/services/core/internal/modules/ledger/contracts";type Snapshot=ledger.BrokerSnapshot`,
+		"providers/kiwoom/values.go":                         `package kiwoom;import market "omni-folio/services/core/internal/modules/marketdata/contracts";type Series=market.Series`,
 		"modules/maintenance/construction/cli.go":            `package construction;import "context";import c "omni-folio/services/core/internal/modules/maintenance/contracts";type Session interface{Migrations()c.Migrations;Backups()c.Backups;Close()error};type CLIResources interface{Open(string)(Session,error);OpenExisting(string)(Session,error);VerifyManifest(context.Context,string,string,string)error}`,
 		"composition/sdk.go":                                 `package composition;import sdk "omni-folio/services/core/internal/providers/kiwoom";var pacer=sdk.NewMockReadPacer`,
 		"modules/ledger/compose_identifiers.go":              `package ledger;import d "omni-folio/services/core/internal/modules/ledger/internal/domain";func ComposeIdentifiers()func(string)string{return d.InstrumentIDForSymbol}`,

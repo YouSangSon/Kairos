@@ -123,6 +123,10 @@ type sqlReference struct {
 }
 
 func sqlTableReferences(tokens []sqlToken) ([]sqlReference, bool, error) {
+	return sqlTableReferencesMode(tokens, false)
+}
+
+func sqlTableReferencesMode(tokens []sqlToken, maintenanceMetadata bool) ([]sqlReference, bool, error) {
 	if len(tokens) == 0 || tokens[0].quoted {
 		return nil, false, fmt.Errorf("empty SQL")
 	}
@@ -218,6 +222,19 @@ func sqlTableReferences(tokens []sqlToken) ([]sqlReference, bool, error) {
 					name = ""
 					next += 5
 				case "pragma_table_info", "pragma_table_xinfo", "pragma_foreign_key_list", "pragma_index_list", "pragma_index_info", "pragma_index_xinfo":
+					if maintenanceMetadata {
+						if next+2 >= len(tokens) || (!tokens[next+1].literal && tokens[next+1].text != "?") || tokens[next+2].text != ")" {
+							return nil, false, fmt.Errorf("metadata function requires an object literal or bound name")
+						}
+						if tokens[next+1].literal {
+							if _, known := ObjectOwner(tokens[next+1].text); !known {
+								return nil, false, fmt.Errorf("unregistered metadata object %s", tokens[next+1].text)
+							}
+						}
+						name = "sqlite_master"
+						next += 3
+						break
+					}
 					if next+2 >= len(tokens) || !tokens[next+1].literal || tokens[next+2].text != ")" {
 						return nil, false, fmt.Errorf("schema table function requires fixed owned object literal")
 					}
@@ -227,6 +244,9 @@ func sqlTableReferences(tokens []sqlToken) ([]sqlReference, bool, error) {
 				default:
 					return nil, false, fmt.Errorf("unsupported table-valued function %s", name)
 				}
+			}
+			if maintenanceMetadata && name == "pragma_foreign_key_check" {
+				name = "sqlite_master"
 			}
 			if isCatalog(name) {
 				if token.text != "from" || tablesAtDepth[depth] > 0 {
@@ -741,4 +761,28 @@ func ValidateOwnerPriceWrite(source string) error {
 		return fmt.Errorf("owner-price write has unapproved shape")
 	}
 	return validateSQLTokens("marketdata", tokens, nil, false)
+}
+
+// ValidateMaintenanceCatalogRead checks physical metadata only; callers must also bind it to the reviewed maintenance executor and object provenance.
+func ValidateMaintenanceCatalogRead(source string) error {
+	tokens, err := sqlTokens(source)
+	if err != nil {
+		return err
+	}
+	if len(tokens) == 0 || tokens[0].text != "select" || tokens[0].quoted {
+		return fmt.Errorf("maintenance metadata requires SELECT")
+	}
+	references, write, err := sqlTableReferencesMode(tokens, true)
+	if err != nil {
+		return err
+	}
+	if write || len(references) == 0 {
+		return fmt.Errorf("maintenance metadata has no catalog")
+	}
+	for _, reference := range references {
+		if !isCatalog(reference.name) {
+			return fmt.Errorf("maintenance metadata cannot read business table %s", reference.name)
+		}
+	}
+	return nil
 }
