@@ -136,9 +136,9 @@ func TestModularCandlesMainHelper(t *testing.T) {
 		}
 		config.Transport = modularRoundTripFunc(func(*http.Request) (*http.Response, error) { panic("signal test reached network") })
 	}
-	mockReadRuntimeFactory = func(composition.Resources) mockReadRuntime {
-		return mockReadRuntime{market: config, close: func() { closed = true }}
-	}
+	cliOptions = composition.CLIOptions{MockReadRuntime: func(composition.Resources) composition.MockReadRuntime {
+		return composition.MockReadRuntime{Market: config, Close: func() { closed = true }}
+	}}
 	os.Args = append([]string{"omni-core", "kiwoom-mock-candles"}, modularCaptureArgs(os.Getenv("OMNI_TEST_CANDLE_OUT"))...)
 	main()
 	if !closed {

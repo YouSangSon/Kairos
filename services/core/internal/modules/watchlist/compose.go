@@ -3,7 +3,6 @@ package watchlist
 import (
 	"database/sql"
 	c "omni-folio/services/core/internal/modules/watchlist/contracts"
-	"omni-folio/services/core/internal/modules/watchlist/internal/adapters/jsoninput"
 	"omni-folio/services/core/internal/modules/watchlist/internal/adapters/sqlite"
 	"omni-folio/services/core/internal/modules/watchlist/internal/application"
 	"omni-folio/services/core/internal/storage/observation"
@@ -23,4 +22,3 @@ func Compose(db *sql.DB, registry *observation.Registry, inputs c.InputsReader, 
 	}
 	return Module{API: &application.Service{Inputs: inputs, Store: store}, States: store, Recovery: store}, nil
 }
-func DecodeChange(raw []byte) (*c.WatchlistChange, error) { return jsoninput.Decode(raw) }

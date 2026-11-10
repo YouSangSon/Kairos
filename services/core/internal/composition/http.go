@@ -20,7 +20,7 @@ func (r *Runtime) Routes() http.Handler {
 	})
 	maintenance.RegisterHTTP(mux, r.Maintenance.Schema)
 	ledger.RegisterHTTP(mux, r.Ledger, r.activityCursorKey)
-	market.RegisterHTTP(mux, r.Market, r.OwnerPrice, func() mc.CandleSource { return r.marketData }, r.Ledger.CanonicalInstrumentID, r.now)
+	market.RegisterHTTP(mux, r.Market, r.OwnerPrice, func() mc.CandleSource { return r.Market.Candles }, r.Ledger.CanonicalInstrumentID, r.now)
 	portfolio.RegisterHTTP(mux, r.Portfolio, r.now)
 	watchlist.RegisterHTTP(mux, r.Watchlist.API)
 	trading.RegisterHTTP(mux, r.Trading)

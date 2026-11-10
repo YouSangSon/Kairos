@@ -2,8 +2,8 @@ package http
 
 import (
 	"errors"
+	"log"
 	"net/http"
-	"omni-folio/services/core/internal/application/fault"
 	c "omni-folio/services/core/internal/modules/portfolio/contracts"
 	"omni-folio/services/core/internal/transport/httpjson"
 )
@@ -23,8 +23,8 @@ func portfolioError(err error) *appError {
 		}
 		return &appError{Status: status, Body: APIError{Code: f.Code, Message: f.Message, Field: f.Field}}
 	}
-	existing := fault.As(err)
-	return &appError{Status: existing.Status, Body: APIError{Code: existing.Body.Code, Message: existing.Body.Message, Field: existing.Body.Field}}
+	log.Printf("internal error: %v", err)
+	return &appError{Status: http.StatusInternalServerError, Body: APIError{Code: "internal_error", Message: "internal server error"}}
 }
 
 func writeJSON(w http.ResponseWriter, status int, body any) { httpjson.Write(w, status, body) }

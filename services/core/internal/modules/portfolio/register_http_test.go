@@ -5,8 +5,6 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"omni-folio/services/core/internal/application/fault"
-	"omni-folio/services/core/internal/ledgerdomain"
 	portfolio "omni-folio/services/core/internal/modules/portfolio"
 	c "omni-folio/services/core/internal/modules/portfolio/contracts"
 	"strings"
@@ -109,7 +107,7 @@ func TestHTTPErrorMappingPrivacyAndResponseBound(t *testing.T) {
 		err    error
 		status int
 		code   string
-	}{{&c.Failure{Code: "invalid_query", Message: "bad", Field: "as_of"}, 400, "invalid_query"}, {&c.Failure{Code: "stale", Message: "stale", Conflict: true}, 409, "stale"}, {&fault.Error{Status: 503, Body: ledgerdomain.APIError{Code: "unavailable", Message: "unavailable"}}, 503, "unavailable"}, {errors.New("private-sql-secret"), 500, "internal_error"}} {
+	}{{&c.Failure{Code: "invalid_query", Message: "bad", Field: "as_of"}, 400, "invalid_query"}, {&c.Failure{Code: "stale", Message: "stale", Conflict: true}, 409, "stale"}, {errors.New("private-sql-secret"), 500, "internal_error"}} {
 		q.err = tc.err
 		w := serve(mux, "GET", "/v1/portfolio/xirr")
 		if w.Code != tc.status || !strings.Contains(w.Body.String(), tc.code) || strings.Contains(w.Body.String(), "private-sql-secret") {

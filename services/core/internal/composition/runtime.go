@@ -27,6 +27,7 @@ import (
 
 type Config struct {
 	RequireStartup    bool
+	PreviewTTL        func() time.Duration
 	MarketFixturePath string
 	ResearchFeedPath  string
 	DB                *sql.DB
@@ -47,7 +48,6 @@ type Runtime struct {
 	db                *sql.DB
 	now               func() time.Time
 	activityCursorKey [32]byte
-	marketData        mc.CandleSource
 }
 
 func Compose(config Config) (*Runtime, error) {
@@ -60,8 +60,12 @@ func Compose(config Config) (*Runtime, error) {
 	}
 	clock := config.Now
 	id := config.ID
+	previewTTL := config.PreviewTTL
+	if previewTTL == nil {
+		previewTTL = func() time.Duration { return 15 * time.Minute }
+	}
 	registry := observation.New(config.DB, clock)
-	l, err := ledger.Compose(ledger.Config{DB: config.DB, Observations: registry, Now: clock, ID: id, PreviewTTL: func() time.Duration { return 15 * time.Minute }, CursorKey: r.activityCursorKey})
+	l, err := ledger.Compose(ledger.Config{DB: config.DB, Observations: registry, Now: clock, ID: id, PreviewTTL: previewTTL, CursorKey: r.activityCursorKey})
 	if err != nil {
 		return nil, err
 	}
@@ -89,7 +93,6 @@ func Compose(config Config) (*Runtime, error) {
 	}
 	wInputs.States = w.States
 	r.Ledger, r.Market, r.Trading, r.Watchlist = l, m, t, w
-	r.marketData = m.Candles
 	r.Portfolio = portfolio.Compose(observations.Portfolio{Registry: registry, Ledger: l, Market: m.Queries}, clock)
 	r.Research = research.Compose(research.Config{FeedPath: func() string { return config.ResearchFeedPath }, Now: clock})
 	r.OwnerPrice = market.ComposeOwnerPrice(&observations.OwnerPrice{Registry: registry, Ledger: l, Scoped: m.ScopedPrice}, l.CanonicalInstrumentID)
