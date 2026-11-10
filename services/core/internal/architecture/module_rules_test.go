@@ -59,6 +59,9 @@ func moduleImportViolation(relative, name string) string {
 		return "identifier construction imports non-domain dependency " + name
 	}
 	if targetLayer == "construction" {
+		if _, ok := moduleEdges[target]; !ok {
+			return "unknown module " + target
+		}
 		if cliConstructionConsumer(relative, target) {
 			return ""
 		}
@@ -188,7 +191,11 @@ func approvedDispatchFactory(path string, file *ast.File, pos token.Pos) bool {
 func inspectModuleDeclarations(path string, file *ast.File, imports map[string]string) []string {
 	owner, layer := modulePath(path)
 	if layer == "construction" {
-		return inspectConstructionContract(path, file, imports)
+		violations := inspectConstructionContract(path, file, imports)
+		if _, ok := moduleEdges[owner]; !ok {
+			violations = append(violations, path+" unknown module "+owner)
+		}
+		return violations
 	}
 	if owner == "" {
 		return nil

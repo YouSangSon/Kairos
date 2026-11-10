@@ -27,6 +27,8 @@ func TestMockReadSDKReferencesStayPrivate(t *testing.T) {
 
 func TestOuterInfrastructureBoundaries(t *testing.T) {
 	cases := []struct{ path, source, want string }{
+		{"modules/unknown/construction/cli.go", `package construction;type Session interface{Close()error}`, "unknown module"},
+		{"composition/core.go", `package composition;import _ "omni-folio/services/core/internal/modules/unknown/construction"`, "unknown module"},
 		{"modules/ledger/internal/domain/a.go", `package domain;import _ "omni-folio/services/core/internal/ledgerdomain"`, "forbidden"},
 		{"modules/marketdata/internal/adapters/provider/a.go", `package provider;import sdk "omni-folio/services/core/internal/providers/kiwoom";var pacer=sdk.NewMockReadPacer`, "pacer outside process composition"},
 		{"modules/portfolio/internal/adapters/cli/a.go", `package cli;import _ "omni-folio/services/core/internal/modules/ledger/construction"`, "CLI construction"},
