@@ -2,8 +2,8 @@ package domain
 
 import (
 	"errors"
-	"reflect"
 	"regexp"
+	"slices"
 	"sort"
 	"time"
 )
@@ -63,7 +63,7 @@ func Transition(state *WatchlistState, change WatchlistChange, now func() time.T
 	if err != nil || change.ExpectedRevision < 0 || change.ExpectedRevision > watchlistRevisionLimit {
 		return nil, false, ErrInput
 	}
-	same := reflect.DeepEqual(state.Entries, entries)
+	same := state.Entries != nil && slices.Equal(state.Entries, entries)
 	if state.Revision != change.ExpectedRevision {
 		if state.Revision == change.ExpectedRevision+1 && same {
 			return state, false, nil
@@ -107,7 +107,7 @@ func watchlistQuote(entry WatchlistEntry, observations []SecurityPriceObservatio
 		identities[p.InstrumentID] = true
 		if selected == nil || t[0].After(times[priceTimeKey(*selected)][0]) {
 			selected, ambiguous = p, false
-		} else if t[0].Equal(times[priceTimeKey(*selected)][0]) && !reflect.DeepEqual(watchlistPrice(p), watchlistPrice(selected)) {
+		} else if t[0].Equal(times[priceTimeKey(*selected)][0]) && !sameWatchlistPrice(watchlistPrice(p), watchlistPrice(selected)) {
 			ambiguous = true
 		}
 	}
@@ -124,6 +124,15 @@ func watchlistQuote(entry WatchlistEntry, observations []SecurityPriceObservatio
 		quote.Status = "stale"
 	}
 	return quote
+}
+
+func sameWatchlistPrice(a, b *WatchlistPrice) bool {
+	if a.SourceVersion != nil && b.SourceVersion != nil {
+		left, right := *a, *b
+		left.SourceVersion, right.SourceVersion = nil, nil
+		return *a.SourceVersion == *b.SourceVersion && left == right
+	}
+	return *a == *b
 }
 
 func watchlistPrice(p *SecurityPriceObservation) *WatchlistPrice {

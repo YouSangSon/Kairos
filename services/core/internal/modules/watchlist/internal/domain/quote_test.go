@@ -70,3 +70,25 @@ func TestWatchlistQuoteNeverGuessesIdentityTimeOrProvenance(t *testing.T) {
 		t.Fatal("sample provenance silently chosen")
 	}
 }
+
+func TestWatchlistOwnerQuoteComparesVersionValues(t *testing.T) {
+	at := mustTime("2026-01-02T00:00:00Z")
+	first := SecurityPriceObservation{ObservationID: "first", Source: "owner_declared", InstrumentID: "instrument_aapl", Symbol: "AAPL", Venue: "XNAS", Currency: "USD", Price: "100", PriceAdjustment: "unadjusted", ObservedAt: "2026-01-01T23:00:00Z", FetchedAt: "2026-01-01T23:00:00Z", RecordedAt: "2026-01-01T23:00:00Z", OwnerVersion: "v1"}
+	for _, version := range []string{"v1", "v2"} {
+		t.Run(version, func(t *testing.T) {
+			second := first
+			second.ObservationID = "second"
+			second.OwnerVersion = version
+			observations := []SecurityPriceObservation{first, second}
+			times, _ := quoteTimes(observations)
+			quote := watchlistQuote(watchAAPL, observations, times, at)
+			if version == "v1" {
+				if quote.Status != "unknown" || quote.Price == nil || quote.Price.SourceVersion == nil || *quote.Price.SourceVersion != "v1" {
+					t.Fatalf("equal version values became ambiguous: %+v", quote)
+				}
+			} else if quote.Status != "ambiguous" || quote.Price != nil {
+				t.Fatalf("conflicting versions became equal: %+v", quote)
+			}
+		})
+	}
+}

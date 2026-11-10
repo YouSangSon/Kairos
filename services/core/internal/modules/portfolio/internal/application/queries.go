@@ -3,7 +3,6 @@ package application
 import (
 	"context"
 	"errors"
-	"omni-folio/services/core/internal/codec"
 	c "omni-folio/services/core/internal/modules/portfolio/contracts"
 	"omni-folio/services/core/internal/modules/portfolio/internal/domain"
 	"regexp"
@@ -35,7 +34,8 @@ func (q *Queries) read(ctx context.Context, query c.InputQuery) (domain.Inputs, 
 	return canonical, nil
 }
 func (q *Queries) requested(raw, kind string) (time.Time, error) {
-	if !codec.CanonicalUTC(raw) {
+	at, err := time.Parse(time.RFC3339Nano, raw)
+	if err != nil || at.UTC().Format(time.RFC3339Nano) != raw {
 		message := "holding valuation as_of is invalid"
 		if kind == "cash" {
 			message = "cash valuation query values are invalid"
@@ -46,7 +46,6 @@ func (q *Queries) requested(raw, kind string) (time.Time, error) {
 		}
 		return time.Time{}, f
 	}
-	at, _ := time.Parse(time.RFC3339Nano, raw)
 	if at.After(q.Now().UTC()) {
 		return time.Time{}, &c.Failure{Code: "invalid_query", Message: "valuation as_of cannot be in the future", Field: "as_of"}
 	}

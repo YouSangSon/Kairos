@@ -65,3 +65,38 @@ func TestQueriesPreserveInputFailureClosureAndRequestedCutoff(t *testing.T) {
 		t.Fatal("mixed market cutoff accepted")
 	}
 }
+
+func TestRequestedPreservesCanonicalUTCContract(t *testing.T) {
+	q := &Queries{Now: func() time.Time { return time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC) }}
+	for _, kind := range []string{"cash", "holding"} {
+		for _, tc := range []struct {
+			raw   string
+			valid bool
+		}{
+			{"2026-01-01T00:00:00Z", true}, {"2026-01-01T00:00:00.123456789Z", true},
+			{"2026-01-01T00:00:00+00:00", false}, {"2026-01-01T00:00:00.100Z", false},
+			{"2026-01-01T00:00:00", false}, {"2026-01-01T00:00:00z", false}, {"2026-02-30T00:00:00Z", false}, {"", false},
+		} {
+			t.Run(kind+"/"+tc.raw, func(t *testing.T) {
+				at, err := q.requested(tc.raw, kind)
+				if tc.valid {
+					if err != nil || at.UTC().Format(time.RFC3339Nano) != tc.raw {
+						t.Fatalf("time=%v err=%v", at, err)
+					}
+					return
+				}
+				var failure *c.Failure
+				if !errors.As(err, &failure) || failure.Code != "invalid_query" || failure.Conflict {
+					t.Fatalf("failure changed: %v", err)
+				}
+				message, field := "cash valuation query values are invalid", ""
+				if kind == "holding" {
+					message, field = "holding valuation as_of is invalid", "as_of"
+				}
+				if failure.Message != message || failure.Field != field {
+					t.Fatalf("failure changed: %+v", failure)
+				}
+			})
+		}
+	}
+}
