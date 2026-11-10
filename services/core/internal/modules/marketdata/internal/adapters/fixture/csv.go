@@ -40,7 +40,10 @@ func (f *marketDataFixture) Candles(_ context.Context, symbol, interval string) 
 	return f.series, nil
 }
 
-func Load(path string) (MarketDataPort, error) {
+func New(path string) (MarketDataPort, error) {
+	if path == "" {
+		return nil, nil
+	}
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, fmt.Errorf("open market fixture: %w", err)

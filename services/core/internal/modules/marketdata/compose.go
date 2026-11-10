@@ -49,12 +49,9 @@ func Compose(config Config) (Module, error) {
 	decoder := codec.New(config.Ledger.CanonicalInstrumentID)
 	service := application.New(store, decoder, identity.New(config.Ledger), config.Now, config.ID)
 	scoped := application.NewScopedImporter(store, config.Now)
-	var candles c.CandleSource
-	if config.FixturePath != "" {
-		candles, err = fixture.Load(config.FixturePath)
-		if err != nil {
-			return Module{}, err
-		}
+	candles, err := fixture.New(config.FixturePath)
+	if err != nil {
+		return Module{}, err
 	}
 	return Module{Candles: candles, Queries: service, Imports: service, Observations: service, ScopedPrice: scoped, Recovery: service}, nil
 }
