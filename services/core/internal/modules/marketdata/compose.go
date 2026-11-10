@@ -8,6 +8,7 @@ import (
 	ledger "omni-folio/services/core/internal/modules/ledger/contracts"
 	c "omni-folio/services/core/internal/modules/marketdata/contracts"
 	"omni-folio/services/core/internal/modules/marketdata/internal/adapters/codec"
+	"omni-folio/services/core/internal/modules/marketdata/internal/adapters/fixture"
 	identity "omni-folio/services/core/internal/modules/marketdata/internal/adapters/ledger"
 	"omni-folio/services/core/internal/modules/marketdata/internal/adapters/sqlite"
 	"omni-folio/services/core/internal/modules/marketdata/internal/application"
@@ -15,6 +16,7 @@ import (
 )
 
 type Config struct {
+	FixturePath  string
 	DB           *sql.DB
 	Observations *observation.Registry
 	Ledger       ledger.Queries
@@ -23,6 +25,7 @@ type Config struct {
 }
 
 type Module struct {
+	Candles      c.CandleSource
 	Queries      c.Queries
 	Imports      c.Imports
 	Observations c.Observations
@@ -46,7 +49,14 @@ func Compose(config Config) (Module, error) {
 	decoder := codec.New(config.Ledger.CanonicalInstrumentID)
 	service := application.New(store, decoder, identity.New(config.Ledger), config.Now, config.ID)
 	scoped := application.NewScopedImporter(store, config.Now)
-	return Module{Queries: service, Imports: service, Observations: service, ScopedPrice: scoped, Recovery: service}, nil
+	var candles c.CandleSource
+	if config.FixturePath != "" {
+		candles, err = fixture.Load(config.FixturePath)
+		if err != nil {
+			return Module{}, err
+		}
+	}
+	return Module{Candles: candles, Queries: service, Imports: service, Observations: service, ScopedPrice: scoped, Recovery: service}, nil
 }
 
 func ComposeOwnerPrice(atomic c.AtomicOwnerPriceImport, canonical func(string) string) c.OwnerPriceImports {
