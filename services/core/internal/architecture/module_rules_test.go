@@ -116,7 +116,7 @@ func moduleImportViolation(relative, name string) string {
 		if strings.HasPrefix(relative, "codec/") && !pureModuleImport(name) && name != "io" {
 			return "shared codec imports impure dependency " + name
 		}
-		if strings.HasPrefix(relative, "composition/") && strings.HasPrefix(name, internalPrefix) && target == "" && !strings.HasPrefix(name, internalPrefix+"storage/") && !strings.HasPrefix(name, internalPrefix+"composition/") && name != internalPrefix+"files/private" {
+		if strings.HasPrefix(relative, "composition/") && strings.HasPrefix(name, internalPrefix) && target == "" && !strings.HasPrefix(name, internalPrefix+"storage/") && !strings.HasPrefix(name, internalPrefix+"composition/") && name != internalPrefix+"files/private" && name != internalPrefix+"providers/kiwoom" {
 			return "composition imports private legacy implementation " + name
 		}
 		return ""
@@ -669,9 +669,23 @@ func inspectConstructionContract(path string, file *ast.File, imports map[string
 					violations = append(violations, path+" CLI construction cannot embed arbitrary capability")
 					continue
 				}
-				allowedMethods := map[string]bool{"Ledger": true, "Trading": true, "Imports": true, "OwnerPrice": true, "RequireSchema": true, "Close": true}
+				allowedMethods := map[string]bool{"Close": true}
 				if typ.Name.Name == "CLIResources" {
 					allowedMethods = map[string]bool{"OpenExisting": true, "OpenReadOnly": true, "OpenReadWrite": true}
+					if owner == "maintenance" {
+						allowedMethods = map[string]bool{"Open": true, "OpenExisting": true, "VerifyManifest": true}
+					}
+				} else {
+					switch owner {
+					case "ledger":
+						allowedMethods["Ledger"], allowedMethods["RequireSchema"] = true, true
+					case "trading":
+						allowedMethods["Trading"], allowedMethods["RequireSchema"] = true, true
+					case "marketdata":
+						allowedMethods["Imports"], allowedMethods["OwnerPrice"] = true, true
+					case "maintenance":
+						allowedMethods["Migrations"], allowedMethods["Backups"] = true, true
+					}
 				}
 				if !allowedMethods[field.Names[0].Name] {
 					violations = append(violations, path+" CLI construction exposes generic capability")

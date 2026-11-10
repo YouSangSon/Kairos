@@ -69,6 +69,8 @@ func TestOuterInfrastructureBoundaries(t *testing.T) {
 
 func TestAllowedOuterInfrastructure(t *testing.T) {
 	sources := map[string]string{
+		"modules/maintenance/construction/cli.go":            `package construction;import "context";import c "omni-folio/services/core/internal/modules/maintenance/contracts";type Session interface{Migrations()c.Migrations;Backups()c.Backups;Close()error};type CLIResources interface{Open(string)(Session,error);OpenExisting(string)(Session,error);VerifyManifest(context.Context,string,string,string)error}`,
+		"composition/sdk.go":                                 `package composition;import sdk "omni-folio/services/core/internal/providers/kiwoom";var pacer=sdk.NewMockReadPacer`,
 		"modules/ledger/compose_identifiers.go":              `package ledger;import d "omni-folio/services/core/internal/modules/ledger/internal/domain";func ComposeIdentifiers()func(string)string{return d.InstrumentIDForSymbol}`,
 		"modules/ledger/internal/adapters/cli/a.go":          `package cli;import _ "omni-folio/services/core/internal/files/private";import _ "omni-folio/services/core/internal/modules/ledger/construction"`,
 		"modules/marketdata/internal/adapters/provider/a.go": `package provider;import sdk "omni-folio/services/core/internal/providers/kiwoom";func use(){_ = sdk.ReadMockSecret;_ = sdk.DecodeMockCredentials;_ = sdk.NewMockCandles}`,
