@@ -75,6 +75,7 @@ type Repository interface {
 }
 
 type Decoder interface {
+	PriceSourceID(c.SecurityPriceObservationInput) (string, error)
 	OwnerFX(context.Context, []byte) (*c.OwnerFXSeriesInput, []byte, string, error)
 	OwnerPrice(context.Context, []byte) (*c.OwnerPriceSeriesInput, []byte, string, error)
 	Benchmark(context.Context, []byte) (*c.BenchmarkSeriesInput, []byte, string, error)

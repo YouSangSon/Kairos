@@ -1,10 +1,15 @@
 package composition
 
 import (
+	"bytes"
 	"context"
+	"database/sql"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	maintenance "omni-folio/services/core/internal/modules/maintenance"
+	maint "omni-folio/services/core/internal/modules/maintenance/contracts"
 	"os"
 	"path/filepath"
 	"strings"
@@ -115,5 +120,60 @@ func TestStandaloneVerificationReadsManifestBeforeCandidate(t *testing.T) {
 	}
 	if _, err := os.Stat(candidate); !os.IsNotExist(err) {
 		t.Fatalf("verification created candidate: %v", err)
+	}
+}
+
+func TestStandaloneVerificationRejectsHashBeforeOwnerConstruction(t *testing.T) {
+	runtime, _, resources := migratedRuntime(t)
+	snapshot, err := runtime.Ledger.Snapshot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	golden := filepath.Join(dir, "snapshot.json")
+	candidate := filepath.Join(dir, "candidate.db")
+	manifestPath := filepath.Join(dir, "manifest.json")
+	raw, err := json.Marshal(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(golden, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := runtime.Maintenance.Backups.CreateBackup(context.Background(), maint.BackupRequest{OutputPath: candidate, GoldenPath: golden, ManifestPath: manifestPath})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(candidate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest.DBSHA256 = strings.Repeat("0", 64)
+	manifest.VerificationReceipt.CandidateDBSHA256 = manifest.DBSHA256
+	raw, err = json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(manifestPath, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	factories := 0
+	verifier, err := maintenance.ComposeVerification(maintenance.VerificationConfig{Now: resources.Now, ID: resources.ID, NewOwners: func(*sql.DB) (maintenance.Owners, error) {
+		factories++
+		t.Fatal("hash mismatch reached owner construction")
+		return maintenance.Owners{}, nil
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := verifier.VerifyManifest(context.Background(), candidate, golden, manifestPath); err == nil || err.Error() != "backup database hash or size mismatch" {
+		t.Fatalf("wrong failure before owner proof: %v", err)
+	}
+	if factories != 0 {
+		t.Fatal("hash mismatch constructed owners")
+	}
+	after, err := os.ReadFile(candidate)
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatal("hash rejection changed candidate")
 	}
 }

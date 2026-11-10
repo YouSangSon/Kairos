@@ -24,3 +24,7 @@ func (d *Decoder) Price(input c.SecurityPriceObservationInput) error {
 func (d *Decoder) Listing(input c.InstrumentListingInput) error {
 	return ValidateInstrumentListingInput(input)
 }
+
+func (d *Decoder) PriceSourceID(input c.SecurityPriceObservationInput) (string, error) {
+	return KiwoomLatestTradeObservationID(input.Source, input.InstrumentID, input.Symbol, input.Venue, input.Currency, input.PriceAdjustment, input.ObservedAt)
+}
