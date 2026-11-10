@@ -11,7 +11,9 @@ import (
 )
 
 func NewService(db *sql.DB, now func() time.Time, id func(string) string, ttl func() time.Duration, key [32]byte, resolver *observation.ReadResolver) *Service {
-	return &Service{UseCases: ledger.New(NewLedger(db), now, id, ttl), db: db, activityCursorKey: key, resolver: resolver}
+	store := NewLedger(db)
+	store.activityCursorKey = key
+	return &Service{UseCases: ledger.New(store, now, id, ttl), db: db, resolver: resolver}
 }
 func (s *Service) PreviewImport(ctx context.Context, raw []byte) (*contracts.ImportPreview, *contracts.Error) {
 	input, err := csvimport.Decode(raw)

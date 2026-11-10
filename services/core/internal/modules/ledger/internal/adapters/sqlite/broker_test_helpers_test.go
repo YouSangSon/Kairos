@@ -2,10 +2,12 @@ package sqlite
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
 	"fmt"
 	"net/http"
 	"omni-folio/services/core/internal/modules/ledger/contracts"
+	cursorcodec "omni-folio/services/core/internal/modules/ledger/internal/adapters/cursor"
 	httpadapter "omni-folio/services/core/internal/modules/ledger/internal/adapters/http"
 	"omni-folio/services/core/internal/storage/observation"
 	storage "omni-folio/services/core/internal/storage/sqlite"
@@ -17,9 +19,10 @@ import (
 
 type brokerTestService struct {
 	*Service
-	db  *sql.DB
-	now func() time.Time
-	id  func(string) string
+	db        *sql.DB
+	now       func() time.Time
+	id        func(string) string
+	cursorKey [32]byte
 }
 
 func testBrokerService(t *testing.T) (*brokerTestService, string) {
@@ -58,12 +61,15 @@ func testBrokerService(t *testing.T) (*brokerTestService, string) {
 }
 func newBrokerService(db *sql.DB, now func() time.Time, id func(string) string) *brokerTestService {
 	fixture := &brokerTestService{db: db, now: now, id: id}
+	if _, err := rand.Read(fixture.cursorKey[:]); err != nil {
+		panic(err)
+	}
 	clock := func() time.Time { return fixture.now() }
 	resolver, err := observation.New(db, clock).LedgerReader(ReadStatements())
 	if err != nil {
 		panic(err)
 	}
-	fixture.Service = NewService(db, clock, func(prefix string) string { return fixture.id(prefix) }, func() time.Duration { return 15 * time.Minute }, [32]byte{}, resolver)
+	fixture.Service = NewService(db, clock, func(prefix string) string { return fixture.id(prefix) }, func() time.Duration { return 15 * time.Minute }, fixture.cursorKey, resolver)
 	return fixture
 }
 func mustBrokerTime(raw string) time.Time {
@@ -81,6 +87,19 @@ func (s *brokerTestService) latestKiwoomSnapshot(ctx context.Context, environmen
 }
 func (s *brokerTestService) routes() *http.ServeMux {
 	mux := http.NewServeMux()
-	httpadapter.Register(mux, s.Service, [32]byte{})
+	httpadapter.Register(mux, s.Service, s.cursorKey)
 	return mux
+}
+
+func (s *brokerTestService) encodeLedgerActivityCursor(cursor contracts.ActivityCursor) string {
+	return cursorcodec.Encode(s.cursorKey, cursor)
+}
+func (s *brokerTestService) decodeLedgerActivityCursor(raw string) (*contracts.ActivityCursor, error) {
+	return cursorcodec.Decode(s.cursorKey, raw)
+}
+func holdingValuationService(t *testing.T) *brokerTestService {
+	t.Helper()
+	svc, _ := testBrokerService(t)
+	applyTestCSV(t, svc, "holding-valuation-seed", testCSV("aapl-buy,account-main,BUY,2026-01-10T10:00:00Z,AAPL,3,10,1,USD,-31"))
+	return svc
 }

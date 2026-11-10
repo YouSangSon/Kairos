@@ -232,7 +232,7 @@ func PositionDifferences(positions []BrokerPosition, ledger map[string]*big.Rat)
 		}
 		match := difference.Sign() == 0
 		allMatch = allMatch && match
-		result = append(result, BrokerPositionDifference{symbol, brokerRaw, ledgerRaw, differenceRaw, match})
+		result = append(result, BrokerPositionDifference{Symbol: symbol, BrokerQuantity: brokerRaw, LedgerQuantity: ledgerRaw, Difference: differenceRaw, Match: match})
 	}
 	return result, allMatch, nil
 }

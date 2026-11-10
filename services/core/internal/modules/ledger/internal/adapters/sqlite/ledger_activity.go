@@ -11,10 +11,6 @@ import (
 	ledgerdomain "omni-folio/services/core/internal/modules/ledger/internal/domain"
 )
 
-const defaultActivityLimit = 50
-
-var errInvalidLedgerActivityCursor = contracts.ErrInvalidActivityCursor
-
 type storedLedgerEvent struct {
 	sequence                                           int64
 	eventID, sourceEventID, accountID, typ, occurredAt string
@@ -23,100 +19,70 @@ type storedLedgerEvent struct {
 	correctsSourceEventID, receiptID, recordedAt       string
 }
 
-func (s *Service) Activity(ctx context.Context, limit int, cursor *ledgerActivityCursor) (*LedgerActivityPage, error) {
+type activityScope struct {
+	*ledgerReader
+	cursorKey [32]byte
+}
+
+func (s *Ledger) ActivityRead(ctx context.Context, work func(ledger.ActivityReader) error) error {
 	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer tx.Rollback()
-	if err := requireSchemaContext(ctx, newQueryer(tx)); err != nil {
-		return nil, err
+	if err := work(&activityScope{&ledgerReader{newQueryer(tx)}, s.activityCursorKey}); err != nil {
+		return err
 	}
-	if err := proveLedgerReplayState(ctx, newQueryer(tx), false); err != nil {
-		return nil, err
+	return tx.Commit()
+}
+func (s *activityScope) VerifyActivityStorage(ctx context.Context) error {
+	if err := requireSchemaContext(ctx, s.q); err != nil {
+		return err
 	}
-	if _, err := snapshotFrom(ctx, newQueryer(tx)); err != nil {
-		return nil, err
+	return proveLedgerReplayState(ctx, s.q, false)
+}
+func (s *activityScope) ActivityProof(ctx context.Context) (ledger.ActivityProof, error) {
+	revision, at, err := (&Service{}).proveLedgerEvents(ctx, s.q)
+	return ledger.ActivityProof{Revision: revision, RecordedAt: at}, err
+}
+func (s *activityScope) CursorCoordinates(ctx context.Context, revision, sequence int64) (string, string, error) {
+	var recordedAt, occurredAt string
+	if err := s.q.QueryRowContext(ctx, `SELECT recorded_at FROM events WHERE sequence=?`, revision).Scan(&recordedAt); err != nil {
+		return "", "", err
 	}
-	currentRevision, currentRecordedAt, err := s.proveLedgerEvents(ctx, newQueryer(tx))
-	if err != nil {
-		return nil, err
-	}
-	pageRevision, pageRecordedAt := currentRevision, currentRecordedAt
-	if cursor != nil {
-		if cursor.LedgerRevision > currentRevision {
-			return nil, errInvalidLedgerActivityCursor
-		}
-		var revisionRecordedAt, sequenceOccurredAt string
-		if err := tx.QueryRowContext(ctx, `SELECT recorded_at FROM events WHERE sequence=?`, cursor.LedgerRevision).Scan(&revisionRecordedAt); err != nil {
-			return nil, errInvalidLedgerActivityCursor
-		}
-		if err := tx.QueryRowContext(ctx, `SELECT occurred_at FROM events WHERE sequence=?`, cursor.Sequence).Scan(&sequenceOccurredAt); err != nil {
-			return nil, errInvalidLedgerActivityCursor
-		}
-		if cursor.LedgerRecordedAt != revisionRecordedAt || cursor.OccurredAt != sequenceOccurredAt {
-			return nil, errInvalidLedgerActivityCursor
-		}
-		pageRevision, pageRecordedAt = cursor.LedgerRevision, revisionRecordedAt
-	}
-
-	var rows *sql.Rows
+	err := s.q.QueryRowContext(ctx, `SELECT occurred_at FROM events WHERE sequence=?`, sequence).Scan(&occurredAt)
+	return recordedAt, occurredAt, err
+}
+func (s *activityScope) EncodeActivityCursor(cursor contracts.ActivityCursor) string {
+	return cursorcodec.Encode(s.cursorKey, cursor)
+}
+func (s *activityScope) ActivityEvents(ctx context.Context, revision int64, limit int, cursor *contracts.ActivityCursor) ([]ledger.ActivityEvent, error) {
+	var rows Rows
+	var err error
 	if cursor == nil {
-		rows, err = tx.QueryContext(ctx, `SELECT sequence,type,occurred_at,recorded_at,COALESCE(symbol,''),COALESCE(quantity,''),COALESCE(price,''),COALESCE(fee,''),currency,amount,COALESCE(counter_currency,''),COALESCE(counter_amount,'') FROM events WHERE sequence<=? ORDER BY rtrim(occurred_at,'Z') DESC,sequence DESC LIMIT ?`, pageRevision, limit+1)
+		rows, err = s.q.QueryContext(ctx, `SELECT sequence,type,occurred_at,recorded_at,COALESCE(symbol,''),COALESCE(quantity,''),COALESCE(price,''),COALESCE(fee,''),currency,amount,COALESCE(counter_currency,''),COALESCE(counter_amount,'') FROM events WHERE sequence<=? ORDER BY rtrim(occurred_at,'Z') DESC,sequence DESC LIMIT ?`, revision, limit)
 	} else {
-		rows, err = tx.QueryContext(ctx, `SELECT sequence,type,occurred_at,recorded_at,COALESCE(symbol,''),COALESCE(quantity,''),COALESCE(price,''),COALESCE(fee,''),currency,amount,COALESCE(counter_currency,''),COALESCE(counter_amount,'') FROM events WHERE sequence<=? AND (rtrim(occurred_at,'Z')<rtrim(?,'Z') OR (occurred_at=? AND sequence<?)) ORDER BY rtrim(occurred_at,'Z') DESC,sequence DESC LIMIT ?`, pageRevision, cursor.OccurredAt, cursor.OccurredAt, cursor.Sequence, limit+1)
+		rows, err = s.q.QueryContext(ctx, `SELECT sequence,type,occurred_at,recorded_at,COALESCE(symbol,''),COALESCE(quantity,''),COALESCE(price,''),COALESCE(fee,''),currency,amount,COALESCE(counter_currency,''),COALESCE(counter_amount,'') FROM events WHERE sequence<=? AND (rtrim(occurred_at,'Z')<rtrim(?,'Z') OR (occurred_at=? AND sequence<?)) ORDER BY rtrim(occurred_at,'Z') DESC,sequence DESC LIMIT ?`, revision, cursor.OccurredAt, cursor.OccurredAt, cursor.Sequence, limit)
 	}
 	if err != nil {
 		return nil, err
 	}
-	type item struct {
-		sequence int64
-		view     LedgerActivity
-	}
-	items := make([]item, 0, limit+1)
+	defer rows.Close()
+	items := make([]ledger.ActivityEvent, 0, limit)
 	for rows.Next() {
-		var entry item
-		var symbol, quantity, price, fee, counterCurrency, counterAmount string
-		if err := rows.Scan(&entry.sequence, &entry.view.Type, &entry.view.OccurredAt, &entry.view.RecordedAt, &symbol, &quantity, &price, &fee, &entry.view.Currency, &entry.view.Amount, &counterCurrency, &counterAmount); err != nil {
-			rows.Close()
+		var entry ledger.ActivityEvent
+		if err := rows.Scan(&entry.Sequence, &entry.Type, &entry.OccurredAt, &entry.RecordedAt, &entry.Symbol, &entry.Quantity, &entry.Price, &entry.Fee, &entry.Currency, &entry.Amount, &entry.CounterCurrency, &entry.CounterAmount); err != nil {
 			return nil, err
 		}
-		entry.view.Symbol = optionalText(symbol)
-		entry.view.Quantity = optionalText(quantity)
-		entry.view.Price = optionalText(price)
-		entry.view.Fee = optionalText(fee)
-		entry.view.CounterCurrency = optionalText(counterCurrency)
-		entry.view.CounterAmount = optionalText(counterAmount)
-		entry.view.IsCorrection = entry.view.Type == "CASH_VOID"
 		items = append(items, entry)
 	}
 	if err := rows.Err(); err != nil {
-		rows.Close()
 		return nil, err
 	}
 	if err := rows.Close(); err != nil {
 		return nil, err
 	}
-	result := &LedgerActivityPage{
-		Source: "local_ledger", BrokerFreshness: "unverified", LedgerRevision: revision(pageRevision),
-		RecordedAt: pageRecordedAt, Events: []LedgerActivity{}, NextCursor: nil,
-	}
-	if len(items) > limit {
-		last := items[limit-1]
-		next := cursorcodec.Encode(s.activityCursorKey, ledgerActivityCursor{
-			Version: 1, LedgerRevision: pageRevision, LedgerRecordedAt: pageRecordedAt,
-			OccurredAt: last.view.OccurredAt, Sequence: last.sequence,
-		})
-		result.NextCursor = &next
-		items = items[:limit]
-	}
-	for _, entry := range items {
-		result.Events = append(result.Events, entry.view)
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, err
-	}
-	return result, nil
+	return items, nil
 }
 
 func (s *Service) proveLedgerEvents(ctx context.Context, tx queryer) (int64, string, error) {
@@ -189,11 +155,4 @@ func (s *Service) validateStoredLedgerEvent(ctx context.Context, tx queryer, sto
 		}
 	}
 	return nil
-}
-
-func optionalText(value string) *string {
-	if value == "" {
-		return nil
-	}
-	return &value
 }

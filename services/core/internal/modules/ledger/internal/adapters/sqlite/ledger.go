@@ -22,14 +22,17 @@ type Querier interface {
 	QueryRowContext(context.Context, string, ...any) observation.Scanner
 }
 
-type Ledger struct{ db *sql.DB }
+type Ledger struct {
+	db                *sql.DB
+	activityCursorKey [32]byte
+}
 type ledgerReader struct{ q Querier }
 type ledgerWriteScope struct {
 	*ledgerReader
 	tx *sql.Tx
 }
 
-func NewLedger(db *sql.DB) *Ledger            { return &Ledger{db} }
+func NewLedger(db *sql.DB) *Ledger            { return &Ledger{db: db} }
 func NewLedgerReader(q Querier) ledger.Reader { return &ledgerReader{q} }
 
 func (s *Ledger) Write(ctx context.Context, work func(ledger.WriteScope) error) error {
