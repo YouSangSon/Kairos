@@ -43,11 +43,15 @@ func RunCLI(ctx context.Context, args []string, options CLIOptions, input *os.Fi
 		factory = mockReadRuntimeFactory
 	}
 	switch args[0] {
-	case "owner-price-import", "owner-fx-import", "benchmark-import", "benchmark-status", "kiwoom-mock-candles":
+	case "owner-price-import", "owner-fx-import", "benchmark-import", "benchmark-status":
+		return market.RunCLI(ctx, args[0], args[1:], market.CLIConfig{Resources: resources.Market(), CanonicalInstrumentID: ledger.ComposeIdentifiers()}, output)
+	case "kiwoom-mock-candles":
 		runtime := factory(resources)
 		defer runtime.Close()
 		return market.RunCLI(ctx, args[0], args[1:], runtime.Market, output)
-	case "ledger-replay-preview", "ledger-replay-activate", "ledger-export", "kiwoom-mock-sync":
+	case "ledger-replay-preview", "ledger-replay-activate", "ledger-export":
+		return ledger.RunCLI(ctx, args[0], args[1:], ledger.CLIConfig{Resources: resources.Ledger(), Stderr: stderr}, output)
+	case "kiwoom-mock-sync":
 		runtime := factory(resources)
 		defer runtime.Close()
 		runtime.Ledger.Stderr = stderr
