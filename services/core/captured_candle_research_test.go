@@ -8,6 +8,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"net/http"
+	market "omni-folio/services/core/internal/modules/marketdata"
+	sdk "omni-folio/services/core/internal/providers/kiwoom"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -37,8 +39,8 @@ func TestCapturedCandleResearchActualProducerAndPythonCannotEnterPaperAuthority(
 			"low_pric": row[4], "cur_prc": row[5], "trde_qty": row[6],
 		})
 	}
-	transport, calls := candleCaptureTLS(t, func(w http.ResponseWriter, r *http.Request) {
-		var body kiwoomCandleRequestBody
+	transport, calls := modularCandleTLS(t, func(w http.ResponseWriter, r *http.Request) {
+		var body sdk.MockCandleRequestBody
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || r.Header.Get("api-id") != "ka10081" || body.StockCode != "005930" || body.BaseDate != "20300101" {
 			t.Errorf("synthetic capture request: %+v, %v", body, err)
 		}
@@ -48,16 +50,15 @@ func TestCapturedCandleResearchActualProducerAndPythonCannotEnterPaperAuthority(
 	})
 	path := filepath.Join(t.TempDir(), "synthetic-capture.json")
 	var captureReceipt bytes.Buffer
-	if err := runKiwoomMockCandles(context.Background(), captureArgs(path, "1d"), &captureReceipt, func(context.Context) ([]byte, error) {
-		return mockSyncSecret("9876543210"), nil
-	}, transport, mockSyncNow, mockSyncPacer()); err != nil {
+	if err := market.RunCLI(context.Background(), "kiwoom-mock-candles", modularCaptureArgs(path), market.CLIConfig{ReadSecret: func(context.Context) ([]byte, error) { return modularSecret(), nil }, Transport: transport, Now: modularNow, Pacer: modularPacer()}, &captureReceipt); err != nil {
 		t.Fatal(err)
 	}
-	capture, rawCapture := readCapture(t, path)
+
+	capture, rawCapture := modularReadCapture(t, path)
 	if len(capture.Bars) != 120 || calls.Load() != 2 {
 		t.Fatalf("actual producer did not retain 120 synthetic observations: %d rows, %d calls", len(capture.Bars), calls.Load())
 	}
-	assertCaptureReceipt(t, captureReceipt.Bytes(), rawCapture, 120)
+	modularAssertReceipt(t, captureReceipt.Bytes(), rawCapture, 120)
 	command := exec.Command("python3", "-B", "-m", "omni_research.capture_cli", "--capture", path,
 		"--config", filepath.Join(root, "contracts/fixtures/strategy-improvement-paper-config.json"))
 	command.Env = append(os.Environ(), "PYTHONDONTWRITEBYTECODE=1", "PYTHONPATH="+filepath.Join(root, "services/research"))
@@ -73,8 +74,8 @@ func TestCapturedCandleResearchActualProducerAndPythonCannotEnterPaperAuthority(
 	var report struct {
 		SchemaVersion string `json:"schema_version"`
 		Source        struct {
-			SHA256  string              `json:"sha256"`
-			Capture kiwoomCandleCapture `json:"capture"`
+			SHA256  string                 `json:"sha256"`
+			Capture modularCaptureDocument `json:"capture"`
 		} `json:"source"`
 		Analysis struct {
 			Comparisons map[string]bool `json:"threshold_comparisons"`

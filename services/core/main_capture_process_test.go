@@ -145,16 +145,55 @@ func TestModularCandlesMainHelper(t *testing.T) {
 		t.Fatal("command runtime was not closed")
 	}
 }
-func modularReadCapture(t *testing.T, path string) (struct{}, []byte) {
+
+type modularCandleTimeEvidence struct {
+	ProviderField    string `json:"provider_field"`
+	ProviderFormat   string `json:"provider_format"`
+	ProviderTimezone string `json:"provider_timezone"`
+	BarBoundaries    string `json:"bar_boundaries"`
+	PublicationTime  string `json:"publication_time"`
+	BarCompletion    string `json:"bar_completion"`
+}
+
+type modularCandleCaptureBounds struct {
+	BarsLimit  int    `json:"bars_limit"`
+	PagesLimit int    `json:"pages_limit"`
+	Selection  string `json:"selection"`
+}
+
+type modularCaptureDocument struct {
+	SchemaVersion  string                        `json:"schema_version"`
+	Scope          string                        `json:"scope"`
+	Provider       string                        `json:"provider"`
+	Environment    sdk.KiwoomEnvironment         `json:"environment"`
+	Venue          string                        `json:"venue"`
+	Currency       string                        `json:"currency"`
+	Symbol         string                        `json:"symbol"`
+	Interval       string                        `json:"interval"`
+	Request        sdk.MockCandleRequestEvidence `json:"request"`
+	FetchStartedAt string                        `json:"fetch_started_at"`
+	FetchedAt      string                        `json:"fetched_at"`
+	TimeEvidence   modularCandleTimeEvidence     `json:"time_evidence"`
+	Bounds         modularCandleCaptureBounds    `json:"bounds"`
+	Bars           []sdk.MockCapturedCandle      `json:"bars"`
+}
+
+func modularReadCapture(t *testing.T, path string) (modularCaptureDocument, []byte) {
 	t.Helper()
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
+	var capture modularCaptureDocument
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&capture) != nil || decoder.Decode(new(any)) != io.EOF {
+		t.Fatal("published capture is not closed typed JSON")
+	}
 	if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0600 {
 		t.Fatal("capture output is not private mode 0600")
 	}
-	return struct{}{}, raw
+	return capture, raw
 }
 func modularAssertReceipt(t *testing.T, output, raw []byte, rows int) {
 	t.Helper()
