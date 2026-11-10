@@ -2,7 +2,6 @@ package sqlite
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"omni-folio/services/core/migrations"
 	"strings"
@@ -96,33 +95,4 @@ func requireKiwoomMockBinding(ctx context.Context, q orderQuerier, expectedAccou
 		}
 	}
 	return rows.Err()
-}
-
-func (s *Service) RecordMockBrokerSnapshot(ctx context.Context, ledgerAccount, expectedAccount string, snapshot *KiwoomSnapshot) (*BrokerKnownGoodSnapshot, error) {
-	if ledgerAccount != "account-main" || !orderAlias(expectedAccount, "account") || snapshot == nil ||
-		snapshot.Environment != KiwoomMock || snapshot.AccountRef != expectedAccount {
-		return nil, errors.New("invalid Kiwoom mock account binding")
-	}
-	if err := validateKiwoomSnapshot(snapshot); err != nil {
-		return nil, err
-	}
-	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{})
-	if err != nil {
-		return nil, err
-	}
-	defer tx.Rollback()
-	if err := preflightKiwoomMockSync(ctx, newQueryer(tx)); err != nil {
-		return nil, err
-	}
-	if err := requireKiwoomMockBinding(ctx, newQueryer(tx), expectedAccount); err != nil {
-		return nil, err
-	}
-	stored, err := s.appendKiwoomSnapshot(ctx, tx, ledgerAccount, snapshot)
-	if err != nil {
-		return nil, err
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, err
-	}
-	return stored, nil
 }

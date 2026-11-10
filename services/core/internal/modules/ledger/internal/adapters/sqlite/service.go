@@ -9,18 +9,11 @@ import (
 	"omni-folio/services/core/internal/modules/ledger/contracts"
 	ledger "omni-folio/services/core/internal/modules/ledger/internal/application"
 	"omni-folio/services/core/internal/storage/observation"
-	"regexp"
-	"strings"
-	"time"
-	"unicode"
-	"unicode/utf8"
 )
 
 type Service struct {
 	*ledger.UseCases
 	db                *sql.DB
-	now               func() time.Time
-	id                func(string) string
 	activityCursorKey [32]byte
 	resolver          *observation.ReadResolver
 }
@@ -35,13 +28,6 @@ type LedgerActivity = contracts.LedgerActivity
 type ledgerActivityCursor = contracts.ActivityCursor
 type InstrumentLedger = contracts.InstrumentLedger
 type ledgerReplayPreview = contracts.ReplayPreview
-type BrokerPositionDifference = contracts.BrokerPositionDifference
-type BrokerKnownGoodSnapshot = contracts.BrokerKnownGoodSnapshot
-type BrokerReconciliationView = contracts.BrokerReconciliationView
-type KiwoomSnapshot = contracts.BrokerSnapshot
-type KiwoomTotals = contracts.BrokerTotals
-type KiwoomPosition = contracts.BrokerPosition
-type KiwoomOpenOrder = contracts.BrokerOpenOrder
 type KiwoomEnvironment = contracts.BrokerEnvironment
 type KiwoomExchange = contracts.BrokerExchange
 
@@ -53,35 +39,9 @@ const (
 	zeroTime                              = "1970-01-01T00:00:00Z"
 )
 
-var strategySHA256Pattern = regexp.MustCompile(`^[a-f0-9]{64}$`)
-var kiwoomStockPattern = regexp.MustCompile(`^[0-9]{6}$`)
-var orderAliasPattern = regexp.MustCompile(`^kiwoom_(account|order|execution)_[A-Za-z0-9_-]{24}$`)
-
 func parseDecimal(v string) (*big.Rat, error)  { return exact.ParseDecimal(v) }
 func formatDecimal(v *big.Rat) (string, error) { return exact.FormatDecimal(v) }
 func revision(v int64) string                  { return fmt.Sprintf("rev_%010d", v) }
-func orderAlias(raw, kind string) bool {
-	return orderAliasPattern.MatchString(raw) && strings.HasPrefix(raw, "kiwoom_"+kind+"_")
-}
-func kiwoomValidTime(raw string) bool {
-	if !kiwoomStockPattern.MatchString(raw) {
-		return false
-	}
-	_, err := time.Parse("150405", raw)
-	return err == nil
-}
-func kiwoomText(raw string) (string, bool) {
-	v := strings.TrimSpace(raw)
-	if v == "" || !utf8.ValidString(v) || utf8.RuneCountInString(v) > 80 {
-		return "", false
-	}
-	for _, r := range v {
-		if unicode.IsControl(r) {
-			return "", false
-		}
-	}
-	return v, true
-}
 func snapshotFrom(ctx context.Context, q queryer) (*PortfolioSnapshot, error) {
 	return ledger.Snapshot(ctx, NewLedgerReader(q))
 }

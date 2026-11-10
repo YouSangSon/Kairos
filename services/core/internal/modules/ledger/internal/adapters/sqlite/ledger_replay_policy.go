@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"omni-folio/services/core/internal/codec"
+	ledger "omni-folio/services/core/internal/modules/ledger/internal/application"
 	"omni-folio/services/core/migrations"
 	"strings"
 	"time"
@@ -74,112 +75,75 @@ func ledgerPrefixSHA256(ctx context.Context, q queryer, revision int64) (string,
 	return hex.EncodeToString(hash.Sum(nil)), nil
 }
 
-func ledgerReplayAt(ctx context.Context, q queryer, revision int64, recordedAt string) (*ledgerReplayPreview, error) {
-	old, err := snapshotFromPolicy(ctx, q, legacyFIFOCostBasisPolicy, revision)
+type replayScope struct {
+	*ledgerReader
+	tx *sql.Tx
+}
+
+func (s *Ledger) ReplayRead(ctx context.Context, work func(ledger.ReplayReader) error) error {
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
-		return nil, fmt.Errorf("legacy ledger replay: %w", err)
+		return err
 	}
-	corrected, err := snapshotFromPolicy(ctx, q, fifoCostBasisPolicy, revision)
+	defer tx.Rollback()
+	if err := work(&replayScope{ledgerReader: &ledgerReader{newQueryer(tx)}}); err != nil {
+		return err
+	}
+	return nil
+}
+func (s *Ledger) ReplayWrite(ctx context.Context, work func(ledger.ReplayJournal) error) error {
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return nil, fmt.Errorf("corrected ledger replay: %w", err)
+		return err
 	}
-	if !codec.CanonicalUTC(recordedAt) {
-		return nil, errors.New("captured ledger recorded_at is not canonical UTC")
+	defer tx.Rollback()
+	if err := work(&replayScope{&ledgerReader{newQueryer(tx)}, tx}); err != nil {
+		return err
 	}
-	// Duplicate-only imports advance metadata without adding a new event.
-	old.RecordedAt, corrected.RecordedAt = recordedAt, recordedAt
+	return tx.Commit()
+}
+func (s *replayScope) CaptureReplayOrigin(ctx context.Context) (ledger.ReplayCapture, error) {
+	if err := requireSchemaContext(ctx, s.q); err != nil {
+		return ledger.ReplayCapture{}, err
+	}
+	if err := proveLedgerReplayState(ctx, s.q, true); err != nil {
+		return ledger.ReplayCapture{}, err
+	}
+	var result ledger.ReplayCapture
+	err := s.q.QueryRowContext(ctx, `SELECT policy,legacy_revision FROM ledger_replay_state WHERE singleton=1`).Scan(&result.Policy, &result.LegacyRevision)
+	return result, err
+}
+func (s *replayScope) VerifiedLedgerRevision(ctx context.Context) (int64, error) {
+	revision, _, err := (&Service{}).proveLedgerEvents(ctx, s.q)
+	return revision, err
+}
+func (s *replayScope) ReplayEvidence(ctx context.Context, revision int64, old, corrected *PortfolioSnapshot) (ledger.ReplayEvidence, error) {
 	_, oldSHA, err := codec.JSONHash(old)
 	if err != nil {
-		return nil, err
+		return ledger.ReplayEvidence{}, err
 	}
 	_, correctedSHA, err := codec.JSONHash(corrected)
 	if err != nil {
-		return nil, err
+		return ledger.ReplayEvidence{}, err
 	}
-	eventsSHA, err := ledgerPrefixSHA256(ctx, q, revision)
+	eventsSHA, err := ledgerPrefixSHA256(ctx, s.q, revision)
 	if err != nil {
-		return nil, err
+		return ledger.ReplayEvidence{}, err
 	}
-	return &ledgerReplayPreview{revision, eventsSHA, oldSHA, correctedSHA, old, corrected}, nil
+	return ledger.ReplayEvidence{EventsSHA256: eventsSHA, LegacySnapshotSHA256: oldSHA, SnapshotSHA256: correctedSHA}, nil
 }
-
-func (s *Service) PreviewReplay(ctx context.Context) (*ledgerReplayPreview, error) {
-	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
-	if err != nil {
-		return nil, err
+func (s *replayScope) RecordReplayTransition(ctx context.Context, preview *ledgerReplayPreview, activatedAt string) error {
+	if _, err := s.tx.ExecContext(ctx, `INSERT INTO ledger_replay_transition VALUES(1,?,?,?,?,?,?)`, preview.LedgerRevision, preview.Snapshot.RecordedAt,
+		preview.EventsSHA256, preview.LegacySnapshotSHA256, preview.SnapshotSHA256, activatedAt); err != nil {
+		return err
 	}
-	defer tx.Rollback()
-	return prepareLedgerReplay(ctx, tx)
+	if _, err := s.tx.ExecContext(ctx, `UPDATE ledger_replay_state SET policy=? WHERE singleton=1`, fifoCostBasisPolicy); err != nil {
+		return err
+	}
+	return proveLedgerReplayState(ctx, s.q, false)
 }
-
-func prepareLedgerReplay(ctx context.Context, tx *sql.Tx) (*ledgerReplayPreview, error) {
-	if err := requireSchemaContext(ctx, newQueryer(tx)); err != nil {
-		return nil, err
-	}
-	if err := proveLedgerReplayState(ctx, newQueryer(tx), true); err != nil {
-		return nil, err
-	}
-	var policy string
-	var legacyRevision int64
-	if err := tx.QueryRowContext(ctx, `SELECT policy,legacy_revision FROM ledger_replay_state WHERE singleton=1`).Scan(&policy, &legacyRevision); err != nil {
-		return nil, err
-	}
-	if policy != legacyFIFOCostBasisPolicy || legacyRevision <= 0 {
-		return nil, errors.New("ledger does not require a legacy replay transition")
-	}
-	revision, _, err := (&Service{}).proveLedgerEvents(ctx, newQueryer(tx))
-	if err != nil {
-		return nil, err
-	}
-	if revision != legacyRevision {
-		return nil, errors.New("legacy replay preparation changed the ledger revision")
-	}
-	var recordedAt string
-	if err := tx.QueryRowContext(ctx, `SELECT recorded_at FROM ledger_meta WHERE singleton=1`).Scan(&recordedAt); err != nil {
-		return nil, err
-	}
-	preview, err := ledgerReplayAt(ctx, newQueryer(tx), revision, recordedAt)
-	if err != nil {
-		return nil, err
-	}
-	return preview, nil
-}
-
-func (s *Service) ActivateReplay(ctx context.Context, expectedRevision int64, expectedEventsSHA, expectedSnapshotSHA string) (*ledgerReplayPreview, error) {
-	now := s.now()
-	if !strategySHA256Pattern.MatchString(expectedEventsSHA) || !strategySHA256Pattern.MatchString(expectedSnapshotSHA) || expectedRevision <= 0 {
-		return nil, errors.New("replay activation requires the exact preview revision, events SHA and corrected snapshot SHA")
-	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, err
-	}
-	defer tx.Rollback()
-	preview, err := prepareLedgerReplay(ctx, tx)
-	if err != nil {
-		return nil, err
-	}
-	if preview.LedgerRevision != expectedRevision || preview.EventsSHA256 != expectedEventsSHA || preview.SnapshotSHA256 != expectedSnapshotSHA {
-		return nil, errors.New("ledger replay preview changed; review a new preview before activation")
-	}
-	recordedAt, err := time.Parse(time.RFC3339Nano, preview.Snapshot.RecordedAt)
-	if err != nil || now.Before(recordedAt) {
-		return nil, errors.New("ledger replay activation precedes the captured ledger")
-	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO ledger_replay_transition VALUES(1,?,?,?,?,?,?)`, preview.LedgerRevision, preview.Snapshot.RecordedAt,
-		preview.EventsSHA256, preview.LegacySnapshotSHA256, preview.SnapshotSHA256, now.UTC().Format(time.RFC3339Nano)); err != nil {
-		return nil, err
-	}
-	if _, err := tx.ExecContext(ctx, `UPDATE ledger_replay_state SET policy=? WHERE singleton=1`, fifoCostBasisPolicy); err != nil {
-		return nil, err
-	}
-	if err := proveLedgerReplayState(ctx, newQueryer(tx), false); err != nil {
-		return nil, err
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, err
-	}
-	return preview, nil
+func ledgerReplayAt(ctx context.Context, q queryer, revision int64, recordedAt string) (*ledgerReplayPreview, error) {
+	return ledger.ReplayAt(ctx, &replayScope{ledgerReader: &ledgerReader{q}}, revision, recordedAt)
 }
 
 func proveLedgerReplayState(ctx context.Context, q queryer, archival bool) error {

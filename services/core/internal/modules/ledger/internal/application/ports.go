@@ -45,6 +45,10 @@ type WriteScope interface {
 }
 
 type Repository interface {
+	BrokerWrite(context.Context, func(BrokerJournal) error) error
+	BrokerRead(context.Context, func(BrokerReader) error) error
+	ReplayWrite(context.Context, func(ReplayJournal) error) error
+	ReplayRead(context.Context, func(ReplayReader) error) error
 	Write(context.Context, func(WriteScope) error) error
 	Read(context.Context, func(Reader) error) error
 }
