@@ -10,15 +10,21 @@ import (
 )
 
 type UnitOfWork interface {
+	Decide(context.Context, func(WriteScope) (bool, error)) error
+	Inspect(context.Context, func(InspectionScope) error) error
 	Write(context.Context, func(WriteScope) error) error
 }
 
 type PromotionReader interface {
+	PromotionStatusContext(context.Context, string) (*PromotionClaim, *PromotionDecision, bool, error)
+	ImprovementContext(context.Context, string, func(StrategyRegistryProof, *PromotionClaim, bool) error) error
 	PromotionInputs(context.Context, string, string, string, string) (researchdomain.Strategy, researchdomain.Strategy, researchdomain.Execution, error)
 	LoadPromotion(context.Context, string) (*PromotionClaim, *PromotionDecision, bool, error)
 }
 
 type WriteScope interface {
+	Market() MarketJournal
+	Evaluations() EvaluationsJournal
 	Orders() OrdersJournal
 	Authority() AuthorityJournal
 	Reservations() ReservationsJournal
@@ -31,6 +37,7 @@ type WriteScope interface {
 }
 
 type OrdersJournal interface {
+	DispatchTime(context.Context, string) (time.Time, error)
 	OrderRecords
 	AccountOrderIDs(context.Context, string) ([]string, error)
 	LoadOrderIntentFrom(ctx context.Context, orderID string) (OrderIntent, error)
@@ -100,7 +107,16 @@ type PromotionsJournal interface {
 	InsertPromotionDecision(context.Context, PromotionDecision) error
 }
 
+type RunnerLeaseReader interface {
+	LoadLease(context.Context) (RunnerLeaseRecord, error)
+	CurrentPaperPerformanceSelection(context.Context) (int64, string, string, error)
+}
 type RunnerJournal interface {
+	RunnerLeaseReader
+
+	CompareAndSwapLease(context.Context, RunnerLeaseRecord, RunnerLeaseRecord) error
+	RollbackBinding(context.Context, string, string) (RunnerRollbackBinding, error)
+
 	RejectLiveLease(context.Context, time.Time) error
 	RejectIncompleteRun(context.Context, string, string) error
 	ValidatePaperRunnerLeaseTx(ctx context.Context, claim *RunnerClaim, accountRef, ownerID string, now time.Time) error

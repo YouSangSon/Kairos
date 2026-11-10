@@ -5,7 +5,6 @@ import (
 	"omni-folio/services/core/internal/exact"
 	paperdomain "omni-folio/services/core/internal/modules/trading/internal/domain/paper"
 	"regexp"
-	"time"
 )
 
 type OrderIntent struct {
@@ -113,26 +112,6 @@ func ValidateOrderIntent(intent OrderIntent) error {
 
 func validOrderInteger(raw string) bool {
 	return len(raw) <= 32 && orderIntegerPattern.MatchString(raw)
-}
-
-func validPaperTargetQuantity(raw string) bool {
-	return paperdomain.ValidCapitalizedQuantity(raw, true)
-}
-
-func canonicalPaperTime(raw string) (string, bool) {
-	value, ok := parsePaperTime(raw)
-	if !ok {
-		return "", false
-	}
-	return value.Format(canonicalPaperTimeLayout), true
-}
-
-func parsePaperTime(raw string) (time.Time, bool) {
-	value, err := time.Parse(time.RFC3339Nano, raw)
-	if err != nil || value.Location() != time.UTC {
-		return time.Time{}, false
-	}
-	return value, value.Format(time.RFC3339Nano) == raw || value.Format(canonicalPaperTimeLayout) == raw
 }
 
 const (

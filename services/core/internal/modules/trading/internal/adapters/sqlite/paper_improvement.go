@@ -5,77 +5,43 @@ import (
 	"database/sql"
 	"errors"
 	"omni-folio/services/core/internal/modules/trading/contracts"
+	"omni-folio/services/core/internal/modules/trading/internal/application"
 )
 
 type PaperImprovementReceipt = contracts.PaperImprovementReceipt
 
-func (s *Store) ImprovePaperCandidate(ctx context.Context, account, attemptID string, artifact, raw []byte) (*PaperImprovementReceipt, error) {
-	if ctx == nil {
-		return nil, errors.New("paper improvement context is required")
-	}
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	if s == nil || s.db == nil || !orderAlias(account, "account") || !safeOrderID(attemptID) {
-		return nil, errors.New("paper improvement identifiers are invalid")
-	}
-	evidence, err := decodeStrategyArtifact(artifact)
-	if err != nil {
-		return nil, err
-	}
-	if evidence.Target == "paper_candidate" {
-		if _, err := paperPromotionStrategy(*evidence); err != nil {
+func (s *Store) ImprovePaperCandidate(ctx context.Context, account, attempt string, artifact, raw []byte) (*PaperImprovementReceipt, error) {
+	if s == nil || s.db == nil {
+		if ctx == nil {
+			return nil, errors.New("paper improvement context is required")
+		}
+		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
+		return nil, errors.New("paper improvement identifiers are invalid")
 	}
-	if _, _, err := parsePaperPromotionBars(ctx, raw); err != nil {
-		return nil, err
-	}
+	return s.business().ImprovePaperCandidate(ctx, account, attempt, artifact, raw)
+}
+
+func (s *Store) ImprovementContext(ctx context.Context, attempt string, work func(application.StrategyRegistryProof, *application.PromotionClaim, bool) error) error {
 	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer tx.Rollback()
 	if err := requireSchemaContext(ctx, tx); err != nil {
-		return nil, err
+		return err
 	}
-	selection, err := replayStrategyRegistry(ctx, tx)
+	registry, err := replayStrategyRegistry(ctx, tx)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	claim, _, found, err := loadPaperPromotion(ctx, tx, attemptID)
+	claim, _, found, err := loadPaperPromotion(ctx, tx, attempt)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	expectedSelection := selection.CurrentEventID
-	if found {
-		if claim.AccountRef != account || claim.CandidateResultSHA256 != evidence.ResultSHA256 || claim.InputCSV != string(raw) {
-			return nil, errors.New("paper improvement attempt conflicts with its saved request")
-		}
-		expectedSelection = claim.ExpectedCurrentEventID
+	if err := work(registry, claim, found); err != nil {
+		return err
 	}
-	if err := tx.Commit(); err != nil {
-		return nil, err
-	}
-	// Registration is independently durable; only a claim binds the attempt ID.
-	if _, err := s.registerStrategyEvidence(ctx, artifact); err != nil {
-		return nil, err
-	}
-	receipt := &PaperImprovementReceipt{SchemaVersion: "paper-improvement.v1", ResultSHA256: evidence.ResultSHA256, Registered: true, Disposition: "comparison"}
-	if !found {
-		if evidence.Target == "no_promotion" {
-			receipt.Disposition = "research_not_candidate"
-			return receipt, nil
-		}
-		if selection.SelectedResultSHA256 == evidence.ResultSHA256 {
-			receipt.Disposition = "already_selected"
-			return receipt, nil
-		}
-	}
-	receipt.Comparison, err = s.PromotePaperCandidate(ctx, account, evidence.ResultSHA256, expectedSelection, attemptID, raw)
-	if err != nil {
-		return nil, err
-	}
-	receipt.AttemptRecorded = true
-	return receipt, nil
+	return tx.Commit()
 }

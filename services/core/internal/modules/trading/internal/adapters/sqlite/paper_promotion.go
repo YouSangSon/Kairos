@@ -37,27 +37,11 @@ func (s *Store) claimPaperPromotion(ctx context.Context, account, candidateSHA, 
 }
 
 func paperPromotionInputs(ctx context.Context, q orderQuerier, candidateSHA, incumbentSHA, cash, policySHA string) (researchdomain.Strategy, researchdomain.Strategy, researchdomain.Execution, error) {
-	var strategies [2]researchdomain.Strategy
-	var policies [2]strategyExecutionPolicy
-	for i, sha := range []string{candidateSHA, incumbentSHA} {
+	return application.PromotionInputs(ctx, func(ctx context.Context, sha string) (string, error) {
 		var raw string
-		if err := q.QueryRowContext(ctx, `SELECT artifact_json FROM strategy_research_evidence WHERE result_sha256=? AND target='paper_candidate'`, sha).Scan(&raw); err != nil {
-			return strategies[0], strategies[1], researchdomain.Execution{}, err
-		}
-		evidence, err := decodeStrategyArtifact([]byte(raw))
-		if err != nil {
-			return strategies[0], strategies[1], researchdomain.Execution{}, err
-		}
-		strategies[i], err = paperPromotionStrategy(*evidence)
-		if err != nil {
-			return strategies[0], strategies[1], researchdomain.Execution{}, err
-		}
-		policies[i] = evidence.ExecutionPolicy
-	}
-	if strategies[0].Quantity != strategies[1].Quantity || policies[0].SHA256 != policies[1].SHA256 || policies[0].SHA256 != policySHA {
-		return strategies[0], strategies[1], researchdomain.Execution{}, errors.New("paper promotion requires identical quantity and execution policy")
-	}
-	return strategies[0], strategies[1], researchdomain.Execution{StartingCash: cash, Policy: paperExecutionPolicy(policies[0]), DelayBars: int(policies[0].DelayBars)}, nil
+		err := q.QueryRowContext(ctx, `SELECT artifact_json FROM strategy_research_evidence WHERE result_sha256=? AND target='paper_candidate'`, sha).Scan(&raw)
+		return raw, err
+	}, candidateSHA, incumbentSHA, cash, policySHA)
 }
 
 func scorePaperPromotionClaim(ctx context.Context, q orderQuerier, claim paperPromotionClaim) (paperPromotionComparison, error) {
@@ -76,43 +60,12 @@ func (s *Store) finishPaperPromotion(ctx context.Context, claim paperPromotionCl
 	return s.business().FinishPaperPromotion(ctx, claim, comparison, scoreErr, abort)
 }
 
-func (s *Store) PaperPromotionStatus(ctx context.Context, attemptID string) (*PaperPromotionReceipt, error) {
-	if !safeOrderID(attemptID) {
-		return nil, errors.New("paper promotion attempt ID is invalid")
-	}
-	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
-	if err != nil {
-		return nil, err
-	}
-	defer tx.Rollback()
-	if err := requireSchemaContext(ctx, tx); err != nil {
-		return nil, err
-	}
-	if _, err := replayStrategyRegistry(ctx, tx); err != nil {
-		return nil, err
-	}
-	claim, decision, found, err := loadPaperPromotion(ctx, tx, attemptID)
-	if err != nil {
-		return nil, err
-	}
-	if !found {
-		return nil, errors.New("paper promotion attempt does not exist")
-	}
-	return promotionReceipt(*claim, decision), nil
+func (s *Store) PaperPromotionStatus(ctx context.Context, id string) (*PaperPromotionReceipt, error) {
+	return s.business().PaperPromotionStatus(ctx, id)
 }
 
-func (s *Store) AbortPaperPromotion(ctx context.Context, attemptID string) (*PaperPromotionReceipt, error) {
-	if !safeOrderID(attemptID) {
-		return nil, errors.New("paper promotion attempt ID is invalid")
-	}
-	claim, _, found, err := loadPaperPromotion(ctx, s.db, attemptID)
-	if err != nil {
-		return nil, err
-	}
-	if !found {
-		return nil, errors.New("paper promotion attempt does not exist")
-	}
-	return s.finishPaperPromotion(ctx, *claim, paperPromotionComparison{}, nil, true)
+func (s *Store) AbortPaperPromotion(ctx context.Context, id string) (*PaperPromotionReceipt, error) {
+	return s.business().AbortPaperPromotion(ctx, id)
 }
 
 func loadPaperPromotion(ctx context.Context, q orderQuerier, id string) (*paperPromotionClaim, *paperPromotionDecision, bool, error) {
@@ -222,4 +175,19 @@ func validatePaperPromotionSignalCutoff(ctx context.Context, q orderQuerier, res
 		}
 	}
 	return nil
+}
+
+func (s *Store) PromotionStatusContext(ctx context.Context, id string) (*application.PromotionClaim, *application.PromotionDecision, bool, error) {
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return nil, nil, false, err
+	}
+	defer tx.Rollback()
+	if err := requireSchemaContext(ctx, tx); err != nil {
+		return nil, nil, false, err
+	}
+	if _, err := replayStrategyRegistry(ctx, tx); err != nil {
+		return nil, nil, false, err
+	}
+	return loadPaperPromotion(ctx, tx, id)
 }

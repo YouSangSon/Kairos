@@ -9,8 +9,8 @@ import (
 	"errors"
 	"fmt"
 	"omni-folio/services/core/internal/modules/trading/contracts"
-	paperdomain "omni-folio/services/core/internal/modules/trading/internal/domain/paper"
-	"strings"
+	"omni-folio/services/core/internal/modules/trading/internal/application"
+	"omni-folio/services/core/internal/modules/trading/internal/domain"
 	"time"
 )
 
@@ -24,198 +24,27 @@ type PaperMarketBarObservation = contracts.PaperMarketBarObservation
 
 type PaperSignalEvent = contracts.PaperSignalEvent
 
-type paperMarketRecoveryProof struct {
-	SHA256        string
-	Bars, Signals int
-}
+type paperMarketRecoveryProof = application.MarketRecoveryProof
 
 func (s *Store) RecordPaperMarketBar(ctx context.Context, input PaperMarketBarObservation) (*PaperMarketBarObservation, error) {
-	if s == nil || s.db == nil || s.now == nil {
+	if s == nil || s.db == nil {
 		return nil, errors.New("paper market data recorder is not configured")
 	}
-	now := s.now().UTC()
-	bar := input
-	bar.ObservationID = paperMarketBarObservationID(input.Source, input.SourceObservationID)
-	bar.SchemaVersion = paperMarketBarSchema
-	bar.RecordedAt = now.Format(canonicalPaperTimeLayout)
-	var ok bool
-	if bar.OpenAt, ok = canonicalPaperTime(bar.OpenAt); !ok {
-		return nil, errors.New("paper market bar open time is invalid")
-	}
-	if bar.CloseAt, ok = canonicalPaperTime(bar.CloseAt); !ok {
-		return nil, errors.New("paper market bar close time is invalid")
-	}
-	if bar.SourceAvailableAt, ok = canonicalPaperTime(bar.SourceAvailableAt); !ok {
-		return nil, errors.New("paper market bar availability time is invalid")
-	}
-	if bar.FetchedAt, ok = canonicalPaperTime(bar.FetchedAt); !ok {
-		return nil, errors.New("paper market bar fetch time is invalid")
-	}
-	if err := validatePaperMarketBar(bar); err != nil {
-		return nil, err
-	}
-	if fetched, _ := parsePaperTime(bar.FetchedAt); fetched.After(now) {
-		return nil, errors.New("paper market bar was fetched in the future")
-	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, err
-	}
-	defer tx.Rollback()
-	if _, err := replayPaperMarketRecovery(ctx, tx); err != nil {
-		return nil, fmt.Errorf("paper market recovery: %w", err)
-	}
-	stored, err := recordPaperMarketBarTx(ctx, tx, bar)
-	if err != nil {
-		return nil, err
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, err
-	}
-	return stored, nil
+	return s.business().RecordPaperMarketBar(ctx, input)
 }
 
 func recordPaperMarketBarTx(ctx context.Context, tx *transaction, bar PaperMarketBarObservation) (*PaperMarketBarObservation, error) {
 	if tx == nil {
 		return nil, errors.New("paper market transaction is required")
 	}
-	existing, found, err := loadPaperMarketBarBySource(ctx, tx, bar.Source, bar.SourceObservationID)
-	if err != nil {
-		return nil, err
-	}
-	if found {
-		if !samePaperMarketBarInput(*existing, bar) {
-			return nil, errors.New("paper market source observation conflicts with its recorded bar")
-		}
-		return existing, nil
-	}
-	recordJSON, recordSHA, err := orderJSONHash(bar)
-	if err != nil {
-		return nil, err
-	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO paper_market_bar_observations(
-		observation_id,schema_version,source,source_observation_id,input_data_sha256,symbol,venue,currency,interval,timezone,
-		price_adjustment,open,high,low,close,volume,open_at,close_at,source_available_at,fetched_at,record_sha256,record_json,recorded_at
-	) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		bar.ObservationID, bar.SchemaVersion, bar.Source, bar.SourceObservationID, bar.InputDataSHA256, bar.Symbol, bar.Venue, bar.Currency,
-		bar.Interval, bar.Timezone, bar.PriceAdjustment, bar.Open, bar.High, bar.Low, bar.Close, bar.Volume, bar.OpenAt, bar.CloseAt,
-		bar.SourceAvailableAt, bar.FetchedAt, recordSHA, string(recordJSON), bar.RecordedAt)
-	if err != nil {
-		return nil, err
-	}
-	return &bar, nil
+	return application.RecordPaperMarketBarTx(ctx, &writeScope{tx: tx}, bar)
 }
 
 func (s *Store) recordPaperSignalEventTx(ctx context.Context, tx *transaction, accountRef string, signal PaperSignal) (*PaperSignalEvent, error) {
-	if s == nil || s.db == nil || s.now == nil || tx == nil || !orderAlias(accountRef, "account") {
+	if s == nil || s.db == nil || tx == nil {
 		return nil, errors.New("paper signal recorder is not configured")
 	}
-	now := s.now().UTC()
-	var ok bool
-	if signal.DataAsOf, ok = canonicalPaperTime(signal.DataAsOf); !ok {
-		return nil, errors.New("paper signal data time is invalid")
-	}
-	if signal.GeneratedAt, ok = canonicalPaperTime(signal.GeneratedAt); !ok {
-		return nil, errors.New("paper signal generation time is invalid")
-	}
-	if signal.ExpiresAt, ok = canonicalPaperTime(signal.ExpiresAt); !ok {
-		return nil, errors.New("paper signal expiry time is invalid")
-	}
-	if err := validateCapitalizedPaperSignalShape(signal); err != nil {
-		return nil, err
-	}
-	if _, err := provePaperAccountingRecovery(ctx, tx); err != nil {
-		return nil, fmt.Errorf("paper signal accounting recovery: %w", err)
-	}
-	existing, found, err := loadPaperSignalEvent(ctx, tx, accountRef, signal.SignalID)
-	if err != nil {
-		return nil, err
-	}
-	if found {
-		if !samePaperSignalInput(*existing, signal) {
-			return nil, errors.New("paper signal identity conflicts with its recorded event")
-		}
-		return existing, nil
-	}
-	if err := validateCapitalizedPaperSignal(signal, now); err != nil {
-		return nil, err
-	}
-	policy, err := loadCurrentStrategyExecutionPolicy(ctx, tx, signal.StrategyResultSHA256, signal.StrategySelectionEventID)
-	if err != nil {
-		return nil, err
-	}
-	session, found, err := loadPaperAccountingSession(ctx, tx, accountRef)
-	if err != nil {
-		return nil, err
-	}
-	if !found || session.ExecutionPolicySHA256 != policy.SHA256 {
-		return nil, errors.New("paper signal accounting policy does not match the account session")
-	}
-	if err := validatePaperPromotionSignalCutoff(ctx, tx, signal.StrategyResultSHA256, signal.StrategySelectionEventID, signal.DataAsOf); err != nil {
-		return nil, err
-	}
-	bar, barSequence, err := loadPaperMarketBarByID(ctx, tx, signal.SignalBarObservationID)
-	if err != nil {
-		return nil, err
-	}
-	if bar.Symbol != signal.Symbol || bar.InputDataSHA256 != signal.DataSHA256 || bar.CloseAt != signal.DataAsOf ||
-		bar.Source != "paper_fixture" || bar.Venue != "KRX" || bar.Currency != "KRW" || bar.Interval != "1d" ||
-		bar.Timezone != "Asia/Seoul" || bar.PriceAdjustment != "unspecified" {
-		return nil, errors.New("paper signal bar metadata is invalid")
-	}
-	availableAt, _ := parsePaperTime(bar.SourceAvailableAt)
-	generatedAt, _ := parsePaperTime(signal.GeneratedAt)
-	if generatedAt.Before(availableAt) {
-		return nil, errors.New("paper signal predates source availability")
-	}
-	var cutoff, sameSeriesLatest, legacyOrders int64
-	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(sequence),0) FROM paper_market_bar_observations`).Scan(&cutoff); err != nil {
-		return nil, err
-	}
-	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(sequence),0) FROM paper_market_bar_observations
-		WHERE source=? AND symbol=? AND venue=? AND interval=? AND timezone=? AND price_adjustment=? AND sequence<=?`,
-		bar.Source, bar.Symbol, bar.Venue, bar.Interval, bar.Timezone, bar.PriceAdjustment, cutoff).Scan(&sameSeriesLatest); err != nil {
-		return nil, err
-	}
-	if barSequence != sameSeriesLatest {
-		return nil, errors.New("paper signal bar is not latest at the transaction cutoff")
-	}
-	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM order_idempotency WHERE mode='paper' AND account_ref=?
-		AND json_extract(intent_json, '$.signal_schema_version') IN ('paper-signal.v1','paper-signal.v2')`, accountRef).Scan(&legacyOrders); err != nil {
-		return nil, err
-	}
-	if legacyOrders != 0 {
-		return nil, errors.New("paper signal cannot follow a legacy paper order")
-	}
-	event := PaperSignalEvent{
-		EventID: paperSignalEventID(accountRef, signal.SignalID), SchemaVersion: capitalizedPaperSignalSchema,
-		AccountRef: accountRef, PaperAccountingSessionID: session.SessionID,
-		StrategyResultSHA256: signal.StrategyResultSHA256, StrategySelectionEventID: signal.StrategySelectionEventID,
-		ExecutionPolicySHA256: policy.SHA256, SignalID: signal.SignalID, SignalBarObservationID: signal.SignalBarObservationID,
-		DataSHA256: signal.DataSHA256, Symbol: signal.Symbol, TargetQuantity: signal.TargetQuantity,
-		DataAsOf: signal.DataAsOf, GeneratedAt: signal.GeneratedAt, ExpiresAt: signal.ExpiresAt,
-		MarketObservationSequenceCutoff: cutoff, RecordedAt: now.Format(canonicalPaperTimeLayout),
-	}
-	if err := validatePaperSignalEvent(event); err != nil {
-		return nil, err
-	}
-	recordJSON, recordSHA, err := orderJSONHash(event)
-	if err != nil {
-		return nil, err
-	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO paper_signal_events(
-		event_id,schema_version,account_ref,paper_accounting_session_id,strategy_result_sha256,strategy_selection_event_id,
-		execution_policy_sha256,signal_id,signal_bar_observation_id,data_sha256,symbol,target_quantity,data_as_of,generated_at,
-		expires_at,market_observation_sequence_cutoff,record_sha256,record_json,recorded_at
-	) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		event.EventID, event.SchemaVersion, event.AccountRef, event.PaperAccountingSessionID, event.StrategyResultSHA256,
-		event.StrategySelectionEventID, event.ExecutionPolicySHA256, event.SignalID, event.SignalBarObservationID, event.DataSHA256,
-		event.Symbol, event.TargetQuantity, event.DataAsOf, event.GeneratedAt, event.ExpiresAt, event.MarketObservationSequenceCutoff,
-		recordSHA, string(recordJSON), event.RecordedAt)
-	if err != nil {
-		return nil, err
-	}
-	return &event, nil
+	return s.business().RecordPaperSignalEventTx(ctx, &writeScope{store: s, tx: tx}, accountRef, signal)
 }
 
 func provePaperMarketRecovery(ctx context.Context, q orderQuerier) (paperMarketRecoveryProof, error) {
@@ -313,68 +142,19 @@ func replayPaperMarketRecovery(ctx context.Context, q orderQuerier) (paperMarket
 }
 
 func validatePaperMarketBar(bar PaperMarketBarObservation) error {
-	openAt, openOK := parsePaperTime(bar.OpenAt)
-	closeAt, closeOK := parsePaperTime(bar.CloseAt)
-	availableAt, availableOK := parsePaperTime(bar.SourceAvailableAt)
-	fetchedAt, fetchedOK := parsePaperTime(bar.FetchedAt)
-	recordedAt, recordedOK := parsePaperTime(bar.RecordedAt)
-	if !safeOrderID(bar.ObservationID) || bar.SchemaVersion != paperMarketBarSchema || bar.Source != "paper_fixture" ||
-		!safeOrderID(bar.SourceObservationID) || !strategySHA256Pattern.MatchString(bar.InputDataSHA256) ||
-		!kiwoomStockPattern.MatchString(bar.Symbol) || bar.Venue != "KRX" || bar.Currency != "KRW" || bar.Interval != "1d" ||
-		bar.Timezone != "Asia/Seoul" || bar.PriceAdjustment != "unspecified" || !openOK || !closeOK || !availableOK ||
-		!fetchedOK || !recordedOK || !openAt.Before(closeAt) || closeAt.After(availableAt) || availableAt.After(fetchedAt) ||
-		fetchedAt.After(recordedAt) || !canonicalPaperTimes(bar.OpenAt, bar.CloseAt, bar.SourceAvailableAt, bar.FetchedAt, bar.RecordedAt) ||
-		paperMarketBarObservationID(bar.Source, bar.SourceObservationID) != bar.ObservationID {
-		return errors.New("paper market bar identity or time contract is invalid")
-	}
-	if err := validateMarketDataValues(bar.Open, bar.High, bar.Low, bar.Close, bar.Volume); err != nil {
-		return fmt.Errorf("paper market bar %w", err)
-	}
-	return nil
+	return domain.ValidatePaperMarketBar(domain.PaperMarketBarObservation(bar))
 }
 
 func validateCapitalizedPaperSignal(signal PaperSignal, now time.Time) error {
-	if err := validateCapitalizedPaperSignalShape(signal); err != nil {
-		return err
-	}
-	generatedAt, _ := parsePaperTime(signal.GeneratedAt)
-	expiresAt, _ := parsePaperTime(signal.ExpiresAt)
-	if generatedAt.After(now) || !now.Before(expiresAt) {
-		return errors.New("capitalized paper signal is not active")
-	}
-	return nil
+	return domain.ValidateCapitalizedPaperSignal(domain.PaperSignal(signal), now)
 }
 
 func validateCapitalizedPaperSignalShape(signal PaperSignal) error {
-	dataAsOf, dataOK := parsePaperTime(signal.DataAsOf)
-	generatedAt, generatedOK := parsePaperTime(signal.GeneratedAt)
-	expiresAt, expiresOK := parsePaperTime(signal.ExpiresAt)
-	if signal.SchemaVersion != capitalizedPaperSignalSchema || !safeOrderID(signal.SignalID) || !safeOrderID(signal.SignalBarObservationID) ||
-		!strategySHA256Pattern.MatchString(signal.StrategyResultSHA256) || !safeOrderID(signal.StrategySelectionEventID) ||
-		!strategySHA256Pattern.MatchString(signal.DataSHA256) || !kiwoomStockPattern.MatchString(signal.Symbol) ||
-		!validPaperTargetQuantity(signal.TargetQuantity) || !dataOK || !generatedOK || !expiresOK || dataAsOf.After(generatedAt) ||
-		!generatedAt.Before(expiresAt) {
-		return errors.New("capitalized paper signal is invalid")
-	}
-	return nil
+	return domain.ValidateCapitalizedPaperSignalShape(domain.PaperSignal(signal))
 }
 
 func validatePaperSignalEvent(event PaperSignalEvent) error {
-	dataAsOf, dataOK := parsePaperTime(event.DataAsOf)
-	generatedAt, generatedOK := parsePaperTime(event.GeneratedAt)
-	expiresAt, expiresOK := parsePaperTime(event.ExpiresAt)
-	recordedAt, recordedOK := parsePaperTime(event.RecordedAt)
-	if !safeOrderID(event.EventID) || event.SchemaVersion != capitalizedPaperSignalSchema || !orderAlias(event.AccountRef, "account") ||
-		!safeOrderID(event.PaperAccountingSessionID) || !strategySHA256Pattern.MatchString(event.StrategyResultSHA256) ||
-		!safeOrderID(event.StrategySelectionEventID) || !strategySHA256Pattern.MatchString(event.ExecutionPolicySHA256) ||
-		!safeOrderID(event.SignalID) || !safeOrderID(event.SignalBarObservationID) || !strategySHA256Pattern.MatchString(event.DataSHA256) ||
-		!kiwoomStockPattern.MatchString(event.Symbol) || !validPaperTargetQuantity(event.TargetQuantity) || event.MarketObservationSequenceCutoff <= 0 ||
-		!dataOK || !generatedOK || !expiresOK || !recordedOK || !canonicalPaperTimes(event.DataAsOf, event.GeneratedAt, event.ExpiresAt, event.RecordedAt) ||
-		dataAsOf.After(generatedAt) || generatedAt.After(recordedAt) ||
-		!generatedAt.Before(expiresAt) || !recordedAt.Before(expiresAt) || paperSignalEventID(event.AccountRef, event.SignalID) != event.EventID {
-		return errors.New("paper signal event is invalid")
-	}
-	return nil
+	return domain.ValidatePaperSignalEvent(domain.PaperSignalEvent(event))
 }
 
 func validateStoredPaperMarketBar(bar PaperMarketBarObservation, recordSHA, recordJSON string) error {
@@ -516,58 +296,24 @@ func loadPaperSignalEvent(ctx context.Context, q orderQuerier, accountRef, signa
 }
 
 func samePaperMarketBarInput(left, right PaperMarketBarObservation) bool {
-	left.ObservationID, left.SchemaVersion, left.RecordedAt = "", "", ""
-	right.ObservationID, right.SchemaVersion, right.RecordedAt = "", "", ""
-	return left == right
+	return domain.SamePaperMarketBarInput(domain.PaperMarketBarObservation(left), domain.PaperMarketBarObservation(right))
 }
 
 func samePaperSignalInput(event PaperSignalEvent, signal PaperSignal) bool {
-	return event.SchemaVersion == signal.SchemaVersion && event.StrategyResultSHA256 == signal.StrategyResultSHA256 &&
-		event.StrategySelectionEventID == signal.StrategySelectionEventID && event.SignalID == signal.SignalID &&
-		event.SignalBarObservationID == signal.SignalBarObservationID && event.DataSHA256 == signal.DataSHA256 &&
-		event.Symbol == signal.Symbol && event.TargetQuantity == signal.TargetQuantity && event.DataAsOf == signal.DataAsOf &&
-		event.GeneratedAt == signal.GeneratedAt && event.ExpiresAt == signal.ExpiresAt
+	return domain.SamePaperSignalInput(domain.PaperSignalEvent(event), domain.PaperSignal(signal))
 }
 
-func validPaperTargetQuantity(raw string) bool {
-	return paperdomain.ValidCapitalizedQuantity(raw, true)
-}
+var validPaperTargetQuantity = domain.ValidPaperTargetQuantity
 
-func canonicalPaperTime(raw string) (string, bool) {
-	value, ok := parsePaperTime(raw)
-	if !ok {
-		return "", false
-	}
-	return value.Format(canonicalPaperTimeLayout), true
-}
+var canonicalPaperTime = domain.CanonicalPaperTime
 
-func parsePaperTime(raw string) (time.Time, bool) {
-	value, err := time.Parse(time.RFC3339Nano, raw)
-	if err != nil || value.Location() != time.UTC {
-		return time.Time{}, false
-	}
-	return value, value.Format(time.RFC3339Nano) == raw || value.Format(canonicalPaperTimeLayout) == raw
-}
+var parsePaperTime = domain.ParsePaperTime
 
-func canonicalPaperTimes(values ...string) bool {
-	for _, raw := range values {
-		canonical, ok := canonicalPaperTime(raw)
-		if !ok || canonical != raw {
-			return false
-		}
-	}
-	return true
-}
+var canonicalPaperTimes = domain.CanonicalPaperTimes
 
-func paperMarketBarObservationID(source, sourceID string) string {
-	hash := sha256.Sum256([]byte(strings.Join([]string{source, sourceID}, "\x00")))
-	return "paper_market_bar_" + hex.EncodeToString(hash[:16])
-}
+var paperMarketBarObservationID = domain.PaperMarketBarObservationID
 
-func paperSignalEventID(accountRef, signalID string) string {
-	hash := sha256.Sum256([]byte(strings.Join([]string{accountRef, signalID}, "\x00")))
-	return "paper_signal_event_" + hex.EncodeToString(hash[:16])
-}
+var paperSignalEventID = domain.PaperSignalEventID
 
 func closeRows(rows rowset) error {
 	if err := rows.Err(); err != nil {

@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"math/big"
+	"omni-folio/services/core/internal/modules/trading/internal/adapters/files"
 	"omni-folio/services/core/internal/modules/trading/internal/application"
 	"time"
 )
@@ -13,18 +14,28 @@ type writeScope struct {
 }
 
 func (s *Store) Write(ctx context.Context, work func(application.WriteScope) error) error {
+	return s.Decide(ctx, func(scope application.WriteScope) (bool, error) { return true, work(scope) })
+}
+func (s *Store) Decide(ctx context.Context, work func(application.WriteScope) (bool, error)) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	if err := work(&writeScope{store: s, tx: tx}); err != nil {
+	commit, err := work(&writeScope{store: s, tx: tx})
+	if err != nil {
 		return err
+	}
+	if !commit {
+		return nil
 	}
 	return tx.Commit()
 }
 func (s *Store) business() *application.UseCases {
-	return application.New(s, s, s.now, s.id, s.executionOwner, s.paperRunnerOwner)
+	if s == nil || s.db == nil {
+		return application.New(nil, nil, nil, nil, "", "").WithInputs(files.Inputs{})
+	}
+	return application.New(s, s, s.now, s.id, s.executionOwner, s.paperRunnerOwner).WithInputs(files.Inputs{}).WithReads(s)
 }
 func (j *writeScope) RecordPaperSignalEventTx(ctx context.Context, accountRef string, signal PaperSignal) (*PaperSignalEvent, error) {
 	return j.store.recordPaperSignalEventTx(ctx, j.tx, accountRef, signal)

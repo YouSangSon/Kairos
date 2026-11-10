@@ -102,13 +102,14 @@ func proveOrderRecovery(ctx context.Context, q orderQuerier) (orderRecoveryProof
 			return orderRecoveryProof{}, err
 		}
 	}
-	eventQuery := `SELECT sequence,event_id,event_sha256,order_id,event_type,source,provider_order_ref,provider_execution_ref,event_json,recorded_at,
-		authority_reservation_id FROM order_events ORDER BY sequence`
+	var eventRows rowset
 	if hasPaperAuthorizationColumn != 0 {
-		eventQuery = `SELECT sequence,event_id,event_sha256,order_id,event_type,source,provider_order_ref,provider_execution_ref,event_json,recorded_at,
-			authority_reservation_id,paper_authorization_id FROM order_events ORDER BY sequence`
+		eventRows, err = q.QueryContext(ctx, `SELECT sequence,event_id,event_sha256,order_id,event_type,source,provider_order_ref,provider_execution_ref,event_json,recorded_at,
+			authority_reservation_id,paper_authorization_id FROM order_events ORDER BY sequence`)
+	} else {
+		eventRows, err = q.QueryContext(ctx, `SELECT sequence,event_id,event_sha256,order_id,event_type,source,provider_order_ref,provider_execution_ref,event_json,recorded_at,
+		authority_reservation_id FROM order_events ORDER BY sequence`)
 	}
-	eventRows, err := q.QueryContext(ctx, eventQuery)
 	if err != nil {
 		return orderRecoveryProof{}, err
 	}

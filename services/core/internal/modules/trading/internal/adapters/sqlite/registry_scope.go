@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"time"
 
 	"omni-folio/services/core/internal/modules/trading/internal/application"
 )
@@ -64,4 +65,8 @@ func (j *writeScope) PaperOrderCount(ctx context.Context, account string) (int, 
 }
 func (j *writeScope) InsertAccountingSession(ctx context.Context, session PaperAccountingSession) error {
 	return insertPaperAccountingSession(ctx, j.tx, session)
+}
+
+func (j *writeScope) DispatchTime(ctx context.Context, id string) (time.Time, error) {
+	return orderDispatchTime(ctx, j.tx, id)
 }

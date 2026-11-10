@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"errors"
 	researchdomain "omni-folio/services/core/internal/modules/trading/internal/domain/research"
-	"reflect"
 	"time"
 )
 
@@ -14,7 +13,7 @@ func (s *UseCases) ClaimPaperPromotion(ctx context.Context, account, candidateSH
 	if s == nil || s.journal == nil || ctx == nil || !orderAlias(account, "account") || !strategySHA256Pattern.MatchString(candidateSHA) || !safeOrderID(expectedSelection) || !safeOrderID(attemptID) {
 		return nil, nil, errors.New("paper promotion identifiers are invalid")
 	}
-	symbol, bars, err := ParsePaperPromotionBars(ctx, raw)
+	symbol, bars, err := s.inputs.Promotion(ctx, raw)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -134,7 +133,7 @@ func (s *UseCases) finishPaperPromotionInScope(ctx context.Context, tx WriteScop
 	if err != nil {
 		return nil, err
 	}
-	if !found || !reflect.DeepEqual(*saved, claim) {
+	if !found || *saved != claim {
 		return nil, errors.New("paper promotion claim changed")
 	}
 	if prior != nil {
@@ -208,7 +207,7 @@ func (s *UseCases) PromotePaperCandidate(ctx context.Context, account, candidate
 }
 
 func (s *UseCases) scorePaperPromotionClaim(ctx context.Context, claim PromotionClaim) (paperPromotionComparison, error) {
-	_, bars, err := ParsePaperPromotionBars(ctx, []byte(claim.InputCSV))
+	_, bars, err := s.inputs.Promotion(ctx, []byte(claim.InputCSV))
 	if err != nil {
 		return paperPromotionComparison{}, err
 	}

@@ -474,7 +474,7 @@ func projectResearchReport(artifact, recordedAt string) (*contracts.StoredResear
 		failed = append(failed, gate.(string))
 	}
 	return &contracts.StoredResearchReport{RecordedAt: recordedAt, FastWindow: fast, SlowWindow: slow, Quantity: quantity,
-		CandidateCount: len(candidates), FoldCount: len(folds), FinalHoldout: contracts.ResearchReportRange{first, last, barCount},
+		CandidateCount: len(candidates), FoldCount: len(folds), FinalHoldout: contracts.ResearchReportRange{FirstBarAt: first, LastBarAt: last, BarCount: barCount},
 		PromotionTarget: StringField(promotion, "target"), FailedGates: failed, WalkForward: walkForward, Holdout: holdout, BuyAndHold: buyAndHold}, nil
 }
 
@@ -490,5 +490,5 @@ func researchReportMetrics(value any, countDefinition string) (contracts.Researc
 		return contracts.ResearchReportMetrics{}, false
 	}
 	// Fixed fees can make cash negative: reported losses and drawdown may exceed 100%.
-	return contracts.ResearchReportMetrics{returns, drawdown, trips}, true
+	return contracts.ResearchReportMetrics{AfterCostReturn: returns, MaxDrawdown: drawdown, RoundTrips: trips}, true
 }

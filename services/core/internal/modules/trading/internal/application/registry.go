@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"time"
 
-	"omni-folio/services/core/internal/codec"
 	"omni-folio/services/core/internal/modules/trading/contracts"
 	"omni-folio/services/core/internal/modules/trading/internal/domain"
 	orderdomain "omni-folio/services/core/internal/modules/trading/internal/domain/order"
@@ -292,6 +291,6 @@ func (s *UseCases) InitializePaperAccount(ctx context.Context, account, result, 
 	return s.OpenPaperAccountingSessionChecked(ctx, account, result, selection, true)
 }
 
-var canonicalUTCString = codec.CanonicalUTC
+var canonicalUTCString = domain.CanonicalUTCString
 
 var PaperAccountingSessionID = domain.AccountingSessionID

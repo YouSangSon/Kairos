@@ -8,8 +8,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math"
 	"omni-folio/services/core/internal/modules/trading/internal/application"
+	"omni-folio/services/core/internal/modules/trading/internal/domain"
 	"strings"
 	"time"
 )
@@ -20,18 +20,9 @@ const (
 	paperRunnerLeaseTTL   = 30 * time.Second
 )
 
-var errPaperRunnerLeaseHeld = errors.New("paper runner lease is held")
+var errPaperRunnerLeaseHeld = application.ErrPaperRunnerLeaseHeld
 
-type paperRunnerLeaseRecord struct {
-	Scope                    string `json:"scope"`
-	FencingToken             int64  `json:"fencing_token"`
-	OwnerID                  string `json:"owner_id"`
-	AccountRef               string `json:"account_ref"`
-	HeartbeatAtNS            int64  `json:"heartbeat_at_ns"`
-	ExpiresAtNS              int64  `json:"expires_at_ns"`
-	StrategySelectionEventID string `json:"strategy_selection_event_id"`
-	SelectedResultSHA256     string `json:"selected_result_sha256"`
-}
+type paperRunnerLeaseRecord = domain.RunnerLeaseRecord
 
 type paperRunnerClaim = application.RunnerClaim
 
@@ -44,200 +35,40 @@ type storedPaperRunnerLease struct {
 }
 
 func (s *Store) acquirePaperRunnerLease(ctx context.Context, accountRef string) (*paperRunnerClaim, error) {
-	if s == nil || s.db == nil || s.now == nil || s.paperRunnerOwner == "" || !orderAlias(accountRef, "account") {
+	if s == nil || s.db == nil {
 		return nil, errors.New("paper runner lease is not configured")
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, err
-	}
-	defer tx.Rollback()
-	if _, err := provePaperRunnerLeaseRecovery(ctx, tx); err != nil {
-		return nil, fmt.Errorf("paper runner lease recovery: %w", err)
-	}
-	row, err := loadPaperRunnerLease(ctx, tx)
-	if err != nil {
-		return nil, err
-	}
-	nowNS, err := paperRunnerTimeNS(s.now())
-	if err != nil {
-		return nil, err
-	}
-	_, selectionEventID, selectedResult, err := currentPaperPerformanceSelection(ctx, tx)
-	if err != nil || selectedResult == noStrategySelection {
-		return nil, errors.Join(errors.New("paper runner requires a current strategy selection"), err)
-	}
-	if row.record.OwnerID != "" {
-		if nowNS < row.record.HeartbeatAtNS {
-			return nil, errors.New("paper runner lease clock regressed")
-		}
-		if nowNS < row.record.ExpiresAtNS {
-			if row.record.OwnerID == s.paperRunnerOwner && row.record.AccountRef == accountRef &&
-				row.record.StrategySelectionEventID == selectionEventID && row.record.SelectedResultSHA256 == selectedResult {
-				if err := tx.Commit(); err != nil {
-					return nil, err
-				}
-				return paperRunnerClaimFromRecord(row.record), nil
-			}
-			return nil, fmt.Errorf("%w by another process", errPaperRunnerLeaseHeld)
-		}
-	}
-	if row.record.FencingToken == math.MaxInt64 {
-		return nil, errors.New("paper runner fencing token overflow")
-	}
-	expiresNS, err := paperRunnerExpiryNS(nowNS)
-	if err != nil {
-		return nil, err
-	}
-	next := paperRunnerLeaseRecord{
-		Scope: paperRunnerLeaseScope, FencingToken: row.record.FencingToken + 1,
-		OwnerID: s.paperRunnerOwner, AccountRef: accountRef, HeartbeatAtNS: nowNS, ExpiresAtNS: expiresNS,
-		StrategySelectionEventID: selectionEventID, SelectedResultSHA256: selectedResult,
-	}
-	if err := updatePaperRunnerLeaseTx(ctx, tx, row.record, next); err != nil {
-		return nil, err
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, err
-	}
-	return paperRunnerClaimFromRecord(next), nil
+	return s.business().AcquirePaperRunnerLease(ctx, accountRef)
 }
 
 func (s *Store) heartbeatPaperRunnerLease(ctx context.Context, claim *paperRunnerClaim) (*paperRunnerClaim, error) {
-	if s == nil || s.db == nil || s.now == nil || claim == nil || claim.OwnerID != s.paperRunnerOwner {
+	if s == nil || s.db == nil {
 		return nil, errors.New("paper runner lease is not configured")
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, err
-	}
-	defer tx.Rollback()
-	if _, err := provePaperRunnerLeaseRecovery(ctx, tx); err != nil {
-		return nil, fmt.Errorf("paper runner lease recovery: %w", err)
-	}
-	next, err := renewPaperRunnerLeaseTx(ctx, tx, claim, s.paperRunnerOwner, s.now())
-	if err != nil {
-		return nil, err
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, err
-	}
-	return next, nil
+	return s.business().HeartbeatPaperRunnerLease(ctx, claim)
 }
 
 func (s *Store) releasePaperRunnerLease(ctx context.Context, claim *paperRunnerClaim) error {
-	if s == nil || s.db == nil || claim == nil || claim.OwnerID != s.paperRunnerOwner {
+	if s == nil || s.db == nil {
 		return errors.New("paper runner lease is not configured")
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	if _, err := provePaperRunnerLeaseRecovery(ctx, tx); err != nil {
-		return fmt.Errorf("paper runner lease recovery: %w", err)
-	}
-	row, err := loadPaperRunnerLease(ctx, tx)
-	if err != nil {
-		return err
-	}
-	if !paperRunnerClaimMatchesRecord(claim, row.record) || row.record.OwnerID != s.paperRunnerOwner {
-		return errors.New("paper runner lease was lost")
-	}
-	released := paperRunnerLeaseRecord{Scope: paperRunnerLeaseScope, FencingToken: row.record.FencingToken}
-	if err := updatePaperRunnerLeaseTx(ctx, tx, row.record, released); err != nil {
-		return err
-	}
-	return tx.Commit()
+	return s.business().ReleasePaperRunnerLease(ctx, claim)
 }
 
 func validatePaperRunnerLeaseTx(ctx context.Context, q orderQuerier, claim *paperRunnerClaim, accountRef, ownerID string, now time.Time) error {
-	row, err := loadPaperRunnerLease(ctx, q)
-	if err != nil {
-		return err
-	}
-	if claim == nil || ownerID == "" || claim.OwnerID != ownerID || !paperRunnerClaimMatchesRecord(claim, row.record) || claim.AccountRef != accountRef {
-		return errors.New("paper runner lease was lost")
-	}
-	nowNS, err := paperRunnerTimeNS(now)
-	if err != nil {
-		return err
-	}
-	if nowNS < row.record.HeartbeatAtNS {
-		return errors.New("paper runner lease clock regressed")
-	}
-	if nowNS >= row.record.ExpiresAtNS {
-		return errors.New("paper runner lease expired")
-	}
-	_, eventID, selectedResult, err := currentPaperPerformanceSelection(ctx, q)
-	if err != nil || eventID != claim.StrategySelectionEventID || selectedResult != claim.SelectedResultSHA256 {
-		return errors.Join(errors.New("paper runner strategy selection changed"), err)
-	}
-	return nil
+	return application.ValidatePaperRunnerLeaseTx(ctx, &runnerLeaseScope{q: q}, claim, accountRef, ownerID, now)
 }
 
 func renewPaperRunnerLeaseTx(ctx context.Context, tx *transaction, claim *paperRunnerClaim, ownerID string, now time.Time) (*paperRunnerClaim, error) {
-	if err := validatePaperRunnerLeaseTx(ctx, tx, claim, claimAccountRef(claim), ownerID, now); err != nil {
-		return nil, err
-	}
-	return renewPaperRunnerLeaseRowTx(ctx, tx, claim, now)
+	return application.RenewPaperRunnerLeaseTx(ctx, &writeScope{tx: tx}, claim, ownerID, now)
 }
 
 func renewPaperRunnerLeaseAfterPolicyRollbackTx(ctx context.Context, tx *transaction, claim *paperRunnerClaim, policyEventID, rollbackEventID, ownerID string, now time.Time) (*paperRunnerClaim, error) {
-	row, err := loadPaperRunnerLease(ctx, tx)
-	if err != nil {
-		return nil, err
-	}
-	if claim == nil || ownerID == "" || claim.OwnerID != ownerID || !paperRunnerClaimMatchesRecord(claim, row.record) {
-		return nil, errors.New("paper runner lease was lost")
-	}
-	nowNS, err := paperRunnerTimeNS(now)
-	if err != nil {
-		return nil, err
-	}
-	if nowNS < row.record.HeartbeatAtNS {
-		return nil, errors.New("paper runner lease clock regressed")
-	}
-	if nowNS >= row.record.ExpiresAtNS {
-		return nil, errors.New("paper runner lease expired")
-	}
-	var eventType, sourceEventID, previousResult, reasonCode, linkedPolicyID string
-	if err := tx.QueryRowContext(ctx, `SELECT event_type,source_event_id,previous_selected_result_sha256,reason_code,paper_performance_policy_event_id
-		FROM strategy_selection_events WHERE event_id=?`, rollbackEventID).
-		Scan(&eventType, &sourceEventID, &previousResult, &reasonCode, &linkedPolicyID); err != nil {
-		return nil, err
-	}
-	var decision, policyRollbackID string
-	if err := tx.QueryRowContext(ctx, `SELECT decision,rollback_selection_event_id FROM paper_performance_policy_events WHERE policy_event_id=?`, policyEventID).
-		Scan(&decision, &policyRollbackID); err != nil {
-		return nil, err
-	}
-	_, currentEventID, _, err := currentPaperPerformanceSelection(ctx, tx)
-	if err != nil || currentEventID != rollbackEventID || eventType != "ROLLBACK" ||
-		sourceEventID != claim.StrategySelectionEventID || previousResult != claim.SelectedResultSHA256 ||
-		reasonCode != "automatic_performance_rollback" || linkedPolicyID != policyEventID ||
-		decision != "HALT_AND_ROLLBACK" || policyRollbackID != rollbackEventID {
-		return nil, errors.Join(errors.New("paper runner automatic rollback lease transition is invalid"), err)
-	}
-	return renewPaperRunnerLeaseRowTx(ctx, tx, claim, now)
+	return application.RenewPaperRunnerLeaseAfterPolicyRollbackTx(ctx, &writeScope{tx: tx}, claim, policyEventID, rollbackEventID, ownerID, now)
 }
 
 func renewPaperRunnerLeaseRowTx(ctx context.Context, tx *transaction, claim *paperRunnerClaim, now time.Time) (*paperRunnerClaim, error) {
-	nowNS, err := paperRunnerTimeNS(now)
-	if err != nil {
-		return nil, err
-	}
-	expiresNS, err := paperRunnerExpiryNS(nowNS)
-	if err != nil {
-		return nil, err
-	}
-	previous := paperRunnerRecordFromClaim(claim)
-	next := previous
-	next.HeartbeatAtNS, next.ExpiresAtNS = nowNS, expiresNS
-	if err := updatePaperRunnerLeaseTx(ctx, tx, previous, next); err != nil {
-		return nil, err
-	}
-	return paperRunnerClaimFromRecord(next), nil
+	return application.RenewPaperRunnerLeaseRowTx(ctx, &writeScope{tx: tx}, claim, now)
 }
 
 func rejectLivePaperRunnerLease(ctx context.Context, q orderQuerier, now time.Time) error {
@@ -461,48 +292,14 @@ func nullableInt64(value int64) any {
 	return value
 }
 
-func paperRunnerTimeNS(value time.Time) (int64, error) {
-	value = value.UTC()
-	ns := value.UnixNano()
-	if ns <= 0 || !time.Unix(0, ns).UTC().Equal(value) {
-		return 0, errors.New("paper runner clock is outside Unix nanosecond range")
-	}
-	return ns, nil
-}
+var paperRunnerTimeNS = domain.PaperRunnerTimeNS
 
-func paperRunnerExpiryNS(nowNS int64) (int64, error) {
-	if nowNS > math.MaxInt64-int64(paperRunnerLeaseTTL) {
-		return 0, errors.New("paper runner lease expiry overflow")
-	}
-	return nowNS + int64(paperRunnerLeaseTTL), nil
-}
+var paperRunnerExpiryNS = domain.PaperRunnerExpiryNS
 
-func paperRunnerClaimFromRecord(record paperRunnerLeaseRecord) *paperRunnerClaim {
-	return &paperRunnerClaim{
-		Scope: record.Scope, FencingToken: record.FencingToken, OwnerID: record.OwnerID, AccountRef: record.AccountRef,
-		HeartbeatAtNS: record.HeartbeatAtNS, LeaseExpiresAtNS: record.ExpiresAtNS,
-		StrategySelectionEventID: record.StrategySelectionEventID, SelectedResultSHA256: record.SelectedResultSHA256,
-	}
-}
+var paperRunnerClaimFromRecord = application.PaperRunnerClaimFromRecord
 
-func paperRunnerRecordFromClaim(claim *paperRunnerClaim) paperRunnerLeaseRecord {
-	if claim == nil {
-		return paperRunnerLeaseRecord{}
-	}
-	return paperRunnerLeaseRecord{
-		Scope: claim.Scope, FencingToken: claim.FencingToken, OwnerID: claim.OwnerID, AccountRef: claim.AccountRef,
-		HeartbeatAtNS: claim.HeartbeatAtNS, ExpiresAtNS: claim.LeaseExpiresAtNS,
-		StrategySelectionEventID: claim.StrategySelectionEventID, SelectedResultSHA256: claim.SelectedResultSHA256,
-	}
-}
+var paperRunnerRecordFromClaim = application.PaperRunnerRecordFromClaim
 
-func paperRunnerClaimMatchesRecord(claim *paperRunnerClaim, record paperRunnerLeaseRecord) bool {
-	return claim != nil && paperRunnerRecordFromClaim(claim) == record
-}
+var paperRunnerClaimMatchesRecord = application.PaperRunnerClaimMatchesRecord
 
-func claimAccountRef(claim *paperRunnerClaim) string {
-	if claim == nil {
-		return ""
-	}
-	return claim.AccountRef
-}
+var claimAccountRef = application.ClaimAccountRef

@@ -173,24 +173,23 @@ func replayStrategyRegistry(ctx context.Context, q orderQuerier) (strategyRegist
 	selectionCloseSequence := map[string]int64{}
 	type policyLink struct{ policyID, eventID string }
 	var linkedRollbacks []policyLink
-	selectionQuery := `SELECT sequence,event_id,event_type,candidate_result_sha256,expected_current_event_id,
-		 source_event_id,previous_selected_result_sha256,selected_result_sha256,reason_code,0,NULL,NULL,record_sha256,record_json,recorded_at
-		FROM strategy_selection_events ORDER BY sequence`
-	if schemaVersion >= 20 {
-		selectionQuery = `SELECT sequence,event_id,event_type,candidate_result_sha256,expected_current_event_id,
-		 source_event_id,previous_selected_result_sha256,selected_result_sha256,reason_code,paper_evaluation_sequence,paper_performance_policy_event_id,NULL,record_sha256,record_json,recorded_at
-		FROM strategy_selection_events ORDER BY sequence`
-	} else if schemaVersion >= 14 {
-		selectionQuery = `SELECT sequence,event_id,event_type,candidate_result_sha256,expected_current_event_id,
-		 source_event_id,previous_selected_result_sha256,selected_result_sha256,reason_code,paper_evaluation_sequence,NULL,NULL,record_sha256,record_json,recorded_at
-		FROM strategy_selection_events ORDER BY sequence`
-	}
 	if schemaVersion >= 27 {
-		selectionQuery = `SELECT sequence,event_id,event_type,candidate_result_sha256,expected_current_event_id,
+		rows, err = q.QueryContext(ctx, `SELECT sequence,event_id,event_type,candidate_result_sha256,expected_current_event_id,
 		 source_event_id,previous_selected_result_sha256,selected_result_sha256,reason_code,paper_evaluation_sequence,paper_performance_policy_event_id,paper_promotion_attempt_id,record_sha256,record_json,recorded_at
-		FROM strategy_selection_events ORDER BY sequence`
+		FROM strategy_selection_events ORDER BY sequence`)
+	} else if schemaVersion >= 20 {
+		rows, err = q.QueryContext(ctx, `SELECT sequence,event_id,event_type,candidate_result_sha256,expected_current_event_id,
+		 source_event_id,previous_selected_result_sha256,selected_result_sha256,reason_code,paper_evaluation_sequence,paper_performance_policy_event_id,NULL,record_sha256,record_json,recorded_at
+		FROM strategy_selection_events ORDER BY sequence`)
+	} else if schemaVersion >= 14 {
+		rows, err = q.QueryContext(ctx, `SELECT sequence,event_id,event_type,candidate_result_sha256,expected_current_event_id,
+		 source_event_id,previous_selected_result_sha256,selected_result_sha256,reason_code,paper_evaluation_sequence,NULL,NULL,record_sha256,record_json,recorded_at
+		FROM strategy_selection_events ORDER BY sequence`)
+	} else {
+		rows, err = q.QueryContext(ctx, `SELECT sequence,event_id,event_type,candidate_result_sha256,expected_current_event_id,
+		 source_event_id,previous_selected_result_sha256,selected_result_sha256,reason_code,0,NULL,NULL,record_sha256,record_json,recorded_at
+		FROM strategy_selection_events ORDER BY sequence`)
 	}
-	rows, err = q.QueryContext(ctx, selectionQuery)
 	if err != nil {
 		return strategyRegistryRecoveryProof{}, err
 	}

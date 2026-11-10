@@ -334,11 +334,14 @@ func requirePaperPromotionAppendTime(ctx context.Context, q orderQuerier, record
 
 func validatePaperPromotionJournalCutoffs(ctx context.Context, q orderQuerier, c paperPromotionClaim) error {
 	claimedAt, _ := parsePaperTime(c.RecordedAt)
-	for _, journal := range []struct {
-		table  string
-		cutoff int64
-	}{{"order_events", c.OrderSequenceCutoff}, {"strategy_research_evidence", c.ResearchSequenceCutoff}} {
-		rows, err := q.QueryContext(ctx, `SELECT sequence,recorded_at FROM `+journal.table+` ORDER BY sequence`)
+	for index, cutoff := range []int64{c.OrderSequenceCutoff, c.ResearchSequenceCutoff} {
+		var rows rowset
+		var err error
+		if index == 0 {
+			rows, err = q.QueryContext(ctx, `SELECT sequence,recorded_at FROM order_events ORDER BY sequence`)
+		} else {
+			rows, err = q.QueryContext(ctx, `SELECT sequence,recorded_at FROM strategy_research_evidence ORDER BY sequence`)
+		}
 		if err != nil {
 			return err
 		}
@@ -350,7 +353,7 @@ func validatePaperPromotionJournalCutoffs(ctx context.Context, q orderQuerier, c
 				return err
 			}
 			at, ok := canonicalUTCTime(raw)
-			if !ok || (sequence <= journal.cutoff) != (!at.After(claimedAt)) {
+			if !ok || (sequence <= cutoff) != (!at.After(claimedAt)) {
 				rows.Close()
 				return errors.New("paper promotion journal cutoff differs from its claimed time")
 			}

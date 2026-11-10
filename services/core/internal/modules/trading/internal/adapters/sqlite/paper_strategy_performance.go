@@ -9,6 +9,8 @@ import (
 	"errors"
 	"fmt"
 	"omni-folio/services/core/internal/modules/trading/contracts"
+	"omni-folio/services/core/internal/modules/trading/internal/application"
+	"omni-folio/services/core/internal/modules/trading/internal/domain"
 	paperdomain "omni-folio/services/core/internal/modules/trading/internal/domain/paper"
 	"strings"
 )
@@ -21,17 +23,9 @@ const (
 
 type PaperStrategyPerformanceEvent = contracts.PaperStrategyPerformanceEvent
 
-type paperStrategyPerformanceRecoveryProof struct {
-	SHA256  string
-	Events  int
-	Samples int
-}
+type paperStrategyPerformanceRecoveryProof = application.StrategyPerformanceRecoveryProof
 
-type paperStrategyPerformanceWindow struct {
-	baseline PaperPerformanceEvent
-	latest   PaperPerformanceEvent
-	equities []string
-}
+type paperStrategyPerformanceWindow = application.StrategyPerformanceWindow
 
 func (s *Store) EvaluatePaperStrategyPerformance(
 	ctx context.Context,
@@ -49,18 +43,7 @@ func (s *Store) evaluatePaperStrategyPerformanceWithClaim(
 	expectedLatestPerformanceID string,
 	claim *paperRunnerClaim,
 ) (*PaperStrategyPerformanceEvent, error) {
-	if s == nil || s.db == nil || s.now == nil || claim == nil || claim.AccountRef != accountRef ||
-		!orderAlias(accountRef, "account") || !safeOrderID(expectedSelectionEventID) || !safeOrderID(expectedLatestPerformanceID) {
-		return nil, errors.New("paper strategy performance runner claim is missing")
-	}
-	stageCtx, cancel := context.WithTimeout(ctx, paperRunnerStageTimeout)
-	defer cancel()
-	renewed, err := s.heartbeatPaperRunnerLease(stageCtx, claim)
-	if err != nil {
-		return nil, err
-	}
-	*claim = *renewed
-	return s.evaluatePaperStrategyPerformanceTx(stageCtx, accountRef, expectedSelectionEventID, expectedLatestPerformanceID, claim)
+	return s.business().EvaluatePaperStrategyPerformanceWithClaim(ctx, accountRef, expectedSelectionEventID, expectedLatestPerformanceID, claim)
 }
 
 func (s *Store) evaluatePaperStrategyPerformanceTx(
@@ -70,113 +53,13 @@ func (s *Store) evaluatePaperStrategyPerformanceTx(
 	expectedLatestPerformanceID string,
 	claim *paperRunnerClaim,
 ) (*PaperStrategyPerformanceEvent, error) {
-	if s == nil || s.db == nil || s.now == nil || !orderAlias(accountRef, "account") ||
-		!safeOrderID(expectedSelectionEventID) || !safeOrderID(expectedLatestPerformanceID) {
+	if s == nil || s.db == nil {
 		return nil, errors.New("paper strategy performance identifiers are invalid")
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, err
-	}
-	defer tx.Rollback()
-	if claim != nil {
-		if err := validatePaperRunnerLeaseTx(ctx, tx, claim, accountRef, s.paperRunnerOwner, s.now()); err != nil {
-			return nil, err
-		}
-	}
-	if _, err := provePaperStrategyPerformanceRecovery(ctx, tx); err != nil {
-		return nil, fmt.Errorf("paper strategy performance recovery: %w", err)
-	}
-	_, selectionEventID, selectedResult, err := currentPaperPerformanceSelection(ctx, tx)
-	if err != nil {
-		return nil, err
-	}
-	if selectionEventID != expectedSelectionEventID {
-		return nil, errors.New("paper strategy performance selection is stale")
-	}
-	if selectedResult == noStrategySelection {
-		return nil, errors.New("paper strategy performance is not attributable to no_strategy")
-	}
-	latest, latestSequence, found, err := loadLatestPaperPerformance(ctx, tx, accountRef)
-	if err != nil {
-		return nil, err
-	}
-	if !found || latest.PerformanceID != expectedLatestPerformanceID {
-		return nil, errors.New("paper strategy performance latest point is stale")
-	}
-	if latest.StrategySelectionEventID != selectionEventID || latest.SelectedStrategyResultRef != selectedResult {
-		return nil, errors.New("paper strategy performance requires a current-selection point")
-	}
-	if existing, found, err := loadPaperStrategyPerformanceByKey(ctx, tx, accountRef, selectionEventID, latest.PerformanceID); err != nil {
-		return nil, err
-	} else if found {
-		if claim != nil {
-			renewed, err := renewPaperRunnerLeaseTx(ctx, tx, claim, s.paperRunnerOwner, s.now())
-			if err != nil {
-				return nil, err
-			}
-			if err := tx.Commit(); err != nil {
-				return nil, err
-			}
-			*claim = *renewed
-		}
-		return existing, nil
-	}
-	window, err := loadPaperStrategyPerformanceWindow(ctx, tx, accountRef, latest.PaperAccountingSessionID,
-		selectionEventID, selectedResult, latest.PerformanceID, latestSequence)
-	if err != nil {
-		return nil, err
-	}
-	points, err := paperdomain.CalculatePerformance(window.baseline.Equity, window.equities)
-	if err != nil || len(points) == 0 {
-		return nil, errors.Join(errors.New("paper strategy performance window is invalid"), err)
-	}
-	point := points[len(points)-1]
-	previousID, err := latestPaperStrategyPerformanceID(ctx, tx, accountRef, latest.PaperAccountingSessionID, selectionEventID)
-	if err != nil {
-		return nil, err
-	}
-	event := PaperStrategyPerformanceEvent{
-		SchemaVersion: paperStrategyPerformanceSchema, PolicyVersion: paperStrategyPerformancePolicy,
-		AccountRef: accountRef, PaperAccountingSessionID: latest.PaperAccountingSessionID,
-		StrategySelectionEventID: selectionEventID, SelectedStrategyResultRef: selectedResult,
-		ExpectedPreviousStrategyPerformanceID: previousID, BaselinePerformanceID: window.baseline.PerformanceID,
-		LatestPerformanceID: latest.PerformanceID, BaselineAsOf: window.baseline.AsOf, LatestAsOf: latest.AsOf,
-		SampleCount: len(window.equities), BaselineEquity: window.baseline.Equity, LatestEquity: latest.Equity,
-		PeakEquity: point.PeakEquity, PeriodReturnState: point.PeriodReturnState, PeriodReturn: point.PeriodReturn,
-		CumulativeReturn: point.CumulativeReturn, Drawdown: point.Drawdown, MaxDrawdown: point.MaxDrawdown,
-		RecordedAt: s.now().UTC().Format(canonicalPaperTimeLayout),
-	}
-	event.StrategyPerformanceID = paperStrategyPerformanceID(event)
-	if err := insertPaperStrategyPerformanceEvent(ctx, tx, event); err != nil {
-		return nil, err
-	}
-	if _, err := provePaperStrategyPerformanceRecovery(ctx, tx); err != nil {
-		return nil, fmt.Errorf("proposed paper strategy performance recovery: %w", err)
-	}
-	var renewed *paperRunnerClaim
-	if claim != nil {
-		renewed, err = renewPaperRunnerLeaseTx(ctx, tx, claim, s.paperRunnerOwner, s.now())
-		if err != nil {
-			return nil, err
-		}
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, err
-	}
-	if renewed != nil {
-		*claim = *renewed
-	}
-	return &event, nil
+	return s.business().EvaluatePaperStrategyPerformance(ctx, accountRef, expectedSelectionEventID, expectedLatestPerformanceID, claim)
 }
 
-func paperStrategyPerformanceID(event PaperStrategyPerformanceEvent) string {
-	hash := sha256.Sum256([]byte(strings.Join([]string{
-		event.PolicyVersion, event.AccountRef, event.PaperAccountingSessionID, event.StrategySelectionEventID,
-		event.BaselinePerformanceID, event.LatestPerformanceID,
-	}, "\x00")))
-	return "paper_strategy_performance_" + hex.EncodeToString(hash[:16])
-}
+var paperStrategyPerformanceID = application.PaperStrategyPerformanceID
 
 func insertPaperStrategyPerformanceEvent(ctx context.Context, tx *transaction, event PaperStrategyPerformanceEvent) error {
 	if err := validatePaperStrategyPerformanceEventShape(event); err != nil {
@@ -251,7 +134,7 @@ func provePaperStrategyPerformanceRecovery(ctx context.Context, q orderQuerier) 
 		if err != nil {
 			return paperStrategyPerformanceRecoveryProof{}, err
 		}
-		points, err := paperdomain.CalculatePerformance(window.baseline.Equity, window.equities)
+		points, err := paperdomain.CalculatePerformance(window.Baseline.Equity, window.Equities)
 		if err != nil || len(points) == 0 {
 			return paperStrategyPerformanceRecoveryProof{}, errors.Join(errors.New("paper strategy performance recovery calculation failed"), err)
 		}
@@ -262,10 +145,10 @@ func provePaperStrategyPerformanceRecovery(ctx context.Context, q orderQuerier) 
 			expectedPrevious = previous[key]
 		}
 		if item.event.ExpectedPreviousStrategyPerformanceID != expectedPrevious ||
-			item.event.BaselinePerformanceID != window.baseline.PerformanceID || item.event.LatestPerformanceID != window.latest.PerformanceID ||
-			item.event.BaselineAsOf != window.baseline.AsOf || item.event.LatestAsOf != window.latest.AsOf ||
-			item.event.SampleCount != len(window.equities) || item.event.BaselineEquity != window.baseline.Equity ||
-			item.event.LatestEquity != window.latest.Equity || item.event.PeakEquity != point.PeakEquity ||
+			item.event.BaselinePerformanceID != window.Baseline.PerformanceID || item.event.LatestPerformanceID != window.Latest.PerformanceID ||
+			item.event.BaselineAsOf != window.Baseline.AsOf || item.event.LatestAsOf != window.Latest.AsOf ||
+			item.event.SampleCount != len(window.Equities) || item.event.BaselineEquity != window.Baseline.Equity ||
+			item.event.LatestEquity != window.Latest.Equity || item.event.PeakEquity != point.PeakEquity ||
 			item.event.PeriodReturnState != point.PeriodReturnState || item.event.PeriodReturn != point.PeriodReturn ||
 			item.event.CumulativeReturn != point.CumulativeReturn || item.event.Drawdown != point.Drawdown ||
 			item.event.MaxDrawdown != point.MaxDrawdown {
@@ -283,60 +166,7 @@ func provePaperStrategyPerformanceRecovery(ctx context.Context, q orderQuerier) 
 func loadPaperStrategyPerformanceWindow(ctx context.Context, q orderQuerier, accountRef, sessionID, selectionEventID,
 	selectedResult, latestPerformanceID string, latestSequence int64,
 ) (paperStrategyPerformanceWindow, error) {
-	var selectionRecordedAt string
-	if err := q.QueryRowContext(ctx, `SELECT recorded_at FROM strategy_selection_events WHERE event_id=? AND selected_result_sha256=?`,
-		selectionEventID, selectedResult).Scan(&selectionRecordedAt); err != nil {
-		return paperStrategyPerformanceWindow{}, err
-	}
-	selectionTime, ok := canonicalUTCTime(selectionRecordedAt)
-	if !ok {
-		return paperStrategyPerformanceWindow{}, errors.New("paper strategy performance selection time is invalid")
-	}
-	rows, err := q.QueryContext(ctx, `SELECT 0,performance_id,schema_version,policy_version,account_ref,
-		paper_accounting_session_id,strategy_selection_event_id,selected_strategy_result_ref,expected_previous_performance_id,
-		strategy_selection_sequence_cutoff,order_event_sequence_cutoff,paper_market_sequence_cutoff,as_of,
-		paper_account_state_sha256,marks_sha256,marks_json,mark_count,cash,open_cost,market_value,realized_pnl,
-		unrealized_pnl,total_pnl,equity,peak_equity,period_return_state,period_return,cumulative_return,drawdown,
-		max_drawdown,record_sha256,record_json,recorded_at FROM paper_performance_events
-		WHERE account_ref=? AND paper_accounting_session_id=? AND strategy_selection_event_id=? AND sequence<=?
-		ORDER BY sequence`, accountRef, sessionID, selectionEventID, latestSequence)
-	if err != nil {
-		return paperStrategyPerformanceWindow{}, err
-	}
-	var window paperStrategyPerformanceWindow
-	foundLatest := false
-	for rows.Next() {
-		var event PaperPerformanceEvent
-		var sequence int64
-		var recordSHA, recordJSON string
-		if err := scanPaperPerformance(rows.Scan, &event, &sequence, &recordSHA, &recordJSON); err != nil {
-			rows.Close()
-			return paperStrategyPerformanceWindow{}, err
-		}
-		asOf, ok := parsePaperTime(event.AsOf)
-		if !ok || asOf.Before(selectionTime) {
-			continue
-		}
-		if event.SelectedStrategyResultRef != selectedResult {
-			rows.Close()
-			return paperStrategyPerformanceWindow{}, errors.New("paper strategy performance result binding is invalid")
-		}
-		if len(window.equities) == 0 {
-			window.baseline = event
-		}
-		window.latest = event
-		window.equities = append(window.equities, event.Equity)
-		if event.PerformanceID == latestPerformanceID {
-			foundLatest = true
-		}
-	}
-	if err := closeRows(rows); err != nil {
-		return paperStrategyPerformanceWindow{}, err
-	}
-	if !foundLatest || len(window.equities) == 0 || window.latest.PerformanceID != latestPerformanceID {
-		return paperStrategyPerformanceWindow{}, errors.New("paper strategy performance current-selection window is missing")
-	}
-	return window, nil
+	return application.LoadStrategyPerformanceWindow(ctx, &strategyWindowReads{q: q}, accountRef, sessionID, selectionEventID, selectedResult, latestPerformanceID, latestSequence)
 }
 
 func loadLatestPaperPerformance(ctx context.Context, q orderQuerier, accountRef string) (PaperPerformanceEvent, int64, bool, error) {
@@ -424,26 +254,5 @@ func validateStoredPaperStrategyPerformanceEvent(event PaperStrategyPerformanceE
 }
 
 func validatePaperStrategyPerformanceEventShape(event PaperStrategyPerformanceEvent) error {
-	if event.StrategyPerformanceID != paperStrategyPerformanceID(event) || !safeOrderID(event.StrategyPerformanceID) ||
-		event.SchemaVersion != paperStrategyPerformanceSchema || event.PolicyVersion != paperStrategyPerformancePolicy ||
-		!orderAlias(event.AccountRef, "account") || !safeOrderID(event.PaperAccountingSessionID) ||
-		!safeOrderID(event.StrategySelectionEventID) || !strategySHA256Pattern.MatchString(event.SelectedStrategyResultRef) ||
-		!safeOrderID(event.ExpectedPreviousStrategyPerformanceID) || !safeOrderID(event.BaselinePerformanceID) ||
-		!safeOrderID(event.LatestPerformanceID) || event.SampleCount <= 0 ||
-		!canonicalPaperTimes(event.BaselineAsOf, event.LatestAsOf, event.RecordedAt) || event.BaselineAsOf > event.LatestAsOf {
-		return errors.New("paper strategy performance event shape is invalid")
-	}
-	for _, raw := range []string{event.BaselineEquity, event.LatestEquity, event.PeakEquity, event.CumulativeReturn, event.Drawdown, event.MaxDrawdown} {
-		if _, err := parseDecimal(raw); err != nil {
-			return errors.New("paper strategy performance decimal is invalid")
-		}
-	}
-	if event.PeriodReturnState == "defined" {
-		if _, err := parseDecimal(event.PeriodReturn); err != nil {
-			return errors.New("paper strategy performance period return is invalid")
-		}
-	} else if event.PeriodReturnState != "undefined_zero_denominator" || event.PeriodReturn != "" {
-		return errors.New("paper strategy performance period return state is invalid")
-	}
-	return nil
+	return domain.ValidatePaperStrategyPerformanceEventShape(domain.PaperStrategyPerformanceEvent(event))
 }

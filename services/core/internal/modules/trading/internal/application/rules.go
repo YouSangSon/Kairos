@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
-	"omni-folio/services/core/internal/codec"
 	"omni-folio/services/core/internal/exact"
 	"omni-folio/services/core/internal/modules/trading/internal/domain"
 	paperdomain "omni-folio/services/core/internal/modules/trading/internal/domain/paper"
@@ -287,31 +286,7 @@ var (
 func validOrderInteger(raw string) bool {
 	return len(raw) <= 32 && orderIntegerPattern.MatchString(raw)
 }
-func canonicalPaperTimes(values ...string) bool {
-	for _, raw := range values {
-		canonical, ok := canonicalPaperTime(raw)
-		if !ok || canonical != raw {
-			return false
-		}
-	}
-	return true
-}
-func parsePaperTime(raw string) (time.Time, bool) {
-	value, err := time.Parse(time.RFC3339Nano, raw)
-	if err != nil || value.Location() != time.UTC {
-		return time.Time{}, false
-	}
-	return value, value.Format(time.RFC3339Nano) == raw || value.Format(canonicalPaperTimeLayout) == raw
-}
 
 var orderIntegerPattern = regexp.MustCompile(`^[1-9][0-9]*$`)
 
-func canonicalPaperTime(raw string) (string, bool) {
-	value, ok := parsePaperTime(raw)
-	if !ok {
-		return "", false
-	}
-	return value.Format(canonicalPaperTimeLayout), true
-}
-
-var orderJSONHash = codec.JSONHash
+var orderJSONHash = domain.JSONHash

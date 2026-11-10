@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
-	"encoding/csv"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -16,7 +15,6 @@ import (
 	paperdomain "omni-folio/services/core/internal/modules/trading/internal/domain/paper"
 	researchdomain "omni-folio/services/core/internal/modules/trading/internal/domain/research"
 	"regexp"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -215,59 +213,6 @@ func MapField(value map[string]any, key string) (map[string]any, bool) {
 func StringField(value map[string]any, key string) string {
 	result, _ := value[key].(string)
 	return result
-}
-
-func ParsePaperPromotionBars(ctx context.Context, raw []byte) (string, []researchdomain.Bar, error) {
-	if err := ctx.Err(); err != nil {
-		return "", nil, err
-	}
-	if len(raw) == 0 || len(raw) > maxMarketDataBytes || !utf8.Valid(raw) {
-		return "", nil, errors.New("paper promotion bars require UTF-8 CSV of at most 1 MiB")
-	}
-	reader := csv.NewReader(bytes.NewReader(raw))
-	reader.FieldsPerRecord = 7
-	header, err := reader.Read()
-	if err != nil || !slices.Equal(header, []string{"bar_at", "symbol", "open", "high", "low", "close", "volume"}) {
-		return "", nil, errors.New("paper promotion bars require the canonical seven-column header")
-	}
-	var symbol string
-	var previous time.Time
-	bars := make([]researchdomain.Bar, 0)
-	for {
-		if err := ctx.Err(); err != nil {
-			return "", nil, err
-		}
-		row, err := reader.Read()
-		if errors.Is(err, io.EOF) {
-			break
-		}
-		if err != nil {
-			return "", nil, fmt.Errorf("paper promotion bars CSV: %w", err)
-		}
-		if len(bars) == maxMarketDataRows {
-			return "", nil, errors.New("paper promotion bars must not exceed 500 rows")
-		}
-		if !kiwoomStockPattern.MatchString(row[1]) || symbol != "" && row[1] != symbol {
-			return "", nil, errors.New("paper promotion bars require exactly one six-digit stock symbol")
-		}
-		at, err := time.Parse(time.RFC3339, row[0])
-		if err != nil || at.UTC().Format(time.RFC3339) != row[0] || len(bars) > 0 && !at.After(previous) {
-			return "", nil, errors.New("paper promotion bars require strictly increasing whole-second UTC timestamps")
-		}
-		whole, fraction, _ := strings.Cut(row[5], ".")
-		if len(whole) > 12 || len(fraction) > 8 || len(row[5]) > 21 {
-			return "", nil, errors.New("paper promotion close is outside the paper SMA bounds")
-		}
-		if err := validateMarketDataValues(row[2], row[3], row[4], row[5], row[6]); err != nil {
-			return "", nil, fmt.Errorf("paper promotion bars: %w", err)
-		}
-		symbol, previous = row[1], at
-		bars = append(bars, researchdomain.Bar{At: row[0], Open: row[2], Close: row[5], Volume: row[6]})
-	}
-	if len(bars) == 0 {
-		return "", nil, errors.New("paper promotion bars require at least one row")
-	}
-	return symbol, bars, nil
 }
 
 func PaperPromotionStrategy(evidence Evidence) (researchdomain.Strategy, error) {

@@ -28,18 +28,7 @@ func (s *Store) ApplyPaperPerformancePolicy(ctx context.Context, accountRef, exp
 }
 
 func (s *Store) applyPaperPerformancePolicyWithClaim(ctx context.Context, accountRef, expectedSelectionEventID, expectedStrategyPerformanceID string, claim *paperRunnerClaim) (*PaperPerformancePolicyEvent, error) {
-	if s == nil || s.db == nil || s.now == nil || claim == nil || claim.AccountRef != accountRef ||
-		!orderAlias(accountRef, "account") || !safeOrderID(expectedSelectionEventID) || !safeOrderID(expectedStrategyPerformanceID) {
-		return nil, errors.New("paper performance policy runner claim is missing")
-	}
-	stageCtx, cancel := context.WithTimeout(ctx, paperRunnerStageTimeout)
-	defer cancel()
-	renewed, err := s.heartbeatPaperRunnerLease(stageCtx, claim)
-	if err != nil {
-		return nil, err
-	}
-	*claim = *renewed
-	return s.applyPaperPerformancePolicyTx(stageCtx, accountRef, expectedSelectionEventID, expectedStrategyPerformanceID, claim)
+	return s.business().ApplyPaperPerformancePolicyWithClaim(ctx, accountRef, expectedSelectionEventID, expectedStrategyPerformanceID, claim)
 }
 
 func (s *Store) applyPaperPerformancePolicyTx(ctx context.Context, accountRef, expectedSelectionEventID, expectedStrategyPerformanceID string, claim *paperRunnerClaim) (*PaperPerformancePolicyEvent, error) {
@@ -514,11 +503,22 @@ func validatePaperPerformancePolicyReverseCoverage(ctx context.Context, q orderQ
 }
 
 func maxSequence(ctx context.Context, q orderQuerier, table string) (int64, error) {
-	if table != "strategy_selection_events" && table != "execution_authority_events" && table != "paper_strategy_performance_events" {
+	var value int64
+	var err error
+	switch table {
+	case "strategy_selection_events":
+		err = q.QueryRowContext(ctx, `SELECT COALESCE(MAX(sequence),0) FROM strategy_selection_events`).Scan(&value)
+	case "execution_authority_events":
+		err = q.QueryRowContext(ctx, `SELECT COALESCE(MAX(sequence),0) FROM execution_authority_events`).Scan(&value)
+	case "paper_strategy_performance_events":
+		err = q.QueryRowContext(ctx, `SELECT COALESCE(MAX(sequence),0) FROM paper_strategy_performance_events`).Scan(&value)
+	case "order_events":
+		err = q.QueryRowContext(ctx, `SELECT COALESCE(MAX(sequence),0) FROM order_events`).Scan(&value)
+	case "paper_market_bar_observations":
+		err = q.QueryRowContext(ctx, `SELECT COALESCE(MAX(sequence),0) FROM paper_market_bar_observations`).Scan(&value)
+	default:
 		return 0, errors.New("unsupported sequence table")
 	}
-	var value int64
-	err := q.QueryRowContext(ctx, `SELECT COALESCE(MAX(sequence),0) FROM `+table).Scan(&value)
 	return value, err
 }
 

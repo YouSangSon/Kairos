@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"regexp"
 	"strings"
 	"time"
@@ -47,4 +48,17 @@ var orderAliasPattern = regexp.MustCompile(`^kiwoom_(account|order|execution)_[A
 func AccountingSessionID(accountRef, resultSHA256, selectionEventID, policySHA256 string) string {
 	hash := sha256.Sum256([]byte(strings.Join([]string{accountRef, resultSHA256, selectionEventID, policySHA256}, "\x00")))
 	return "paper_accounting_session_" + hex.EncodeToString(hash[:16])
+}
+
+func JSONHash(value any) ([]byte, string, error) {
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return nil, "", err
+	}
+	hash := sha256.Sum256(raw)
+	return raw, hex.EncodeToString(hash[:]), nil
+}
+func CanonicalUTCString(raw string) bool {
+	value, err := time.Parse(time.RFC3339Nano, raw)
+	return err == nil && value.UTC().Format(time.RFC3339Nano) == raw
 }

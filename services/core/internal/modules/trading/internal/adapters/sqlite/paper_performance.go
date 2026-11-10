@@ -9,9 +9,9 @@ import (
 	"errors"
 	"fmt"
 	"omni-folio/services/core/internal/modules/trading/contracts"
+	"omni-folio/services/core/internal/modules/trading/internal/application"
+	"omni-folio/services/core/internal/modules/trading/internal/domain"
 	paperdomain "omni-folio/services/core/internal/modules/trading/internal/domain/paper"
-	"sort"
-	"strings"
 )
 
 const (
@@ -22,181 +22,26 @@ const (
 
 type PaperPerformanceEvent = contracts.PaperPerformanceEvent
 
-type paperPerformanceRecoveryProof struct {
-	SHA256 string
-	Events int
-	Marks  int
-}
+type paperPerformanceRecoveryProof = application.PerformanceRecoveryProof
 
-type paperPerformanceMark struct {
-	Symbol              string `json:"symbol"`
-	Quantity            string `json:"quantity"`
-	ObservationID       string `json:"observation_id"`
-	ObservationSequence int64  `json:"observation_sequence"`
-	Close               string `json:"close"`
-	OpenCost            string `json:"open_cost"`
-	MarketValue         string `json:"market_value"`
-	UnrealizedPnL       string `json:"unrealized_pnl"`
-}
+type paperPerformanceMark = application.PerformanceMark
 
 func (s *Store) EvaluatePaperPerformance(ctx context.Context, accountRef, asOf string) (*PaperPerformanceEvent, error) {
 	return s.evaluatePaperPerformanceTx(ctx, accountRef, asOf, nil)
 }
 
 func (s *Store) evaluatePaperPerformanceWithClaim(ctx context.Context, accountRef, asOf string, claim *paperRunnerClaim) (*PaperPerformanceEvent, error) {
-	if s == nil || s.db == nil || s.now == nil || claim == nil || claim.AccountRef != accountRef || !orderAlias(accountRef, "account") {
-		return nil, errors.New("paper performance runner claim is missing")
-	}
-	if _, ok := canonicalPaperTime(asOf); !ok {
-		return nil, errors.New("paper performance as_of is invalid")
-	}
-	stageCtx, cancel := context.WithTimeout(ctx, paperRunnerStageTimeout)
-	defer cancel()
-	renewed, err := s.heartbeatPaperRunnerLease(stageCtx, claim)
-	if err != nil {
-		return nil, err
-	}
-	*claim = *renewed
-	return s.evaluatePaperPerformanceTx(stageCtx, accountRef, asOf, claim)
+	return s.business().EvaluatePaperPerformanceWithClaim(ctx, accountRef, asOf, claim)
 }
 
 func (s *Store) evaluatePaperPerformanceTx(ctx context.Context, accountRef, asOf string, claim *paperRunnerClaim) (*PaperPerformanceEvent, error) {
-	if s == nil || s.db == nil || s.now == nil || !orderAlias(accountRef, "account") {
+	if s == nil || s.db == nil {
 		return nil, errors.New("paper performance evaluator is not configured")
 	}
-	canonicalAsOf, ok := canonicalPaperTime(asOf)
-	if !ok {
-		return nil, errors.New("paper performance as_of is invalid")
-	}
-	asOf = canonicalAsOf
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, err
-	}
-	defer tx.Rollback()
-	if claim != nil {
-		if err := validatePaperRunnerLeaseTx(ctx, tx, claim, accountRef, s.paperRunnerOwner, s.now()); err != nil {
-			return nil, err
-		}
-	}
-	if _, err := provePaperPerformanceRecovery(ctx, tx); err != nil {
-		return nil, fmt.Errorf("paper performance recovery: %w", err)
-	}
-	existing, found, err := loadPaperPerformanceByKey(ctx, tx, accountRef, asOf)
-	if err != nil {
-		return nil, err
-	}
-	if found {
-		if claim != nil {
-			if existing.StrategySelectionEventID != claim.StrategySelectionEventID || existing.SelectedStrategyResultRef != claim.SelectedResultSHA256 {
-				return nil, errPaperRunnerPriorSelection
-			}
-			renewed, err := renewPaperRunnerLeaseTx(ctx, tx, claim, s.paperRunnerOwner, s.now())
-			if err != nil {
-				return nil, err
-			}
-			if err := tx.Commit(); err != nil {
-				return nil, err
-			}
-			*claim = *renewed
-		}
-		return existing, nil
-	}
-
-	session, found, err := loadPaperAccountingSession(ctx, tx, accountRef)
-	if err != nil {
-		return nil, err
-	}
-	if !found {
-		return nil, errors.New("paper performance accounting session is missing")
-	}
-	if err := rejectLegacyPaperPerformanceAccount(ctx, tx, accountRef); err != nil {
-		return nil, err
-	}
-	recordedAt := s.now().UTC().Format(canonicalPaperTimeLayout)
-	if err := validatePaperPerformanceWindow(*session, asOf, recordedAt); err != nil {
-		return nil, err
-	}
-	selectionSequence, selectionEventID, selectedResult, err := currentPaperPerformanceSelection(ctx, tx)
-	if err != nil {
-		return nil, err
-	}
-	var orderCutoff, marketCutoff int64
-	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(sequence),0) FROM order_events`).Scan(&orderCutoff); err != nil {
-		return nil, err
-	}
-	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(sequence),0) FROM paper_market_bar_observations`).Scan(&marketCutoff); err != nil {
-		return nil, err
-	}
-	states, err := replayPaperAccountingStateWithCutoff(ctx, tx, &paperAccountingCutoff{OrderSequence: orderCutoff, AsOf: asOf})
-	if err != nil {
-		return nil, err
-	}
-	state, exists := states[accountRef]
-	if !exists || state.PaperAccountingSessionID != session.SessionID {
-		return nil, errors.New("paper performance account state is missing")
-	}
-	marks, valuation, err := derivePaperPerformanceMarks(ctx, tx, state, session.StartingCash, asOf, recordedAt, marketCutoff)
-	if err != nil {
-		return nil, err
-	}
-	accountJSON, accountSHA, err := orderJSONHash(state)
-	if err != nil || len(accountJSON) == 0 {
-		return nil, errors.Join(errors.New("paper performance account state is invalid"), err)
-	}
-	marksJSON, marksSHA, err := orderJSONHash(marks)
-	if err != nil {
-		return nil, err
-	}
-	previousID, equities, err := priorPaperPerformanceSeries(ctx, tx, accountRef, session.SessionID, asOf)
-	if err != nil {
-		return nil, err
-	}
-	points, err := paperdomain.CalculatePerformance(session.StartingCash, append(equities, valuation.Equity))
-	if err != nil || len(points) == 0 {
-		return nil, errors.Join(errors.New("paper performance series is invalid"), err)
-	}
-	point := points[len(points)-1]
-	event := PaperPerformanceEvent{
-		SchemaVersion: paperPerformanceSchema, PolicyVersion: paperPerformancePolicy, AccountRef: accountRef,
-		PaperAccountingSessionID: session.SessionID, StrategySelectionEventID: selectionEventID,
-		SelectedStrategyResultRef: selectedResult, ExpectedPreviousPerformanceID: previousID,
-		StrategySelectionSequenceCutoff: selectionSequence, OrderEventSequenceCutoff: orderCutoff,
-		PaperMarketSequenceCutoff: marketCutoff, AsOf: asOf, PaperAccountStateSHA256: accountSHA,
-		MarksSHA256: marksSHA, MarksJSON: string(marksJSON), MarkCount: len(marks), Cash: valuation.Cash,
-		OpenCost: valuation.OpenCost, MarketValue: valuation.MarketValue, RealizedPnL: valuation.RealizedPnL,
-		UnrealizedPnL: valuation.UnrealizedPnL, TotalPnL: valuation.TotalPnL, Equity: valuation.Equity,
-		PeakEquity: point.PeakEquity, PeriodReturnState: point.PeriodReturnState, PeriodReturn: point.PeriodReturn,
-		CumulativeReturn: point.CumulativeReturn, Drawdown: point.Drawdown, MaxDrawdown: point.MaxDrawdown,
-		RecordedAt: recordedAt,
-	}
-	event.PerformanceID = paperPerformanceID(event.PolicyVersion, event.AccountRef, event.PaperAccountingSessionID, event.AsOf)
-	if err := insertPaperPerformanceEvent(ctx, tx, event); err != nil {
-		return nil, err
-	}
-	if _, err := provePaperPerformanceRecovery(ctx, tx); err != nil {
-		return nil, fmt.Errorf("proposed paper performance recovery: %w", err)
-	}
-	var renewed *paperRunnerClaim
-	if claim != nil {
-		renewed, err = renewPaperRunnerLeaseTx(ctx, tx, claim, s.paperRunnerOwner, s.now())
-		if err != nil {
-			return nil, err
-		}
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, err
-	}
-	if renewed != nil {
-		*claim = *renewed
-	}
-	return &event, nil
+	return s.business().EvaluatePaperPerformance(ctx, accountRef, asOf, claim)
 }
 
-func paperPerformanceID(policyVersion, accountRef, sessionID, asOf string) string {
-	hash := sha256.Sum256([]byte(strings.Join([]string{policyVersion, accountRef, sessionID, asOf}, "\x00")))
-	return "paper_performance_" + hex.EncodeToString(hash[:16])
-}
+var paperPerformanceID = application.PaperPerformanceID
 
 func insertPaperPerformanceEvent(ctx context.Context, tx *transaction, event PaperPerformanceEvent) error {
 	if err := validatePaperPerformanceEventShape(event); err != nil {
@@ -422,18 +267,7 @@ func rejectLegacyPaperPerformanceAccount(ctx context.Context, q orderQuerier, ac
 	return nil
 }
 
-func validatePaperPerformanceWindow(session PaperAccountingSession, asOf, recordedAt string) error {
-	if !canonicalPaperTimes(asOf, recordedAt) || !canonicalUTCString(session.RecordedAt) {
-		return errors.New("paper performance time window is invalid")
-	}
-	sessionTime, _ := parsePaperTime(session.RecordedAt)
-	asOfTime, _ := parsePaperTime(asOf)
-	recordedTime, _ := parsePaperTime(recordedAt)
-	if !sessionTime.Before(asOfTime) || asOfTime.After(recordedTime) {
-		return errors.New("paper performance requires session.RecordedAt < as_of <= event.RecordedAt")
-	}
-	return nil
-}
+var validatePaperPerformanceWindow = application.ValidatePaperPerformanceWindow
 
 func priorPaperPerformanceSeries(ctx context.Context, q orderQuerier, accountRef, sessionID, asOf string) (string, []string, error) {
 	rows, err := q.QueryContext(ctx, `SELECT performance_id,paper_accounting_session_id,as_of,equity
@@ -474,151 +308,9 @@ func validateStoredPaperPerformanceEvent(event PaperPerformanceEvent, recordSHA,
 }
 
 func validatePaperPerformanceEventShape(event PaperPerformanceEvent) error {
-	if !safeOrderID(event.PerformanceID) || event.PerformanceID != paperPerformanceID(event.PolicyVersion, event.AccountRef, event.PaperAccountingSessionID, event.AsOf) ||
-		event.SchemaVersion != paperPerformanceSchema || event.PolicyVersion != paperPerformancePolicy ||
-		!orderAlias(event.AccountRef, "account") || !safeOrderID(event.PaperAccountingSessionID) ||
-		!safeOrderID(event.StrategySelectionEventID) || !safeOrderID(event.ExpectedPreviousPerformanceID) ||
-		event.StrategySelectionSequenceCutoff <= 0 || event.OrderEventSequenceCutoff < 0 || event.PaperMarketSequenceCutoff < 0 ||
-		!canonicalPaperTimes(event.AsOf, event.RecordedAt) || !strategySHA256Pattern.MatchString(event.PaperAccountStateSHA256) ||
-		!strategySHA256Pattern.MatchString(event.MarksSHA256) || event.MarkCount < 0 {
-		return errors.New("paper performance event shape is invalid")
-	}
-	if event.SelectedStrategyResultRef != noStrategySelection && !strategySHA256Pattern.MatchString(event.SelectedStrategyResultRef) {
-		return errors.New("paper performance selected strategy is invalid")
-	}
-	if !canonicalDecimal(event.Cash, true) || !canonicalDecimal(event.OpenCost, true) || !canonicalDecimal(event.MarketValue, true) ||
-		!canonicalDecimal(event.RealizedPnL, false) || !canonicalDecimal(event.UnrealizedPnL, false) ||
-		!canonicalDecimal(event.TotalPnL, false) || !canonicalDecimal(event.Equity, true) || !canonicalDecimal(event.PeakEquity, true) ||
-		!canonicalDecimal(event.CumulativeReturn, false) || !canonicalDecimal(event.Drawdown, true) || !canonicalDecimal(event.MaxDrawdown, true) {
-		return errors.New("paper performance values are invalid")
-	}
-	if (event.PeriodReturnState == "defined" && !canonicalDecimal(event.PeriodReturn, false)) ||
-		(event.PeriodReturnState == "undefined_zero_denominator" && event.PeriodReturn != "") ||
-		(event.PeriodReturnState != "defined" && event.PeriodReturnState != "undefined_zero_denominator") {
-		return errors.New("paper performance period return is invalid")
-	}
-	var marks []paperPerformanceMark
-	if err := json.Unmarshal([]byte(event.MarksJSON), &marks); err != nil || marks == nil || len(marks) != event.MarkCount {
-		return errors.New("paper performance marks JSON is invalid")
-	}
-	canonical, marksSHA, err := orderJSONHash(marks)
-	if err != nil || string(canonical) != event.MarksJSON || marksSHA != event.MarksSHA256 {
-		return errors.New("paper performance marks JSON or hash mismatch")
-	}
-	for _, mark := range marks {
-		if len(mark.Symbol) != 6 || !safeOrderID(mark.ObservationID) || mark.ObservationSequence <= 0 ||
-			!canonicalDecimal(mark.Quantity, true) || !canonicalDecimal(mark.Close, true) || !canonicalDecimal(mark.OpenCost, true) ||
-			!canonicalDecimal(mark.MarketValue, true) || !canonicalDecimal(mark.UnrealizedPnL, false) {
-			return errors.New("paper performance mark is invalid")
-		}
-	}
-	return nil
+	return domain.ValidatePaperPerformanceEventShape(domain.PaperPerformanceEvent(event))
 }
 
 func derivePaperPerformanceMarks(ctx context.Context, q orderQuerier, state paperAccountState, startingCash, asOf, recordedAt string, marketCutoff int64) ([]paperPerformanceMark, paperdomain.Valuation, error) {
-	if marketCutoff < 0 || !canonicalPaperTimes(asOf, recordedAt) {
-		return nil, paperdomain.Valuation{}, errors.New("paper performance mark cutoff is invalid")
-	}
-	recorded, _ := parsePaperTime(recordedAt)
-	positions := make(map[string]bool, len(state.Lots))
-	for symbol, lots := range state.Lots {
-		if len(lots) != 0 {
-			positions[symbol] = true
-		}
-	}
-	if len(positions) == 0 {
-		var anchored int
-		if err := q.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM paper_market_bar_observations
-			WHERE sequence<=? AND source='paper_fixture' AND venue='KRX' AND currency='KRW' AND interval='1d'
-			  AND timezone='Asia/Seoul' AND price_adjustment='unspecified' AND close_at=?
-			  AND source_available_at<=? AND fetched_at<=? AND recorded_at<=?)`,
-			marketCutoff, asOf, recordedAt, recordedAt, recordedAt).Scan(&anchored); err != nil {
-			return nil, paperdomain.Valuation{}, err
-		}
-		if anchored == 0 {
-			return nil, paperdomain.Valuation{}, errors.New("paper performance cash-only close anchor is missing")
-		}
-		valuation, err := paperdomain.ValueAccount(startingCash, state, map[string]string{})
-		if err != nil {
-			return nil, paperdomain.Valuation{}, err
-		}
-		return []paperPerformanceMark{}, valuation, nil
-	}
-
-	rows, err := q.QueryContext(ctx, `SELECT observation_id FROM paper_market_bar_observations
-		WHERE sequence<=? AND close_at=? ORDER BY sequence`, marketCutoff, asOf)
-	if err != nil {
-		return nil, paperdomain.Valuation{}, err
-	}
-	var observationIDs []string
-	for rows.Next() {
-		var observationID string
-		if err := rows.Scan(&observationID); err != nil {
-			rows.Close()
-			return nil, paperdomain.Valuation{}, err
-		}
-		observationIDs = append(observationIDs, observationID)
-	}
-	if err := closeRows(rows); err != nil {
-		return nil, paperdomain.Valuation{}, err
-	}
-
-	type selectedMark struct {
-		bar      *PaperMarketBarObservation
-		sequence int64
-	}
-	selected := make(map[string]selectedMark, len(positions))
-	for _, observationID := range observationIDs {
-		bar, sequence, err := loadPaperMarketBarByID(ctx, q, observationID)
-		if err != nil {
-			return nil, paperdomain.Valuation{}, err
-		}
-		if !positions[bar.Symbol] {
-			continue
-		}
-		if bar.Source != "paper_fixture" || bar.Venue != "KRX" || bar.Currency != "KRW" || bar.Interval != "1d" ||
-			bar.Timezone != "Asia/Seoul" || bar.PriceAdjustment != "unspecified" || bar.CloseAt != asOf {
-			continue
-		}
-		sourceAvailable, _ := parsePaperTime(bar.SourceAvailableAt)
-		fetched, _ := parsePaperTime(bar.FetchedAt)
-		barRecorded, _ := parsePaperTime(bar.RecordedAt)
-		if sourceAvailable.After(recorded) || fetched.After(recorded) || barRecorded.After(recorded) {
-			return nil, paperdomain.Valuation{}, errors.New("paper performance mark was unavailable at record time")
-		}
-		if _, exists := selected[bar.Symbol]; exists {
-			return nil, paperdomain.Valuation{}, errors.New("paper performance mark is ambiguous")
-		}
-		selected[bar.Symbol] = selectedMark{bar: bar, sequence: sequence}
-	}
-	if len(selected) != len(positions) {
-		return nil, paperdomain.Valuation{}, errPaperRunnerIncompleteMarks
-	}
-
-	closes := make(map[string]string, len(selected))
-	for symbol, mark := range selected {
-		closes[symbol] = mark.bar.Close
-	}
-	valuation, err := paperdomain.ValueAccount(startingCash, state, closes)
-	if err != nil {
-		return nil, paperdomain.Valuation{}, err
-	}
-	symbols := make([]string, 0, len(valuation.Positions))
-	for symbol := range valuation.Positions {
-		symbols = append(symbols, symbol)
-	}
-	sort.Strings(symbols)
-	marks := make([]paperPerformanceMark, 0, len(symbols))
-	for _, symbol := range symbols {
-		mark, exists := selected[symbol]
-		if !exists {
-			return nil, paperdomain.Valuation{}, errors.New("paper performance marks do not match positions")
-		}
-		position := valuation.Positions[symbol]
-		marks = append(marks, paperPerformanceMark{
-			Symbol: symbol, Quantity: position.Quantity, ObservationID: mark.bar.ObservationID, ObservationSequence: mark.sequence,
-			Close: mark.bar.Close, OpenCost: position.OpenCost, MarketValue: position.MarketValue, UnrealizedPnL: position.UnrealizedPnL,
-		})
-	}
-	return marks, valuation, nil
+	return application.DerivePaperPerformanceMarks(ctx, &valuationReads{q: q}, state, startingCash, asOf, recordedAt, marketCutoff)
 }

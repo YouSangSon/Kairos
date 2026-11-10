@@ -8,7 +8,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"math/big"
 	"omni-folio/services/core/internal/modules/trading/contracts"
 	"omni-folio/services/core/internal/modules/trading/internal/application"
@@ -30,95 +29,12 @@ func (s *Store) RunPaperSignal(ctx context.Context, accountRef string, signal Pa
 	if s == nil || s.db == nil {
 		return nil, errors.New("paper runner is not configured")
 	}
-	target, generatedAt, expiresAt, err := validatePaperSignal(signal)
-	if err != nil {
-		return nil, err
-	}
-	observedAt, ask, available, err := validatePaperObservation(observation, signal, generatedAt, s.now().UTC())
-	if err != nil {
-		return nil, err
-	}
-	now := s.now().UTC()
-	state, err := s.recordPaperTarget(ctx, accountRef, signal, observation.AskPrice, target, generatedAt, expiresAt, now, fencingToken)
-	if err != nil {
-		return nil, err
-	}
-	if state == nil {
-		return nil, nil
-	}
-	if state.Status == "RECORDED" {
-		if now.Before(generatedAt) || !now.Before(expiresAt) {
-			return state, errors.New("paper signal expired before dispatch")
-		}
-		state, err = s.AuthorizeSyntheticDispatch(ctx, state.OrderID, fencingToken)
-		if err != nil {
-			return state, err
-		}
-	}
-	orderRef := paperProviderAlias("order", state.OrderID)
-	if state.Status == "SUBMIT_UNKNOWN" && state.PendingAction == "SUBMIT" {
-		state, err = s.AppendOrderEvent(ctx, OrderEvent{
-			EventID: paperEventID("ack", state.OrderID), OrderID: state.OrderID,
-			Type: "SUBMIT_ACKNOWLEDGED", Source: "synthetic", ProviderOrderRef: orderRef,
-		})
-		if err != nil {
-			return state, err
-		}
-	}
-	if state.Status != "OPEN" && state.Status != "PARTIALLY_FILLED" {
-		return state, nil
-	}
-	limit, _ := parseDecimal(state.LimitPrice)
-	if ask.Cmp(limit) > 0 {
-		return state, nil
-	}
-	total, _ := parseDecimal(state.Quantity)
-	filled, _ := parseDecimal(state.FilledQuantity)
-	remaining := new(big.Rat).Sub(total, filled)
-	fillQuantity := new(big.Rat).Set(available)
-	if fillQuantity.Cmp(remaining) > 0 {
-		fillQuantity.Set(remaining)
-	}
-	quantity, err := formatDecimal(fillQuantity)
-	if err != nil {
-		return state, err
-	}
-	return s.AppendOrderEvent(ctx, OrderEvent{
-		EventID: paperEventID("fill", state.OrderID, observation.ObservedAt, observation.AskPrice, observation.AvailableQuantity),
-		OrderID: state.OrderID, Type: "FILL_RECORDED", Source: "synthetic", ProviderOrderRef: orderRef,
-		ProviderExecutionRef: paperProviderAlias("execution", state.OrderID, observation.ObservedAt, observation.AskPrice, observation.AvailableQuantity),
-		Quantity:             quantity, Price: observation.AskPrice, OccurredAt: observedAt.Format(time.RFC3339Nano),
-	})
+	return s.business().RunPaperSignal(ctx, accountRef, signal, observation, fencingToken)
 }
 
-func validatePaperSignal(signal PaperSignal) (*big.Int, time.Time, time.Time, error) {
-	dataAsOf, dataOK := canonicalUTCTime(signal.DataAsOf)
-	generatedAt, generatedOK := canonicalUTCTime(signal.GeneratedAt)
-	expiresAt, expiresOK := canonicalUTCTime(signal.ExpiresAt)
-	if len(signal.TargetQuantity) == 0 || len(signal.TargetQuantity) > 64 {
-		return nil, time.Time{}, time.Time{}, errors.New("paper signal is invalid")
-	}
-	target, targetOK := new(big.Int).SetString(signal.TargetQuantity, 10)
-	if signal.SchemaVersion != paperSignalSchema || !safeOrderID(signal.SignalID) || !kiwoomStockPattern.MatchString(signal.Symbol) ||
-		!strategySHA256Pattern.MatchString(signal.StrategyResultSHA256) || !safeOrderID(signal.StrategySelectionEventID) ||
-		!strategySHA256Pattern.MatchString(signal.DataSHA256) || !targetOK || target.Sign() <= 0 || !validOrderInteger(signal.TargetQuantity) ||
-		!dataOK || !generatedOK || !expiresOK || dataAsOf.After(generatedAt) || !generatedAt.Before(expiresAt) ||
-		!safeOrderID("paper_"+signal.SignalID) {
-		return nil, time.Time{}, time.Time{}, errors.New("paper signal is invalid")
-	}
-	return target, generatedAt, expiresAt, nil
-}
+var validatePaperSignal = application.ValidatePaperSignal
 
-func paperOrderIntent(accountRef string, signal PaperSignal, quantity, limitPrice string) OrderIntent {
-	return OrderIntent{
-		ClientOrderID: "paper_" + signal.SignalID, Provider: "kiwoom", Mode: "paper", AccountRef: accountRef,
-		Symbol: signal.Symbol, Exchange: "KRX", Side: "BUY", OrderType: "LIMIT", Quantity: quantity,
-		LimitPrice: limitPrice, Currency: "KRW", StrategyResultSHA256: signal.StrategyResultSHA256,
-		StrategySelectionEventID: signal.StrategySelectionEventID, SignalSchemaVersion: signal.SchemaVersion,
-		SignalID: signal.SignalID, SignalDataSHA256: signal.DataSHA256, SignalDataAsOf: signal.DataAsOf,
-		SignalGeneratedAt: signal.GeneratedAt, SignalExpiresAt: signal.ExpiresAt, SignalTargetQuantity: signal.TargetQuantity,
-	}
-}
+var paperOrderIntent = application.PaperOrderIntent
 
 var capitalizedPaperOrderIntent = application.CapitalizedPaperOrderIntent
 
@@ -220,65 +136,13 @@ func paperConsumedBarCapacity(ctx context.Context, q orderQuerier, accountRef, s
 }
 
 func (s *Store) recordPaperTarget(ctx context.Context, accountRef string, signal PaperSignal, limitPrice string, target *big.Int, generatedAt, expiresAt, now time.Time, fencingToken int64) (*OrderState, error) {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, err
+	if s == nil || s.db == nil {
+		return nil, errors.New("paper runner is not configured")
 	}
-	defer tx.Rollback()
-	if _, _, err := proveExecutionAuthorityRecovery(ctx, tx); err != nil {
-		return nil, fmt.Errorf("execution authority recovery: %w", err)
-	}
-	orderID, exists, err := paperOrderBySignalFrom(ctx, tx, accountRef, signal.SignalID)
-	if err != nil {
-		return nil, err
-	}
-	if exists {
-		intent, err := loadOrderIntentFrom(ctx, tx, orderID)
-		if err != nil || intent != paperOrderIntent(accountRef, signal, intent.Quantity, intent.LimitPrice) {
-			return nil, errors.New("paper signal conflicts with its recorded order")
-		}
-		return loadOrderStateFrom(ctx, tx, orderID)
-	}
-	if now.Before(generatedAt) || !now.Before(expiresAt) {
-		return nil, errors.New("paper signal is not active")
-	}
-	projected, err := paperProjectedQuantityFrom(ctx, tx, accountRef, signal.Symbol)
-	if err != nil {
-		return nil, err
-	}
-	delta := new(big.Int).Sub(target, projected)
-	if delta.Sign() <= 0 {
-		return nil, nil
-	}
-	intent := paperOrderIntent(accountRef, signal, delta.String(), limitPrice)
-	if _, _, err := validateSyntheticBuyPolicy(intent); err != nil {
-		return nil, err
-	}
-	state, err := s.recordOrderIntentTx(ctx, tx, intent)
-	if err != nil {
-		return nil, err
-	}
-	state, _, err = s.authorizeSyntheticDispatchOnceTx(ctx, tx, state.OrderID, fencingToken)
-	if err != nil {
-		return nil, err
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, err
-	}
-	return state, nil
+	return s.business().RecordPaperTarget(ctx, accountRef, signal, limitPrice, target, generatedAt, expiresAt, now, fencingToken)
 }
 
-func validatePaperObservation(observation PaperMarketObservation, signal PaperSignal, generatedAt, now time.Time) (time.Time, *big.Rat, *big.Rat, error) {
-	observedAt, timeOK := canonicalUTCTime(observation.ObservedAt)
-	ask, askErr := parseDecimal(observation.AskPrice)
-	available, quantityErr := parseDecimal(observation.AvailableQuantity)
-	if observation.Source != "local_fixture" || observation.Symbol != signal.Symbol || !timeOK ||
-		!observedAt.After(generatedAt) || observedAt.After(now) || askErr != nil || ask.Sign() <= 0 ||
-		quantityErr != nil || available.Sign() <= 0 || !validOrderInteger(observation.AvailableQuantity) {
-		return time.Time{}, nil, nil, errors.New("paper market observation is invalid")
-	}
-	return observedAt, ask, available, nil
-}
+var validatePaperObservation = application.ValidatePaperObservation
 
 func paperOrderBySignalFrom(ctx context.Context, q orderQuerier, accountRef, signalID string) (string, bool, error) {
 	if !orderAlias(accountRef, "account") || !safeOrderID(signalID) {

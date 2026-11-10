@@ -5,15 +5,16 @@ import (
 	"database/sql"
 	"errors"
 	"omni-folio/services/core/internal/modules/trading/contracts"
+	"omni-folio/services/core/internal/modules/trading/internal/application"
 	"time"
 )
 
 type PaperScheduledRunResult = contracts.PaperScheduledRunResult
 
 var (
-	errPaperRunnerNoAvailableClose = errors.New("scheduled paper runner has no available local close")
-	errPaperRunnerIncompleteMarks  = errors.New("paper performance marks are incomplete")
-	errPaperRunnerPriorSelection   = errors.New("scheduled paper runner close belongs to a prior strategy selection")
+	errPaperRunnerNoAvailableClose = application.ErrPaperRunnerNoAvailableClose
+	errPaperRunnerIncompleteMarks  = application.ErrPaperRunnerIncompleteMarks
+	errPaperRunnerPriorSelection   = application.ErrPaperRunnerPriorSelection
 )
 
 const (
@@ -24,167 +25,27 @@ const (
 )
 
 func (s *Store) RunDuePaperPerformancePolicy(ctx context.Context, accountRef string) (*PaperScheduledRunResult, error) {
-	if s == nil || s.db == nil || s.now == nil || !orderAlias(accountRef, "account") {
-		return nil, errors.New("scheduled paper runner is not configured")
-	}
-	_, completed, err := s.prepareDuePaperPerformancePolicy(ctx, accountRef)
-	if err != nil {
-		return nil, err
-	}
-	if completed != nil {
-		return completed, nil
-	}
-	claim, err := s.acquirePaperRunnerLease(ctx, accountRef)
-	if errors.Is(err, errPaperRunnerLeaseHeld) {
-		claim, completed, err = s.waitForPaperRunnerLeaseOrCompletion(ctx, accountRef)
-	}
-	if err != nil {
-		_, completed, prepareErr := s.prepareDuePaperPerformancePolicy(ctx, accountRef)
-		if prepareErr != nil {
-			return nil, errors.Join(err, prepareErr)
-		}
-		if completed != nil {
-			return completed, nil
-		}
-		return nil, err
-	}
-	if completed != nil {
-		return completed, nil
-	}
-	result, runErr := s.runDuePaperPerformancePolicyWithClaim(ctx, accountRef, claim)
-	releaseCtx, cancel := context.WithTimeout(context.Background(), paperScheduledRunnerReleaseTimeout)
-	defer cancel()
-	releaseErr := s.releasePaperRunnerLease(releaseCtx, claim)
-	if runErr != nil || releaseErr != nil {
-		return nil, errors.Join(runErr, releaseErr)
-	}
-	return result, nil
+	return s.business().RunDuePaperPerformancePolicy(ctx, accountRef)
 }
 
 func (s *Store) prepareDuePaperPerformancePolicy(ctx context.Context, accountRef string) (string, *PaperScheduledRunResult, error) {
-	return s.prepareDuePaperPerformancePolicyWithClaim(ctx, accountRef, nil)
+	return s.business().PrepareDuePaperPerformancePolicy(ctx, accountRef)
 }
 
 func (s *Store) prepareDuePaperPerformancePolicyWithClaim(ctx context.Context, accountRef string, claim *paperRunnerClaim) (string, *PaperScheduledRunResult, error) {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return "", nil, err
-	}
-	defer tx.Rollback()
-	if claim != nil {
-		if err := validatePaperRunnerLeaseTx(ctx, tx, claim, accountRef, s.paperRunnerOwner, s.now()); err != nil {
-			return "", nil, err
-		}
-	}
-	if _, err := provePaperRunnerLeaseRecovery(ctx, tx); err != nil {
-		return "", nil, errors.Join(errors.New("scheduled paper runner lease recovery failed"), err)
-	}
-	now := s.now().UTC()
-	asOf, err := latestAvailablePaperClose(ctx, tx, now)
-	if err != nil {
-		return "", nil, err
-	}
-	_, selection, selectedResult, err := currentPaperPerformanceSelection(ctx, tx)
-	if err != nil {
-		return "", nil, err
-	}
-	var previous string
-	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(as_of),'') FROM paper_performance_events WHERE account_ref=?`, accountRef).Scan(&previous); err != nil {
-		return "", nil, err
-	}
-	if previous != "" && previous < asOf {
-		point, found, err := loadPaperPerformanceByKey(ctx, tx, accountRef, previous)
-		if err != nil || !found {
-			return "", nil, errors.Join(errors.New("scheduled paper runner frontier is missing"), err)
-		}
-		if point.StrategySelectionEventID == selection {
-			if _, complete, err := loadScheduledPaperRunResult(ctx, tx, accountRef, previous); err != nil {
-				return "", nil, err
-			} else if !complete {
-				// A newer C3/D would make this committed loss policy stale.
-				asOf = previous
-			}
-		}
-	}
-	if result, found, err := loadScheduledPaperRunResult(ctx, tx, accountRef, asOf); err != nil {
-		return "", nil, err
-	} else if found {
-		return asOf, result, nil
-	}
-	if selectedResult == noStrategySelection {
-		return "", nil, errors.New("current paper strategy is missing")
-	}
-	session, found, err := loadPaperAccountingSession(ctx, tx, accountRef)
-	if err != nil {
-		return "", nil, err
-	}
-	if !found {
-		return "", nil, errors.New("paper performance accounting session is missing")
-	}
-	if err := validatePaperPerformanceWindow(*session, asOf, now.Format(canonicalPaperTimeLayout)); err != nil {
-		return "", nil, errors.Join(errPaperRunnerNoAvailableClose, err)
-	}
-	return asOf, nil, nil
+	return s.business().PrepareDuePaperPerformancePolicyWithClaim(ctx, accountRef, claim)
 }
 
 func (s *Store) runDuePaperPerformancePolicyWithClaim(ctx context.Context, accountRef string, claim *paperRunnerClaim) (*PaperScheduledRunResult, error) {
-	if s == nil || s.db == nil || s.now == nil || !orderAlias(accountRef, "account") || claim == nil {
-		return nil, errors.New("scheduled paper runner claim is not configured")
-	}
-	asOf, completed, err := s.prepareDuePaperPerformancePolicyWithClaim(ctx, accountRef, claim)
-	if err != nil || completed != nil {
-		return completed, err
-	}
-	return s.runPaperPerformancePolicyAtCloseWithClaim(ctx, accountRef, asOf, claim)
+	return s.business().RunDuePaperPerformancePolicyWithClaim(ctx, accountRef, claim)
 }
 
 func (s *Store) runPaperPerformancePolicyAtCloseWithClaim(ctx context.Context, accountRef, asOf string, claim *paperRunnerClaim) (*PaperScheduledRunResult, error) {
-	point, err := s.evaluatePaperPerformanceWithClaim(ctx, accountRef, asOf, claim)
-	if err != nil {
-		return nil, err
-	}
-	window, err := s.evaluatePaperStrategyPerformanceWithClaim(ctx, accountRef, point.StrategySelectionEventID, point.PerformanceID, claim)
-	if err != nil {
-		return nil, err
-	}
-	policy, err := s.applyPaperPerformancePolicyWithClaim(ctx, accountRef, window.StrategySelectionEventID, window.StrategyPerformanceID, claim)
-	if err != nil {
-		return nil, err
-	}
-	return scheduledPaperRunResult(point.AsOf, *point, *window, *policy), nil
+	return s.business().RunPaperPerformancePolicyAtCloseWithClaim(ctx, accountRef, asOf, claim)
 }
 
 func (s *Store) waitForPaperRunnerLeaseOrCompletion(ctx context.Context, accountRef string) (*paperRunnerClaim, *PaperScheduledRunResult, error) {
-	waitCtx, cancel := context.WithTimeout(ctx, paperScheduledRunnerContentionTimeout)
-	defer cancel()
-	for {
-		_, completed, err := s.prepareDuePaperPerformancePolicy(waitCtx, accountRef)
-		if err != nil {
-			return nil, nil, err
-		}
-		if completed != nil {
-			return nil, completed, nil
-		}
-		timer := time.NewTimer(paperScheduledRunnerContentionPoll)
-		select {
-		case <-waitCtx.Done():
-			if !timer.Stop() {
-				select {
-				case <-timer.C:
-				default:
-				}
-			}
-			return nil, nil, waitCtx.Err()
-		case <-timer.C:
-		}
-		claim, err := s.acquirePaperRunnerLease(waitCtx, accountRef)
-		if err == nil {
-			return claim, nil, nil
-		}
-		if !errors.Is(err, errPaperRunnerLeaseHeld) {
-			return nil, nil, err
-		}
-	}
+	return s.business().WaitForPaperRunnerLeaseOrCompletion(ctx, accountRef)
 }
 
 func latestAvailablePaperClose(ctx context.Context, q orderQuerier, now time.Time) (string, error) {
@@ -224,15 +85,5 @@ func loadScheduledPaperRunResult(ctx context.Context, q orderQuerier, accountRef
 }
 
 func scheduledPaperRunResult(asOf string, point PaperPerformanceEvent, window PaperStrategyPerformanceEvent, policy PaperPerformancePolicyEvent) *PaperScheduledRunResult {
-	return &PaperScheduledRunResult{
-		AccountRef:               policy.AccountRef,
-		AsOf:                     asOf,
-		PerformanceID:            point.PerformanceID,
-		StrategyPerformanceID:    window.StrategyPerformanceID,
-		PolicyEventID:            policy.PolicyEventID,
-		Decision:                 policy.Decision,
-		ReasonCode:               policy.ReasonCode,
-		AutomaticHaltCount:       policy.AutomaticHaltCount,
-		RollbackSelectionEventID: policy.RollbackSelectionEventID,
-	}
+	return application.ScheduledPaperRunResult(asOf, point, window, policy)
 }

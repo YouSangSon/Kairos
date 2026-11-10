@@ -1,6 +1,7 @@
 package sqlite
 
 import (
+	"omni-folio/services/core/internal/modules/trading/internal/adapters/files"
 	"omni-folio/services/core/internal/modules/trading/internal/application"
 
 	"omni-folio/services/core/internal/modules/trading/contracts"
@@ -12,7 +13,7 @@ type paperPromotionComparison = contracts.PaperPromotionComparison
 
 type paperPromotionWindow = contracts.PaperPromotionWindow
 
-var parsePaperPromotionBars = application.ParsePaperPromotionBars
+var parsePaperPromotionBars = files.ParsePaperPromotionBars
 
 var paperPromotionStrategy = application.PaperPromotionStrategy
 

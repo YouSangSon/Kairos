@@ -216,8 +216,14 @@ func loadExecutionAuthoritySnapshot(ctx context.Context, q orderQuerier, account
 	if err != nil {
 		return executionAuthoritySnapshot{}, err
 	}
-	rows, err := q.QueryContext(ctx, `SELECT event_id,armed,lease_owner,fencing_token,lease_expires_at,reason_code,`+policyColumn+`,record_sha256,record_json,recorded_at
+	var rows rowset
+	if policyColumn == "NULL" {
+		rows, err = q.QueryContext(ctx, `SELECT event_id,armed,lease_owner,fencing_token,lease_expires_at,reason_code,NULL,record_sha256,record_json,recorded_at
 		FROM execution_authority_events WHERE account_ref=? ORDER BY sequence`, accountRef)
+	} else {
+		rows, err = q.QueryContext(ctx, `SELECT event_id,armed,lease_owner,fencing_token,lease_expires_at,reason_code,paper_performance_policy_event_id,record_sha256,record_json,recorded_at
+		FROM execution_authority_events WHERE account_ref=? ORDER BY sequence`, accountRef)
+	}
 	if err != nil {
 		return executionAuthoritySnapshot{}, err
 	}
@@ -288,8 +294,14 @@ func loadExecutionAuthorityRecordByID(ctx context.Context, q orderQuerier, event
 	if err != nil {
 		return executionAuthorityRecord{}, err
 	}
-	row := q.QueryRowContext(ctx, `SELECT event_id,armed,lease_owner,fencing_token,lease_expires_at,reason_code,`+policyColumn+`,record_sha256,record_json,recorded_at
+	var row rowScanner
+	if policyColumn == "NULL" {
+		row = q.QueryRowContext(ctx, `SELECT event_id,armed,lease_owner,fencing_token,lease_expires_at,reason_code,NULL,record_sha256,record_json,recorded_at
 		FROM execution_authority_events WHERE event_id=?`, eventID)
+	} else {
+		row = q.QueryRowContext(ctx, `SELECT event_id,armed,lease_owner,fencing_token,lease_expires_at,reason_code,paper_performance_policy_event_id,record_sha256,record_json,recorded_at
+		FROM execution_authority_events WHERE event_id=?`, eventID)
+	}
 	record, err := scanExecutionAuthorityRecord(row, accountRef)
 	if err != nil {
 		return executionAuthorityRecord{}, err
@@ -385,8 +397,14 @@ func proveExecutionAuthorityRecovery(ctx context.Context, q orderQuerier) (strin
 	if err != nil {
 		return "", 0, err
 	}
-	rows, err := q.QueryContext(ctx, `SELECT sequence,account_ref,event_id,armed,lease_owner,fencing_token,lease_expires_at,reason_code,`+policyColumn+`,record_sha256,record_json,recorded_at
+	var rows rowset
+	if policyColumn == "NULL" {
+		rows, err = q.QueryContext(ctx, `SELECT sequence,account_ref,event_id,armed,lease_owner,fencing_token,lease_expires_at,reason_code,NULL,record_sha256,record_json,recorded_at
 		FROM execution_authority_events ORDER BY sequence`)
+	} else {
+		rows, err = q.QueryContext(ctx, `SELECT sequence,account_ref,event_id,armed,lease_owner,fencing_token,lease_expires_at,reason_code,paper_performance_policy_event_id,record_sha256,record_json,recorded_at
+		FROM execution_authority_events ORDER BY sequence`)
+	}
 	if err != nil {
 		return "", 0, err
 	}
