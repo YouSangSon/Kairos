@@ -67,7 +67,7 @@ func legacySymbols(root string) (map[string]map[string]string, error) {
 		relative = filepath.ToSlash(relative)
 		if strings.HasPrefix(relative, "internal/") {
 			scope := strings.Split(strings.TrimPrefix(relative, "internal/"), "/")[0]
-			if scope == "architecture" || scope == "storage" || scope == "modules" || scope == "composition" || scope == "codec" || scope == "providers" || scope == "transport" {
+			if scope == "architecture" || scope == "storage" || scope == "modules" || scope == "composition" || scope == "codec" || scope == "providers" || scope == "transport" || strings.HasPrefix(relative, "internal/files/private/") {
 				return nil
 			}
 		} else if strings.Contains(relative, "/") {

@@ -130,9 +130,9 @@ func TestSchemaGateRejectsUnownedObjects(t *testing.T) {
 		`CREATE TABLE mystery(id INTEGER)`,
 		`CREATE VIEW mystery AS SELECT * FROM events`,
 		`CREATE TRIGGER mystery AFTER INSERT ON events BEGIN SELECT 1; END`,
-		`CREATE TRIGGER events_guard AFTER INSERT ON events BEGIN DELETE FROM order_events; END`,
-		`CREATE TRIGGER events_guard AFTER INSERT ON events BEGIN SELECT * FROM events, order_events; END`,
-		`CREATE TRIGGER events_guard AFTER INSERT ON events BEGIN SELECT 1 WHERE 1 IN order_events; END`,
+		`CREATE TRIGGER events_no_update AFTER INSERT ON events BEGIN DELETE FROM order_events; END`,
+		`CREATE TRIGGER events_no_update AFTER INSERT ON events BEGIN SELECT * FROM events, order_events; END`,
+		`CREATE TRIGGER events_no_update AFTER INSERT ON events BEGIN SELECT 1 WHERE 1 IN order_events; END`,
 		`CREATE TABLE events(id INTEGER REFERENCES order_events)`,
 	} {
 		t.Run(fmt.Sprint(sql), func(t *testing.T) {
@@ -217,7 +217,7 @@ func TestSQLGateRejectsUnknownScalarFunctions(t *testing.T) {
 }
 
 func TestJSONTableFunctionKeepsOwnershipListContext(t *testing.T) {
-	schema := `CREATE TRIGGER order_events_guard AFTER INSERT ON order_events BEGIN SELECT 1 FROM json_each(NEW.event_json) AS j, events AS e; END;`
+	schema := `CREATE TRIGGER order_events_capitalized_paper_fill_guard AFTER INSERT ON order_events BEGIN SELECT 1 FROM json_each(NEW.event_json) AS j, events AS e; END;`
 	if _, err := ownership.ValidateSchema(schema); err == nil {
 		t.Error("accepted foreign table after trigger json_each")
 	}

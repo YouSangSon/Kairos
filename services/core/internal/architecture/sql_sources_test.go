@@ -50,7 +50,7 @@ func inspectSQLSources(root string) ([]string, error) {
 		}
 		relative = filepath.ToSlash(relative)
 		// Legacy packages are covered by the original dependency gate until their atomic migration.
-		if !strings.HasPrefix(relative, "modules/") && !strings.HasPrefix(relative, "composition/") && !strings.HasPrefix(relative, "storage/") && !strings.HasPrefix(relative, "codec/") && !strings.HasPrefix(relative, "providers/") && !strings.HasPrefix(relative, "transport/") {
+		if !strings.HasPrefix(relative, "modules/") && !strings.HasPrefix(relative, "composition/") && !strings.HasPrefix(relative, "storage/") && !strings.HasPrefix(relative, "codec/") && !strings.HasPrefix(relative, "providers/") && !strings.HasPrefix(relative, "transport/") && !strings.HasPrefix(relative, "files/") {
 			return nil
 		}
 		positions := token.NewFileSet()

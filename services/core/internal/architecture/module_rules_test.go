@@ -1,8 +1,10 @@
 package architecture
 
 import (
+	"bytes"
 	"fmt"
 	"go/ast"
+	"go/format"
 	"go/token"
 	"path/filepath"
 	"sort"
@@ -25,6 +27,9 @@ func modulePath(path string) (owner, layer string) {
 		return "", ""
 	}
 	owner = parts[1]
+	if len(parts) > 2 && parts[2] == "construction" {
+		return owner, "construction"
+	}
 	if len(parts) > 2 && parts[2] == "contracts" {
 		return owner, "contracts"
 	}
@@ -50,6 +55,30 @@ func pureModuleImport(name string) bool {
 func moduleImportViolation(relative, name string) string {
 	owner, layer := modulePath(relative)
 	target, targetLayer := modulePath(name)
+	if relative == "modules/ledger/compose_identifiers.go" && name != internalPrefix+"modules/ledger/internal/domain" {
+		return "identifier construction imports non-domain dependency " + name
+	}
+	if targetLayer == "construction" {
+		if cliConstructionConsumer(relative, target) {
+			return ""
+		}
+
+		return "CLI construction contract used outside composition or private CLI " + name
+	}
+	if name == internalPrefix+"files/private" && owner != "" && layer != "adapters" && layer != "root" {
+		return "layer imports forbidden file IO " + name
+	}
+	if strings.HasPrefix(relative, "files/") {
+		if target != "" {
+			return "shared file IO imports business module " + name
+		}
+		if name == "database/sql" || strings.HasPrefix(name, "database/sql/") || strings.HasPrefix(name, internalPrefix+"storage/") {
+			return "shared file IO has no storage authority " + name
+		}
+		if strings.HasPrefix(name, internalPrefix) {
+			return "shared file IO imports private implementation " + name
+		}
+	}
 	if owner != "" {
 		if owner == "research" && (name == "database/sql" || strings.HasPrefix(name, "database/sql/") || strings.HasPrefix(name, internalPrefix+"storage/") || name == "omni-folio/services/core/migrations") {
 			return "research compatibility module has no storage authority " + name
@@ -84,12 +113,16 @@ func moduleImportViolation(relative, name string) string {
 		if strings.HasPrefix(relative, "codec/") && !pureModuleImport(name) && name != "io" {
 			return "shared codec imports impure dependency " + name
 		}
-		if strings.HasPrefix(relative, "composition/") && strings.HasPrefix(name, internalPrefix) && target == "" && !strings.HasPrefix(name, internalPrefix+"storage/") && !strings.HasPrefix(name, internalPrefix+"composition/") {
+		if strings.HasPrefix(relative, "composition/") && strings.HasPrefix(name, internalPrefix) && target == "" && !strings.HasPrefix(name, internalPrefix+"storage/") && !strings.HasPrefix(name, internalPrefix+"composition/") && name != internalPrefix+"files/private" {
 			return "composition imports private legacy implementation " + name
 		}
 		return ""
 	}
 	switch layer {
+	case "construction":
+		if !pureModuleImport(name) && !(target == owner && targetLayer == "contracts") {
+			return "CLI construction imports impure or private dependency " + name
+		}
 	case "domain":
 		if target == owner && targetLayer == "domain" {
 			return ""
@@ -125,7 +158,7 @@ func moduleImportViolation(relative, name string) string {
 			return "module root must use a fixed construction entrypoint file"
 		}
 	case "adapters":
-		if name == internalPrefix+"codec" || name == internalPrefix+"providers/kiwoom" || name == internalPrefix+"transport/httpjson" {
+		if name == internalPrefix+"codec" || name == internalPrefix+"providers/kiwoom" || name == internalPrefix+"transport/httpjson" || name == internalPrefix+"files/private" {
 			return ""
 		}
 		if strings.HasPrefix(name, internalPrefix) && target == "" && name != internalPrefix+"exact" && !strings.HasPrefix(name, internalPrefix+"storage/") {
@@ -154,6 +187,9 @@ func approvedDispatchFactory(path string, file *ast.File, pos token.Pos) bool {
 
 func inspectModuleDeclarations(path string, file *ast.File, imports map[string]string) []string {
 	owner, layer := modulePath(path)
+	if layer == "construction" {
+		return inspectConstructionContract(path, file, imports)
+	}
 	if owner == "" {
 		return nil
 	}
@@ -175,7 +211,7 @@ func inspectModuleDeclarations(path string, file *ast.File, imports map[string]s
 					if !typ.Name.IsExported() {
 						continue
 					}
-					if typ.Name.Name == "Config" || typ.Name.Name == "Dependencies" {
+					if typ.Name.Name == "Config" || typ.Name.Name == "Dependencies" || typ.Name.Name == "CLIConfig" {
 						structure, ok := typ.Type.(*ast.StructType)
 						if !ok {
 							violations = append(violations, path+" construction config must be a struct")
@@ -193,6 +229,12 @@ func inspectModuleDeclarations(path string, file *ast.File, imports map[string]s
 			}
 			function, ok := declaration.(*ast.FuncDecl)
 			if !ok {
+				continue
+			}
+			if path == "modules/ledger/compose_identifiers.go" {
+				if !identifierConstruction(function, imports) {
+					violations = append(violations, path+" invalid identifier construction")
+				}
 				continue
 			}
 			if !rootConstructionEntry(path, owner, function.Name.Name) || function.Recv != nil {
@@ -491,13 +533,14 @@ func forbiddenConstructionInput(expr ast.Expr, imports map[string]string, owner 
 				if path == "database/sql" && selector.Sel.Name != "DB" {
 					bad = true
 				}
-				if path == internalPrefix+"providers/kiwoom" && selector.Sel.Name != "Client" {
+				if path == internalPrefix+"providers/kiwoom" && selector.Sel.Name != "Client" && selector.Sel.Name != "MockReadPacer" {
 					bad = true
 				}
 				if path == internalPrefix+"storage/observation" && selector.Sel.Name != "Registry" && selector.Sel.Name != "ReadResolver" && selector.Sel.Name != "ImportResolver" && selector.Sel.Name != "MigrationStarter" {
 					bad = true
 				}
-				if strings.Contains(path, "/modules/") && !strings.HasSuffix(path, "/contracts") {
+				target, layer := modulePath(path)
+				if strings.Contains(path, "/modules/") && !strings.HasSuffix(path, "/contracts") && !(target == owner && layer == "construction") {
 					bad = true
 				}
 			}
@@ -533,6 +576,8 @@ func forbiddenContractInput(expr ast.Expr, imports map[string]string) bool {
 
 func rootConstructionFile(path string) bool {
 	switch filepath.Base(path) {
+	case "compose_identifiers.go":
+		return path == "modules/ledger/compose_identifiers.go"
 	case "compose.go", "register_http.go", "compose_http.go", "run_cli.go", "cli.go":
 		return true
 	}
@@ -582,4 +627,93 @@ func forbiddenConstructionResult(expr ast.Expr, imports map[string]string, entry
 		return true
 	})
 	return bad || forbiddenContractResult(expr, sanitized)
+}
+
+func cliConstructionConsumer(path, target string) bool {
+	owner, layer := modulePath(path)
+	return strings.HasPrefix(path, "composition/") || owner == target && (layer == "root" && rootConstructionFile(path) || layer == "adapters" && strings.Contains(path, "/internal/adapters/cli/"))
+}
+
+func inspectConstructionContract(path string, file *ast.File, imports map[string]string) []string {
+	var violations []string
+	owner, _ := modulePath(path)
+	if path != "modules/"+owner+"/construction/cli.go" {
+		violations = append(violations, path+" CLI construction has no additional implementation files")
+	}
+	for _, decl := range file.Decls {
+		group, ok := decl.(*ast.GenDecl)
+		if ok && group.Tok == token.IMPORT {
+			continue
+		}
+		if !ok || group.Tok != token.TYPE {
+			violations = append(violations, path+" CLI construction permits interfaces only")
+			continue
+		}
+		for _, spec := range group.Specs {
+			typ := spec.(*ast.TypeSpec)
+			iface, ok := typ.Type.(*ast.InterfaceType)
+			if !ok || typ.Name.Name != "Session" && typ.Name.Name != "CLIResources" {
+				violations = append(violations, path+" CLI construction permits Session and CLIResources interfaces only")
+				continue
+			}
+			for _, field := range iface.Methods.List {
+				method, ok := field.Type.(*ast.FuncType)
+				if !ok || len(field.Names) != 1 {
+					violations = append(violations, path+" CLI construction cannot embed arbitrary capability")
+					continue
+				}
+				allowedMethods := map[string]bool{"Ledger": true, "Trading": true, "Imports": true, "OwnerPrice": true, "RequireSchema": true, "Close": true}
+				if typ.Name.Name == "CLIResources" {
+					allowedMethods = map[string]bool{"OpenExisting": true, "OpenReadOnly": true, "OpenReadWrite": true}
+				}
+				if !allowedMethods[field.Names[0].Name] {
+					violations = append(violations, path+" CLI construction exposes generic capability")
+				}
+				if method.Results != nil {
+					for _, result := range method.Results.List {
+						if forbiddenContractResult(result.Type, imports) {
+							violations = append(violations, path+" CLI construction exposes private resource")
+						}
+					}
+				}
+				if method.Params != nil {
+					for _, param := range method.Params.List {
+						if forbiddenContractInput(param.Type, imports) || forbiddenContractResult(param.Type, imports) && !isContextType(param.Type, imports) {
+							violations = append(violations, path+" CLI construction accepts private resource")
+						}
+					}
+				}
+			}
+		}
+	}
+	return violations
+}
+
+func isContextType(expr ast.Expr, imports map[string]string) bool {
+	selector, ok := expr.(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+	pkg, ok := selector.X.(*ast.Ident)
+	return ok && imports[pkg.Name] == "context" && selector.Sel.Name == "Context"
+}
+
+func identifierConstruction(function *ast.FuncDecl, imports map[string]string) bool {
+	if function.Recv != nil || function.Name.Name != "ComposeIdentifiers" || function.Body == nil || len(function.Body.List) != 1 {
+		return false
+	}
+	var signature bytes.Buffer
+	if format.Node(&signature, token.NewFileSet(), function.Type) != nil || signature.String() != "func() func(string) string" {
+		return false
+	}
+	result, ok := function.Body.List[0].(*ast.ReturnStmt)
+	if !ok || len(result.Results) != 1 {
+		return false
+	}
+	selector, ok := result.Results[0].(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+	pkg, ok := selector.X.(*ast.Ident)
+	return ok && imports[pkg.Name] == internalPrefix+"modules/ledger/internal/domain" && selector.Sel.Name == "InstrumentIDForSymbol"
 }

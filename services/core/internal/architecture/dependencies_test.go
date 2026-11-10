@@ -163,6 +163,18 @@ func inspectDependencies(root string) ([]string, map[string]bool, error) {
 			if selector.Sel.Name == "MigrationStarter" && !isMigrationType && !approvedMigrationConstruction(relative, file, selector.Pos()) {
 				violations = append(violations, relative+" obtains migration authority outside maintenance")
 			}
+			if pkg, ok := selector.X.(*ast.Ident); ok && imports[pkg.Name] == internalPrefix+"providers/kiwoom" {
+				switch selector.Sel.Name {
+				case "NewMockReadPacer", "WaitMockRead":
+					if !strings.HasPrefix(relative, "composition/") {
+						violations = append(violations, relative+" references mock read pacer outside process composition")
+					}
+				case "ReadMockSecret", "DecodeMockCredentials", "NewMockSnapshot", "NewMockCandles":
+					if !approvedSDKRead(relative) {
+						violations = append(violations, relative+" references mock read SDK outside private provider/CLI or composition")
+					}
+				}
+			}
 			if selector.Sel.Name == "NewMockOrders" || selector.Sel.Name == "SubmitMockLimitOrder" {
 				if !approvedSDKDispatch(relative, file, selector.Pos(), selector.Sel.Name) || !directCalls[selector] {
 					violations = append(violations, relative+" references mock order SDK outside sealed dispatch adapter")
@@ -173,7 +185,7 @@ func inspectDependencies(root string) ([]string, map[string]bool, error) {
 				return true
 			}
 			_, legacyDomain := domainDependencies[scope]
-			pureLayer := legacyDomain || strings.HasPrefix(relative, "codec/") || moduleLayer(relative) == "domain" || moduleLayer(relative) == "application" || moduleLayer(relative) == "contracts"
+			pureLayer := legacyDomain || strings.HasPrefix(relative, "codec/") || moduleLayer(relative) == "construction" || moduleLayer(relative) == "domain" || moduleLayer(relative) == "application" || moduleLayer(relative) == "contracts"
 			if pureLayer && imports[pkg.Name] == "context" {
 				switch selector.Sel.Name {
 				case "WithTimeout", "WithTimeoutCause", "WithDeadline", "WithDeadlineCause", "AfterFunc":
@@ -186,7 +198,7 @@ func inspectDependencies(root string) ([]string, map[string]bool, error) {
 					violations = append(violations, relative+" uses impure fmt."+selector.Sel.Name)
 				}
 			}
-			if (legacyDomain || strings.HasPrefix(relative, "codec/") || moduleLayer(relative) == "domain" || moduleLayer(relative) == "application" || moduleLayer(relative) == "contracts") && imports[pkg.Name] == "time" {
+			if (legacyDomain || strings.HasPrefix(relative, "codec/") || moduleLayer(relative) == "construction" || moduleLayer(relative) == "domain" || moduleLayer(relative) == "application" || moduleLayer(relative) == "contracts") && imports[pkg.Name] == "time" {
 				switch selector.Sel.Name {
 				case "Local", "Now", "Since", "Until", "After", "AfterFunc", "NewTimer", "NewTicker", "Tick", "Sleep", "LoadLocation":
 					violations = append(violations, relative+" uses impure time."+selector.Sel.Name)
@@ -336,4 +348,12 @@ func approvedMigrationConstruction(path string, file *ast.File, pos token.Pos) b
 		}
 	}
 	return false
+}
+
+func approvedSDKRead(path string) bool {
+	if strings.HasPrefix(path, "composition/") {
+		return true
+	}
+	owner, layer := modulePath(path)
+	return (owner == "ledger" || owner == "marketdata") && layer == "adapters" && (strings.Contains(path, "/internal/adapters/provider/") || strings.Contains(path, "/internal/adapters/cli/"))
 }
