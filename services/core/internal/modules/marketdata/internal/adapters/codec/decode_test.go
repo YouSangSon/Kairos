@@ -256,7 +256,7 @@ func TestBenchmarkSeriesInputBoundsAndCancellation(t *testing.T) {
 		raw := benchmarkInputForTest(t, func(i *BenchmarkSeriesInput) {
 			i.Points = make([]BenchmarkIndexPoint, count)
 			for n := range i.Points {
-				i.Points[n] = BenchmarkIndexPoint{time.Date(2025, 1, 1, 0, 0, n, 0, time.UTC).Format(time.RFC3339Nano), "0"}
+				i.Points[n] = BenchmarkIndexPoint{ObservedAt: time.Date(2025, 1, 1, 0, 0, n, 0, time.UTC).Format(time.RFC3339Nano), Level: "0"}
 			}
 		})
 		if _, _, _, err := DecodeBenchmarkSeries(context.Background(), raw); (err == nil) != (count == 10000) {

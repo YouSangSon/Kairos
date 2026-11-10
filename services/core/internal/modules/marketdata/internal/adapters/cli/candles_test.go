@@ -490,3 +490,47 @@ func kiwoomResponse(status int, headers map[string]string, body string) *http.Re
 type ledgerExportFailWriter struct{ err error }
 
 func (w ledgerExportFailWriter) Write([]byte) (int, error) { return 0, w.err }
+
+func TestKiwoomMockCandlesClockReversalDoesNotChangeLegacyCandles(t *testing.T) {
+	for _, legacy := range []bool{false} {
+		t.Run(fmt.Sprint(legacy), func(t *testing.T) {
+			var fetched atomic.Bool
+			transport, _ := candleCaptureTLS(t, func(w http.ResponseWriter, r *http.Request) {
+				fetched.Store(true)
+				io.WriteString(w, candleDailyBody(captureDailyRow))
+			})
+			now := func() time.Time {
+				if fetched.Load() {
+					return mockSyncNow().Add(-time.Second)
+				}
+				return mockSyncNow()
+			}
+			path := filepath.Join(t.TempDir(), "reversed.json")
+			if err := captureRun(context.Background(), path, "1d", io.Discard, transport, now, mockSyncPacer()); err == nil {
+				t.Fatal("reversed capture clock was published")
+			}
+			assertCaptureAbsent(t, path)
+		})
+	}
+}
+
+func TestKiwoomMockCandlesRawWireFormatDoesNotChangeLegacyCandles(t *testing.T) {
+	for _, fraction := range []string{".123", ",123"} {
+		for _, legacy := range []bool{false} {
+			t.Run(fmt.Sprintf("%s/legacy=%t", fraction, legacy), func(t *testing.T) {
+				rawTime := "20260824103000" + fraction
+				transport, _ := candleCaptureTLS(t, func(w http.ResponseWriter, r *http.Request) {
+					row := strings.Replace(captureDailyRow, `"dt":"20260824"`, `"cntr_tm":"`+rawTime+`"`, 1)
+					fmt.Fprintf(w, `{"stk_cd":"005930","stk_min_pole_chart_qry":[%s],"return_code":0}`, row)
+				})
+				path := filepath.Join(t.TempDir(), "fraction.json")
+				err := captureRun(context.Background(), path, "1m", io.Discard, transport, mockSyncNow, mockSyncPacer())
+				if err == nil {
+					capture, _ := readCapture(t, path)
+					t.Fatalf("capture published provider_time=%s with declared %s", capture.Bars[0].ProviderTime, capture.TimeEvidence.ProviderFormat)
+				}
+				assertCaptureAbsent(t, path)
+			})
+		}
+	}
+}

@@ -22,5 +22,5 @@ func ComposeVerification(config VerificationConfig) (c.ManifestVerifier, error) 
 		owners, err := config.NewOwners(db)
 		return sqlite.Owners{Observations: owners.Observations, Ledger: owners.Ledger, Market: owners.Market, Trading: owners.Trading, Watchlist: owners.Watchlist}, err
 	}
-	return sqlite.New(nil, nil, nil, config.Now, config.ID, factory), nil
+	return sqlite.NewManifestVerifier(config.Now, config.ID, factory), nil
 }

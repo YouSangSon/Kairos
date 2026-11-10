@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"net/http"
+	ledgerconstruction "omni-folio/services/core/internal/modules/ledger/construction"
+	ledger "omni-folio/services/core/internal/modules/ledger/contracts"
 	maintenance "omni-folio/services/core/internal/modules/maintenance"
 	maintconstruction "omni-folio/services/core/internal/modules/maintenance/construction"
 	maint "omni-folio/services/core/internal/modules/maintenance/contracts"
@@ -155,4 +157,47 @@ func (r maintenanceResources) VerifyManifest(ctx context.Context, path, golden, 
 		return err
 	}
 	return verifier.VerifyManifest(ctx, path, golden, manifest)
+}
+
+func (r Resources) Ledger() ledgerconstruction.CLIResources { return ledgerResources{r} }
+
+type ledgerResources struct{ Resources }
+type ledgerSession struct{ *Runtime }
+
+func (s ledgerSession) Ledger() ledger.Service { return s.Runtime.Ledger }
+func (s ledgerSession) RequireSchema() error {
+	return s.Maintenance.Schema.RequireCurrent(context.Background())
+}
+func (r ledgerResources) OpenExisting(path string) (ledgerconstruction.Session, error) {
+	db, err := pool.OpenExisting(path)
+	if err != nil {
+		return nil, err
+	}
+	s, err := r.compose(db)
+	if err != nil {
+		return nil, err
+	}
+	return ledgerSession{s}, nil
+}
+func (r ledgerResources) OpenReadOnly(ctx context.Context, path string) (ledgerconstruction.Session, error) {
+	db, err := pool.OpenReadOnlyExisting(ctx, path)
+	if err != nil {
+		return nil, err
+	}
+	s, err := r.compose(db)
+	if err != nil {
+		return nil, err
+	}
+	return ledgerSession{s}, nil
+}
+func (r ledgerResources) OpenReadWrite(ctx context.Context, path string) (ledgerconstruction.Session, error) {
+	db, err := pool.OpenReadWriteExisting(ctx, path)
+	if err != nil {
+		return nil, err
+	}
+	s, err := r.compose(db)
+	if err != nil {
+		return nil, err
+	}
+	return ledgerSession{s}, nil
 }
