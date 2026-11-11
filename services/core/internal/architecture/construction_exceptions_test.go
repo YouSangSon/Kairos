@@ -123,6 +123,23 @@ func TestExactConstructionExceptions(t *testing.T) {
 			t.Fatalf("wide %t, got %v", wide, violations)
 		}
 	}
+	opening := strings.Replace(verification, "_ = factory", "_,_=config.NewOwners(nil);_ = factory", 1)
+	violations, _, err := inspectDependencies(fixtureSources(t, map[string]string{"modules/maintenance/compose_verification.go": opening}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(strings.Join(violations, "\n"), "cannot open owner resources") {
+		t.Fatalf("construction opened owners: %v", violations)
+	}
+	alias := strings.Replace(verification, "_ = factory", "alias:=struct{New func(*sql.DB)(Owners,error)}{New:config.NewOwners};_,_=alias.New(nil);_ = factory", 1)
+	violations, _, err = inspectDependencies(fixtureSources(t, map[string]string{"modules/maintenance/compose_verification.go": alias}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(strings.Join(violations, "\n"), "cannot open owner resources") {
+		t.Fatalf("construction invoked renamed owner factory: %v", violations)
+	}
+
 }
 
 func TestBoundedPromotionCompletionContext(t *testing.T) {
@@ -163,4 +180,19 @@ func TestSchemaComparisonDataHasNoSQLAuthority(t *testing.T) {
 			t.Fatalf("execute %t, got %v", execute, violations)
 		}
 	}
+}
+
+func verificationConfigShape(typ *ast.TypeSpec, imports map[string]string) bool {
+	structure, ok := typ.Type.(*ast.StructType)
+	if !ok || len(structure.Fields.List) != 3 || imports["sql"] != "database/sql" || imports["time"] != "time" {
+		return false
+	}
+	expected := map[string]string{"Now": "func() time.Time", "ID": "func(string) string", "NewOwners": "func(*sql.DB) (Owners, error)"}
+	for _, field := range structure.Fields.List {
+		if len(field.Names) != 1 || expected[field.Names[0].Name] != astShape(field.Type) {
+			return false
+		}
+		delete(expected, field.Names[0].Name)
+	}
+	return len(expected) == 0
 }

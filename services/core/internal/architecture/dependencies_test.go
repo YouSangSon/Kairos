@@ -132,6 +132,16 @@ func inspectDependencies(root string) ([]string, map[string]bool, error) {
 				violations = append(violations, fmt.Sprintf("%s imports forbidden %s", relative, name))
 			}
 		}
+		if relative == "root/main.go" && sourceImport(file, "composition") == internalPrefix+"composition" {
+			for _, violation := range thinMainViolations(file) {
+				violations = append(violations, relative+" "+violation)
+			}
+		}
+		if relative == "modules/trading/internal/application/scheduled.go" {
+			for _, violation := range tradingTimeoutDeclarations(file) {
+				violations = append(violations, relative+" "+violation)
+			}
+		}
 		violations = append(violations, inspectModuleDeclarations(relative, file, imports)...)
 		directCalls := map[*ast.SelectorExpr]bool{}
 		ast.Inspect(file, func(node ast.Node) bool {
@@ -189,10 +199,13 @@ func inspectDependencies(root string) ([]string, map[string]bool, error) {
 			if pureLayer && imports[pkg.Name] == "context" {
 				switch selector.Sel.Name {
 				case "WithTimeout", "WithTimeoutCause", "WithDeadline", "WithDeadlineCause", "AfterFunc":
-					if !approvedPromotionCompletion(relative, file, imports, selector) {
+					if !approvedPromotionCompletion(relative, file, imports, selector) && !approvedTradingTimeout(relative, file, selector) {
 						violations = append(violations, relative+" creates clock through context."+selector.Sel.Name)
 					}
 				}
+			}
+			if pureLayer && imports[pkg.Name] == "io" && !approvedJSONEOF(relative, file, selector) {
+				violations = append(violations, relative+" exposes IO beyond the in-memory JSON EOF sentinel")
 			}
 			if pureLayer && imports[pkg.Name] == "fmt" {
 				switch selector.Sel.Name {

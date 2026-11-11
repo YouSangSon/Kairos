@@ -77,6 +77,9 @@ func legacySymbols(root string) (map[string]map[string]string, error) {
 		if err != nil {
 			return err
 		}
+		if relative == "main.go" && sourceImport(file, "composition") == internalPrefix+"composition" && len(thinMainViolations(file)) == 0 {
+			return nil
+		}
 		result[relative] = map[string]string{}
 		for _, declaration := range file.Decls {
 			if group, ok := declaration.(*ast.GenDecl); ok && group.Tok == token.IMPORT {

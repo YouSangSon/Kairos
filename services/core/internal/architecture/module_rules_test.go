@@ -117,7 +117,7 @@ func moduleImportViolation(relative, name string) string {
 		if strings.HasPrefix(relative, "codec/") && !pureModuleImport(name) && name != "io" {
 			return "shared codec imports impure dependency " + name
 		}
-		if strings.HasPrefix(relative, "composition/") && strings.HasPrefix(name, internalPrefix) && target == "" && !strings.HasPrefix(name, internalPrefix+"storage/") && !strings.HasPrefix(name, internalPrefix+"composition/") && name != internalPrefix+"files/private" && name != internalPrefix+"providers/kiwoom" {
+		if strings.HasPrefix(relative, "composition/") && strings.HasPrefix(name, internalPrefix) && target == "" && !strings.HasPrefix(name, internalPrefix+"storage/") && !strings.HasPrefix(name, internalPrefix+"composition/") && name != internalPrefix+"files/private" && name != internalPrefix+"providers/kiwoom" && name != internalPrefix+"transport/httpjson" {
 			return "composition imports private legacy implementation " + name
 		}
 		return ""
@@ -138,6 +138,9 @@ func moduleImportViolation(relative, name string) string {
 			return "domain layer imports forbidden " + name
 		}
 	case "application":
+		if relative == "modules/trading/internal/application/promotion_rules.go" && name == "io" {
+			return ""
+		}
 		if name == internalPrefix+"storage/contracts" {
 			return ""
 		}
@@ -220,6 +223,10 @@ func inspectModuleDeclarations(path string, file *ast.File, imports map[string]s
 						continue
 					}
 					if typ.Name.Name == "Config" || typ.Name.Name == "Dependencies" || typ.Name.Name == "CLIConfig" || maintenanceConstructionFile(path) && (typ.Name.Name == "Owners" || typ.Name.Name == "VerificationConfig") {
+						if typ.Name.Name == "VerificationConfig" && !verificationConfigShape(typ, imports) {
+							violations = append(violations, path+" verification construction config permits only clock ID and owner factory")
+						}
+
 						structure, ok := typ.Type.(*ast.StructType)
 						if !ok {
 							violations = append(violations, path+" construction config must be a struct")
@@ -259,6 +266,29 @@ func inspectModuleDeclarations(path string, file *ast.File, imports map[string]s
 			if function.Name.Name == "ComposeVerification" && !manifestVerifierResult(function, imports) {
 				violations = append(violations, path+" verification construction must return only ManifestVerifier")
 			}
+			if function.Name.Name == "ComposeVerification" {
+				ast.Inspect(function.Body, func(node ast.Node) bool {
+					if literal, ok := node.(*ast.FuncLit); ok && approvedOwnersMapper(path, file, imports, literal) {
+						return false
+					}
+					if call, ok := node.(*ast.CallExpr); ok {
+						selector, ok := call.Fun.(*ast.SelectorExpr)
+						allowed := false
+						if ok {
+							pkg, imported := selector.X.(*ast.Ident)
+							if imported && pkg.Obj == nil {
+								path := imports[pkg.Name]
+								allowed = path == "errors" && selector.Sel.Name == "New" || path == internalPrefix+"modules/maintenance/internal/adapters/sqlite" && selector.Sel.Name == "NewManifestVerifier"
+							}
+						}
+						if !allowed {
+							violations = append(violations, path+" verification construction cannot open owner resources")
+						}
+					}
+					return true
+				})
+			}
+
 			entryName := function.Name.Name
 			if function.Type.Params != nil {
 				for _, field := range function.Type.Params.List {
@@ -268,7 +298,7 @@ func inspectModuleDeclarations(path string, file *ast.File, imports map[string]s
 				}
 			}
 			ast.Inspect(function.Body, func(node ast.Node) bool {
-				if condition, ok := node.(*ast.IfStmt); ok && !constructionCondition(condition.Cond) {
+				if condition, ok := node.(*ast.IfStmt); ok && !tradingConstructionCondition(path, function.Name.Name, condition.Cond) {
 					violations = append(violations, path+" contains business condition in construction")
 				}
 
@@ -279,7 +309,7 @@ func inspectModuleDeclarations(path string, file *ast.File, imports map[string]s
 						if pkg, ok := function.X.(*ast.Ident); ok {
 							pkgPath = imports[pkg.Name]
 						}
-						if !constructionCall(function.Sel.Name) && !transportConstructionCall(entryName, pkgPath, owner, function.Sel.Name) {
+						if !constructionCall(function.Sel.Name) && !transportConstructionCall(entryName, pkgPath, owner, function.Sel.Name) && !tradingConstructionBinding(path, entryName, file, call) {
 							violations = append(violations, path+" calls business function in construction "+function.Sel.Name)
 						}
 					case *ast.Ident:
@@ -290,7 +320,7 @@ func inspectModuleDeclarations(path string, file *ast.File, imports map[string]s
 						violations = append(violations, path+" calls arbitrary callback in construction")
 					}
 				}
-				if literal, ok := node.(*ast.FuncLit); ok && !approvedOwnersMapper(path, file, imports, literal) {
+				if literal, ok := node.(*ast.FuncLit); ok && !approvedOwnersMapper(path, file, imports, literal) && !approvedLedgerCLIFactory(path, file, literal) {
 					violations = append(violations, path+" defines callback implementation in construction")
 				}
 

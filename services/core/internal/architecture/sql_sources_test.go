@@ -80,6 +80,11 @@ func inspectSQLSources(root string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	additional, err := migrationSources(root)
+	if err != nil {
+		return nil, err
+	}
+	sources = append(sources, additional...)
 	var violations []string
 	catalogs := map[string][]string{}
 	for _, source := range sources {
@@ -195,6 +200,10 @@ func inspectSQLSources(root string) ([]string, error) {
 				violations = append(violations, source.path+" research compatibility module has no SQL ownership")
 				return
 			}
+			if owner == "maintenance" && ownership.ValidateMaintenanceCatalogRead(sql) == nil {
+				violations = append(violations, source.path+" maintenance catalog statement lacks reviewed executor or object provenance")
+				return
+			}
 			if !sqlite {
 				violations = append(violations, source.path+" SQL must be in private sqlite adapter")
 				return
@@ -233,6 +242,9 @@ func inspectSQLSources(root string) ([]string, error) {
 							return true
 						}
 						sql, known := constantString(call.Args[index], source.constants, map[string]bool{})
+						if approvedMaintenanceSQL(source, call, sql, known, sources) || approvedMigrationExecution(source, call, sources) {
+							return true
+						}
 						if !known {
 							violations = append(violations, fmt.Sprintf("%s:%d unresolved SQL expression in %s", source.path, source.positions.Position(call.Pos()).Line, selector.Sel.Name))
 						} else {
