@@ -12,7 +12,8 @@ func (r *valuationReads) CashCloseAnchor(ctx context.Context, cutoff int64, asOf
 	return n, err
 }
 func (r *valuationReads) MarkObservationIDs(ctx context.Context, cutoff int64, asOf string) ([]string, error) {
-	rows, err := r.q.QueryContext(ctx, `SELECT observation_id FROM paper_market_bar_observations WHERE sequence<=? AND close_at=? ORDER BY sequence`, cutoff, asOf)
+	rows, err := r.q.QueryContext(ctx, `SELECT observation_id FROM paper_market_bar_observations
+		WHERE sequence<=? AND close_at=? ORDER BY sequence`, cutoff, asOf)
 	if err != nil {
 		return nil, err
 	}
