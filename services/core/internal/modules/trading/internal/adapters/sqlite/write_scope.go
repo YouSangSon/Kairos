@@ -4,6 +4,7 @@ import (
 	"context"
 	"math/big"
 	"omni-folio/services/core/internal/modules/trading/internal/adapters/files"
+	"omni-folio/services/core/internal/modules/trading/internal/adapters/process"
 	"omni-folio/services/core/internal/modules/trading/internal/application"
 	"time"
 )
@@ -33,9 +34,9 @@ func (s *Store) Decide(ctx context.Context, work func(application.WriteScope) (b
 }
 func (s *Store) business() *application.UseCases {
 	if s == nil || s.db == nil {
-		return application.New(nil, nil, nil, nil, "", "").WithInputs(files.Inputs{})
+		return application.New(nil, nil, nil, nil, "", "").WithInputs(files.Inputs{}).WithWait(process.Wait)
 	}
-	return application.New(s, s, s.now, s.id, s.executionOwner, s.paperRunnerOwner).WithInputs(files.Inputs{}).WithReads(s)
+	return application.New(s, s, s.now, s.id, s.executionOwner, s.paperRunnerOwner).WithInputs(files.Inputs{}).WithWait(process.Wait).WithReads(s)
 }
 func (j *writeScope) RecordPaperSignalEventTx(ctx context.Context, accountRef string, signal PaperSignal) (*PaperSignalEvent, error) {
 	return j.store.recordPaperSignalEventTx(ctx, j.tx, accountRef, signal)

@@ -2,7 +2,7 @@ package sqlite
 
 import (
 	"context"
-	"omni-folio/services/core/internal/modules/trading/internal/application"
+	"omni-folio/services/core/internal/modules/trading/internal/adapters/process"
 	"time"
 )
 
@@ -24,4 +24,4 @@ func (s *Store) runPaperPerformanceLoopDue(ctx context.Context, accountRef strin
 	return s.business().RunPaperPerformanceLoopDue(ctx, accountRef, claim)
 }
 
-var waitPaperRunnerLoop = application.WaitPaperRunnerLoop
+var waitPaperRunnerLoop = process.Wait

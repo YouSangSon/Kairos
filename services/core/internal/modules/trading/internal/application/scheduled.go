@@ -156,17 +156,8 @@ func (s *UseCases) WaitForPaperRunnerLeaseOrCompletion(ctx context.Context, acco
 		if completed != nil {
 			return nil, completed, nil
 		}
-		timer := time.NewTimer(paperScheduledRunnerContentionPoll)
-		select {
-		case <-waitCtx.Done():
-			if !timer.Stop() {
-				select {
-				case <-timer.C:
-				default:
-				}
-			}
-			return nil, nil, waitCtx.Err()
-		case <-timer.C:
+		if err := s.wait(waitCtx, paperScheduledRunnerContentionPoll); err != nil {
+			return nil, nil, err
 		}
 		claim, err := s.AcquirePaperRunnerLease(waitCtx, accountRef)
 		if err == nil {
@@ -247,7 +238,7 @@ func (s *UseCases) ApplyPaperPerformancePolicyWithClaim(ctx context.Context, acc
 	return s.ApplyPaperPerformancePolicyTx(stageCtx, accountRef, expectedSelectionEventID, expectedStrategyPerformanceID, claim)
 }
 func (s *UseCases) RunPaperPerformanceLoop(ctx context.Context, accountRef string) error {
-	return s.RunPaperPerformanceLoopWithWait(ctx, accountRef, WaitPaperRunnerLoop)
+	return s.RunPaperPerformanceLoopWithWait(ctx, accountRef, s.wait)
 }
 func (s *UseCases) RunPaperPerformanceLoopWithWait(ctx context.Context, accountRef string, wait func(context.Context, time.Duration) error) (resultErr error) {
 	if ctx == nil || wait == nil {
@@ -303,21 +294,4 @@ func (s *UseCases) RunPaperPerformanceLoopDue(ctx context.Context, accountRef st
 		return false, err
 	}
 	return result != nil && result.Decision == "HALT_AND_ROLLBACK", nil
-}
-func WaitPaperRunnerLoop(ctx context.Context, delay time.Duration) error {
-	timer := time.NewTimer(delay)
-	defer func() {
-		if !timer.Stop() {
-			select {
-			case <-timer.C:
-			default:
-			}
-		}
-	}()
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-timer.C:
-		return nil
-	}
 }
