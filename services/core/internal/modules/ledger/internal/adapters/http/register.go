@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"mime"
 	"net/http"
 	"net/url"
@@ -54,6 +55,9 @@ func fromContract(e *c.Error) *appError {
 		status = http.StatusNotFound
 	case c.Conflict:
 		status = http.StatusConflict
+	}
+	if status == http.StatusInternalServerError {
+		log.Printf("internal error: %v", e.Unwrap())
 	}
 	return &appError{status, e.Body}
 }
