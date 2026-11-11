@@ -1,13 +1,15 @@
 import 'dart:async';
 import 'dart:convert';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
-import 'package:omni_folio_client/api.dart';
-import 'package:omni_folio_client/app.dart';
-import 'package:omni_folio_client/models.dart';
+import 'package:omni_folio_client/core/domain/api_exception.dart';
+import 'package:omni_folio_client/features/ledger/data/codecs.dart';
+import 'package:omni_folio_client/features/ledger/domain/models.dart';
+import 'package:omni_folio_client/features/ledger/presentation/activity_page.dart';
+import 'package:omni_folio_client/features/portfolio/domain/models.dart';
+import 'support/repositories.dart';
 
 typedef Json = Map<String, dynamic>;
 
@@ -50,7 +52,7 @@ LedgerActivityPage _modelPage({
   String revision = 'rev_0000000101',
   String recordedAt = '2026-01-10T15:01:00Z',
   String? nextCursor,
-}) => LedgerActivityPage.fromJson(
+}) => decodeLedgerActivityPage(
   _page(
     events: events,
     revision: revision,
@@ -59,15 +61,17 @@ LedgerActivityPage _modelPage({
   ),
 );
 
-Widget _activityApp(OmniApi api, {ThemeMode themeMode = ThemeMode.light}) =>
-    MaterialApp(
-      theme: ThemeData.light(useMaterial3: true),
-      darkTheme: ThemeData.dark(useMaterial3: true),
-      themeMode: themeMode,
-      home: Scaffold(
-        body: SafeArea(child: ActivityPage(api: api)),
-      ),
-    );
+Widget _activityApp(
+  TestRepositories api, {
+  ThemeMode themeMode = ThemeMode.light,
+}) => MaterialApp(
+  theme: ThemeData.light(useMaterial3: true),
+  darkTheme: ThemeData.dark(useMaterial3: true),
+  themeMode: themeMode,
+  home: Scaffold(
+    body: SafeArea(child: ActivityPage(api: api)),
+  ),
+);
 
 Future<void> _pumpUi(WidgetTester tester) async {
   await tester.pump();
@@ -85,7 +89,7 @@ Future<void> _tapVisible(WidgetTester tester, Finder finder) async {
   await _pumpUi(tester);
 }
 
-class _ActivityApi implements OmniApi {
+class _ActivityApi implements TestRepositories {
   @override
   Future<PortfolioBenchmarks> portfolioBenchmarks() async =>
       throw UnimplementedError();
@@ -139,17 +143,17 @@ void main() {
             'fee': entry.key,
             'amount': entry.value,
           });
-        expect(LedgerActivity.fromJson(row).amount, entry.value);
+        expect(decodeLedgerActivity(row).amount, entry.value);
         row['amount'] = '100';
-        expect(() => LedgerActivity.fromJson(row), throwsFormatException);
+        expect(() => decodeLedgerActivity(row), throwsFormatException);
       }
     },
   );
   test(
-    'RestOmniApi round-trips an opaque activity cursor through Uri query',
+    'RestTestRepositories round-trips an opaque activity cursor through Uri query',
     () async {
       late http.Request request;
-      final api = RestOmniApi(
+      final api = RestTestRepositories(
         client: MockClient((value) async {
           request = value;
           return http.Response(jsonEncode(_page(events: [_event(0)])), 200);
@@ -336,7 +340,7 @@ void main() {
       final calls = <String?>[];
       var firstLoads = 0;
       final all = List<Json>.generate(101, _event);
-      final api = RestOmniApi(
+      final api = RestTestRepositories(
         client: MockClient((request) async {
           final cursor = request.url.queryParameters['cursor'];
           calls.add(cursor);
@@ -409,7 +413,7 @@ void main() {
     (tester) async {
       final firstEvents = List<Json>.generate(50, _event);
       var firstLoads = 0;
-      final api = RestOmniApi(
+      final api = RestTestRepositories(
         client: MockClient((request) async {
           final cursor = request.url.queryParameters['cursor'];
           if (cursor != null) {
@@ -455,7 +459,7 @@ void main() {
     'newer navigation rejects a page below the current nanosecond bound',
     (tester) async {
       var page2Loads = 0;
-      final api = RestOmniApi(
+      final api = RestTestRepositories(
         client: MockClient((request) async {
           final cursor = request.url.queryParameters['cursor'];
           if (cursor == null) {
@@ -512,7 +516,7 @@ void main() {
       );
       final page2Pending = Completer<LedgerActivityPage>();
       final refreshPending = Completer<LedgerActivityPage>();
-      final preview = ImportPreview.fromJson({
+      final preview = decodeImportPreview({
         'preview_id': 'preview-1',
         'file_sha256': 'fixture-sha',
         'schema_version': 'canonical-transaction.v1',

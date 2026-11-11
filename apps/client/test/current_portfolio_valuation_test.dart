@@ -1,10 +1,10 @@
 import 'dart:convert';
-
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
-import 'package:omni_folio_client/api.dart';
-import 'package:omni_folio_client/models.dart';
+import 'package:omni_folio_client/core/data/json_codec.dart';
+import 'package:omni_folio_client/features/portfolio/data/codecs.dart';
+import 'support/repositories.dart';
 
 Json currentPortfolioValuationJson({
   String status = 'stale_sample',
@@ -40,7 +40,7 @@ Json currentPortfolioValuationJson({
 
 void main() {
   test('current portfolio valuation parses a closed exact aggregate', () {
-    final valuation = CurrentPortfolioValuation.fromJson(
+    final valuation = decodeCurrentPortfolioValuation(
       currentPortfolioValuationJson(),
     );
 
@@ -87,7 +87,7 @@ void main() {
       },
     ]) {
       expect(
-        () => CurrentPortfolioValuation.fromJson(mutation),
+        () => decodeCurrentPortfolioValuation(mutation),
         throwsFormatException,
         reason: mutation.toString(),
       );
@@ -97,7 +97,7 @@ void main() {
   test(
     'current portfolio valuation accepts exact empty and cash-only states',
     () {
-      final empty = CurrentPortfolioValuation.fromJson(
+      final empty = decodeCurrentPortfolioValuation(
         currentPortfolioValuationJson(
           status: 'empty',
           sample: false,
@@ -107,7 +107,7 @@ void main() {
           issues: const [],
         ),
       );
-      final cashOnly = CurrentPortfolioValuation.fromJson(
+      final cashOnly = decodeCurrentPortfolioValuation(
         currentPortfolioValuationJson(
           status: 'complete',
           sample: false,
@@ -134,7 +134,7 @@ void main() {
     'REST client requests current valuation without query parameters',
     () async {
       late http.Request request;
-      final api = RestOmniApi(
+      final api = RestTestRepositories(
         baseUrl: 'http://example.test',
         client: MockClient((value) async {
           request = value;

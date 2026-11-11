@@ -1,17 +1,17 @@
 import 'dart:async';
 import 'dart:convert';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
-import 'package:omni_folio_client/api.dart';
-import 'package:omni_folio_client/app.dart';
-import 'package:omni_folio_client/models.dart';
-import 'package:omni_folio_client/portfolio_benchmarks_page.dart';
-import 'package:omni_folio_client/portfolio_twr_page.dart';
-
-import 'vertical_slice_test.dart' show FakeApi, fixture, goldenApi, pumpUi;
+import 'package:omni_folio_client/core/data/json_codec.dart';
+import 'package:omni_folio_client/features/portfolio/data/codecs.dart';
+import 'package:omni_folio_client/features/portfolio/domain/models.dart';
+import 'package:omni_folio_client/features/portfolio/presentation/portfolio_benchmarks_page.dart';
+import 'package:omni_folio_client/features/portfolio/presentation/portfolio_pages.dart';
+import 'package:omni_folio_client/features/portfolio/presentation/portfolio_twr_page.dart';
+import 'support/fixtures.dart';
+import 'support/repositories.dart';
 
 Json _report() => fixture('golden-portfolio-benchmarks.json');
 Json _state(String name) =>
@@ -28,16 +28,16 @@ Json _krw(Json json) =>
         )
         as Json;
 FakeApi _api(Json json) => goldenApi()
-  ..benchmarksValue = PortfolioBenchmarks.fromJson(json)
-  ..twrValue = PortfolioTwr.fromJson(fixture('golden-portfolio-twr.json'))
-  ..xirrValue = PortfolioXirr.fromJson(fixture('golden-portfolio-xirr.json'));
+  ..benchmarksValue = decodePortfolioBenchmarks(json)
+  ..twrValue = decodePortfolioTwr(fixture('golden-portfolio-twr.json'))
+  ..xirrValue = decodePortfolioXirr(fixture('golden-portfolio-xirr.json'));
 Future<void> _direct(WidgetTester tester, FakeApi api) async {
   await tester.pumpWidget(MaterialApp(home: PortfolioBenchmarksPage(api: api)));
   await tester.pumpAndSettle();
 }
 
 Future<void> _open(WidgetTester tester, FakeApi api) async {
-  await tester.pumpWidget(OmniFolioApp(api: api));
+  await tester.pumpWidget(testApp(api: api));
   await pumpUi(tester);
   expect(api.benchmarksCalls, 0);
   final xirr = find.text('입출금을 반영한 수익률 보기');
@@ -74,7 +74,7 @@ void main() {
   test(
     'shared producer response keeps native KRW and percentage points distinct',
     () {
-      final r = PortfolioBenchmarks.fromJson(_report());
+      final r = decodePortfolioBenchmarks(_report());
       expect(r.portfolio.cumulativeRate, '0.21');
       expect(r.portfolio.sample, isFalse);
       expect(r.sample, isTrue);
@@ -92,7 +92,7 @@ void main() {
       in (fixture('golden-portfolio-benchmark-states.json')['reports'] as Json)
           .keys) {
     test('shared comparison state $name is accepted', () {
-      PortfolioBenchmarks.fromJson(_state(name));
+      decodePortfolioBenchmarks(_state(name));
     });
   }
   final invalid = <String, void Function(Json)>{
@@ -155,7 +155,7 @@ void main() {
     test('rejects inconsistent benchmark ${entry.key}', () {
       final raw = _report();
       entry.value(raw);
-      expect(() => PortfolioBenchmarks.fromJson(raw), throwsFormatException);
+      expect(() => decodePortfolioBenchmarks(raw), throwsFormatException);
     });
   }
   test(
@@ -164,12 +164,12 @@ void main() {
       final raw = _state('stale_fx');
       final row = _usd(raw);
       row['series']['sample'] = false;
-      final r = PortfolioBenchmarks.fromJson(raw);
+      final r = decodePortfolioBenchmarks(raw);
       expect(r.sample, isTrue);
       expect(r.benchmarks.single.krw.rate, isNull);
       expect(r.benchmarks.single.native.rate, '-0.1');
       row['sample'] = false;
-      expect(() => PortfolioBenchmarks.fromJson(raw), throwsFormatException);
+      expect(() => decodePortfolioBenchmarks(raw), throwsFormatException);
     },
   );
   test('difference supports132 chars without another percent conversion', () {
@@ -184,16 +184,16 @@ void main() {
     final difference = '-1${List.filled(130, '0').join()}';
     row['difference_percentage_points'] = difference;
     expect(
-      PortfolioBenchmarks.fromJson(
+      decodePortfolioBenchmarks(
         raw,
       ).benchmarks.single.differencePercentagePoints,
       difference,
     );
     row['difference_percentage_points'] = '${difference}0';
-    expect(() => PortfolioBenchmarks.fromJson(raw), throwsFormatException);
+    expect(() => decodePortfolioBenchmarks(raw), throwsFormatException);
   });
   test('comparison has one query-free GET', () async {
-    final api = RestOmniApi(
+    final api = RestTestRepositories(
       baseUrl: 'http://localhost',
       client: MockClient((request) async {
         expect(request.method, 'GET');
@@ -214,11 +214,11 @@ void main() {
       rows.add(row);
     }
     raw['benchmarks'] = rows;
-    expect(PortfolioBenchmarks.fromJson(raw).benchmarks.length, 32);
+    expect(decodePortfolioBenchmarks(raw).benchmarks.length, 32);
     final last = jsonDecode(jsonEncode(prototype)) as Json;
     last['series']['benchmark_id'] = 'index-32';
     rows.add(last);
-    expect(() => PortfolioBenchmarks.fromJson(raw), throwsFormatException);
+    expect(() => decodePortfolioBenchmarks(raw), throwsFormatException);
   });
   testWidgets('comparison is on demand and back preserves TWR', (tester) async {
     final api = _api(_report());
@@ -288,7 +288,7 @@ void main() {
     await tester.pump();
     expect(find.text('같은 기간의 지수 수익률을 확인하고 있습니다'), findsOneWidget);
     await tester.pumpWidget(const SizedBox.shrink());
-    pending.complete(PortfolioBenchmarks.fromJson(_report()));
+    pending.complete(decodePortfolioBenchmarks(_report()));
     await tester.pump();
     expect(tester.takeException(), isNull);
   });

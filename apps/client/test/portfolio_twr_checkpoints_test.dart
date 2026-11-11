@@ -1,18 +1,19 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
-import 'package:omni_folio_client/api.dart';
-import 'package:omni_folio_client/models.dart';
-import 'package:omni_folio_client/portfolio_twr_checkpoint_plot.dart';
-import 'package:omni_folio_client/portfolio_twr_checkpoints_page.dart';
-import 'package:omni_folio_client/portfolio_twr_page.dart';
-
-import 'vertical_slice_test.dart' show fixture, pumpUi;
+import 'package:omni_folio_client/core/data/json_codec.dart';
+import 'package:omni_folio_client/core/domain/api_exception.dart';
+import 'package:omni_folio_client/features/portfolio/data/codecs.dart';
+import 'package:omni_folio_client/features/portfolio/domain/models.dart';
+import 'package:omni_folio_client/features/portfolio/presentation/portfolio_twr_checkpoint_plot.dart';
+import 'package:omni_folio_client/features/portfolio/presentation/portfolio_twr_checkpoints_page.dart';
+import 'package:omni_folio_client/features/portfolio/presentation/portfolio_twr_page.dart';
+import 'support/fixtures.dart';
+import 'support/repositories.dart';
 
 Json _reports() =>
     fixture('golden-portfolio-twr-checkpoints.json')['reports'] as Json;
@@ -46,7 +47,7 @@ Json _rates(List<String> rates) {
   return wire;
 }
 
-class _Api implements OmniApi {
+class _Api implements TestRepositories {
   _Api(this.data);
   Json data;
   Future<PortfolioTwrCheckpoints> Function()? handler;
@@ -54,12 +55,12 @@ class _Api implements OmniApi {
   @override
   Future<PortfolioTwrCheckpoints> portfolioTwrCheckpoints() async {
     calls++;
-    return handler?.call() ?? PortfolioTwrCheckpoints.fromJson(data);
+    return handler?.call() ?? decodePortfolioTwrCheckpoints(data);
   }
 
   @override
   Future<PortfolioTwr> portfolioTwr() async =>
-      PortfolioTwr.fromJson(data['report'] as Json);
+      decodePortfolioTwr(data['report'] as Json);
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
@@ -90,7 +91,7 @@ void main() {
     'shared producer reports retain calculated, zero, loss, empty and unsupported states',
     () {
       for (final wire in _reports().values.cast<Json>()) {
-        final result = PortfolioTwrCheckpoints.fromJson(wire);
+        final result = decodePortfolioTwrCheckpoints(wire);
         if (result.report.status == 'calculated') {
           expect(result.points.length, result.report.boundaryCount! + 1);
           expect(result.points.first.cumulativeRate, '0');
@@ -134,14 +135,14 @@ void main() {
         final altered = _wire('compound');
         change(altered);
         expect(
-          () => PortfolioTwrCheckpoints.fromJson(altered),
+          () => decodePortfolioTwrCheckpoints(altered),
           throwsFormatException,
         );
       }
       final unavailable = _wire('full_withdrawal')
         ..['points'] = _wire('compound')['points'];
       expect(
-        () => PortfolioTwrCheckpoints.fromJson(unavailable),
+        () => decodePortfolioTwrCheckpoints(unavailable),
         throwsFormatException,
       );
     },
@@ -156,7 +157,7 @@ void main() {
         ['0', '9' * 2500, '-1'],
         List<String>.filled(1001, '0'),
       ]) {
-        final result = PortfolioTwrCheckpoints.fromJson(_rates(rates));
+        final result = decodePortfolioTwrCheckpoints(_rates(rates));
         final plot = TwrCheckpointPlot(result.points);
         expect(plot.points.length, rates.length);
         expect(
@@ -177,7 +178,7 @@ void main() {
         }
       }
       expect(
-        () => PortfolioTwrCheckpoints.fromJson(
+        () => decodePortfolioTwrCheckpoints(
           _rates(List<String>.filled(1002, '0')),
         ),
         throwsFormatException,
@@ -192,7 +193,7 @@ void main() {
       equal['report']['period_start'] = equal['report']['period_end'];
       equal['points'][0]['at'] = equal['report']['period_end'];
       final flat = TwrCheckpointPlot(
-        PortfolioTwrCheckpoints.fromJson(equal).points,
+        decodePortfolioTwrCheckpoints(equal).points,
       );
       expect(flat.points, [(x: 0.5, y: 0.5), (x: 0.5, y: 0.5)]);
       final nano = _rates(['0', '0', '0']);
@@ -205,7 +206,7 @@ void main() {
       nano['points'][1]['at'] = end;
       nano['points'][2]['at'] = end;
       final plot = TwrCheckpointPlot(
-        PortfolioTwrCheckpoints.fromJson(nano).points,
+        decodePortfolioTwrCheckpoints(nano).points,
       );
       expect(plot.points.map((p) => p.x).toList(), [0, 1, 1]);
       expect(plot.points.map((p) => p.y).toList(), [0.5, 0.5, 0.5]);
@@ -218,7 +219,7 @@ void main() {
       final cases = fixture('portfolio-twr-cases.json')['cases'] as List;
       for (final c in cases.cast<Json>()) {
         final rates = ['0', ...(c['prefix_expected'] as List).cast<String>()];
-        final trace = PortfolioTwrCheckpoints.fromJson(_rates(rates));
+        final trace = decodePortfolioTwrCheckpoints(_rates(rates));
         final plot = TwrCheckpointPlot(trace.points);
         expect(plot.points.length, rates.length);
         expect(plot.points.every((p) => p.x.isFinite && p.y.isFinite), isTrue);
@@ -232,7 +233,7 @@ void main() {
     () async {
       var calls = 0;
       final wire = _wire('compound');
-      final api = RestOmniApi(
+      final api = RestTestRepositories(
         client: MockClient((request) async {
           calls++;
           expect(request.method, 'GET');
@@ -256,7 +257,9 @@ void main() {
       final exact = Uint8List(limit)
         ..fillRange(0, limit, 32)
         ..setRange(0, encoded.length, encoded);
-      final api = RestOmniApi(client: _ChunkClient(Stream.value(exact)));
+      final api = RestTestRepositories(
+        client: _ChunkClient(Stream.value(exact)),
+      );
       expect((await api.portfolioTwrCheckpoints()).points.length, 3);
       var cancelled = false;
       Stream<List<int>> growing() async* {
@@ -270,12 +273,14 @@ void main() {
       }
 
       await expectLater(
-        RestOmniApi(client: _ChunkClient(growing())).portfolioTwrCheckpoints(),
+        RestTestRepositories(
+          client: _ChunkClient(growing()),
+        ).portfolioTwrCheckpoints(),
         throwsFormatException,
       );
       expect(cancelled, isTrue);
       await expectLater(
-        RestOmniApi(
+        RestTestRepositories(
           client: MockClient((_) async => http.Response('{}', 200)),
         ).portfolioTwrCheckpoints(),
         throwsFormatException,
@@ -285,7 +290,7 @@ void main() {
 
   testWidgets('waiting limit aborts the read transport', (tester) async {
     final client = _WaitingClient();
-    final call = RestOmniApi(client: client).portfolioTwrCheckpoints();
+    final call = RestTestRepositories(client: client).portfolioTwrCheckpoints();
     final checked = expectLater(call, throwsA(isA<ApiException>()));
     await tester.pump(const Duration(seconds: 41));
     await checked;
@@ -398,7 +403,7 @@ void main() {
         isNull,
       );
       await tester.pumpWidget(const SizedBox.shrink());
-      pending.complete(PortfolioTwrCheckpoints.fromJson(_wire('compound')));
+      pending.complete(decodePortfolioTwrCheckpoints(_wire('compound')));
       await pumpUi(tester);
       expect(tester.takeException(), isNull);
     },

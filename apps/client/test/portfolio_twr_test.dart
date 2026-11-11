@@ -1,27 +1,28 @@
 import 'dart:async';
 import 'dart:convert';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
-import 'package:omni_folio_client/api.dart';
-import 'package:omni_folio_client/app.dart';
-import 'package:omni_folio_client/models.dart';
-import 'package:omni_folio_client/portfolio_twr_page.dart';
-import 'package:omni_folio_client/portfolio_xirr_page.dart';
-
-import 'vertical_slice_test.dart' show FakeApi, fixture, goldenApi, pumpUi;
+import 'package:omni_folio_client/core/data/json_codec.dart';
+import 'package:omni_folio_client/core/domain/api_exception.dart';
+import 'package:omni_folio_client/features/portfolio/data/codecs.dart';
+import 'package:omni_folio_client/features/portfolio/domain/models.dart';
+import 'package:omni_folio_client/features/portfolio/presentation/portfolio_pages.dart';
+import 'package:omni_folio_client/features/portfolio/presentation/portfolio_twr_page.dart';
+import 'package:omni_folio_client/features/portfolio/presentation/portfolio_xirr_page.dart';
+import 'support/fixtures.dart';
+import 'support/repositories.dart';
 
 Json _report() => fixture('golden-portfolio-twr.json');
 Json _state(String name) =>
     (fixture('golden-portfolio-twr-states.json')['reports'] as Json)[name]
         as Json;
 FakeApi _api(Json report) => goldenApi()
-  ..twrValue = PortfolioTwr.fromJson(report)
-  ..xirrValue = PortfolioXirr.fromJson(fixture('golden-portfolio-xirr.json'));
+  ..twrValue = decodePortfolioTwr(report)
+  ..xirrValue = decodePortfolioXirr(fixture('golden-portfolio-xirr.json'));
 Future<void> _open(WidgetTester tester, FakeApi api) async {
-  await tester.pumpWidget(OmniFolioApp(api: api));
+  await tester.pumpWidget(testApp(api: api));
   await pumpUi(tester);
   expect(api.twrCalls, 0);
   expect(api.xirrCalls, 0);
@@ -54,7 +55,7 @@ Future<void> _direct(WidgetTester tester, FakeApi api) async {
 
 void main() {
   test('shared actual response has cumulative rate and known cash', () {
-    final r = PortfolioTwr.fromJson(_report());
+    final r = decodePortfolioTwr(_report());
     expect(r.cumulativeRate, '0.21');
     expect(r.netContributions!.amount, '200');
     expect(r.boundaryCount, 2);
@@ -68,7 +69,7 @@ void main() {
     'full_withdrawal',
   ]) {
     test('shared actual state $name is accepted', () {
-      final r = PortfolioTwr.fromJson(_state(name));
+      final r = decodePortfolioTwr(_state(name));
       expect(r.periodEnd, r.valuation.valuationAsOf);
     });
   }
@@ -105,14 +106,14 @@ void main() {
     test('TWR rejects ${entry.key}', () {
       final j = _report();
       entry.value(j);
-      expect(() => PortfolioTwr.fromJson(j), throwsFormatException);
+      expect(() => decodePortfolioTwr(j), throwsFormatException);
     });
   }
   test('unknown inputs cannot be fabricated as zero', () {
     final j = _state('valuation_unavailable')
       ..['external_event_count'] = 0
       ..['boundary_count'] = 0;
-    expect(() => PortfolioTwr.fromJson(j), throwsFormatException);
+    expect(() => decodePortfolioTwr(j), throwsFormatException);
   });
   for (final cause in ['cash_flow_limit', 'no_external_cash_flows']) {
     test('unavailable reason $cause must agree with known counts', () {
@@ -120,7 +121,7 @@ void main() {
       j['issues'] = [
         {'code': cause, 'message': 'private'},
       ];
-      expect(() => PortfolioTwr.fromJson(j), throwsFormatException);
+      expect(() => decodePortfolioTwr(j), throwsFormatException);
     });
   }
   test('calculation input failure requires an external boundary', () {
@@ -131,7 +132,7 @@ void main() {
       ..['issues'] = [
         {'code': 'missing_historical_fx', 'message': 'private'},
       ];
-    expect(() => PortfolioTwr.fromJson(j), throwsFormatException);
+    expect(() => decodePortfolioTwr(j), throwsFormatException);
   });
   test('unavailable has one primary reason', () {
     final j = _state('full_withdrawal');
@@ -139,7 +140,7 @@ void main() {
       'code': 'missing_historical_fx',
       'message': 'private',
     });
-    expect(() => PortfolioTwr.fromJson(j), throwsFormatException);
+    expect(() => decodePortfolioTwr(j), throwsFormatException);
   });
   test('actual boundary cap is an accepted unavailable reason', () {
     final j = _state('full_withdrawal')
@@ -148,10 +149,10 @@ void main() {
       ..['issues'] = [
         {'code': 'cash_flow_limit', 'message': 'private'},
       ];
-    expect(PortfolioTwr.fromJson(j).status, 'unavailable');
+    expect(decodePortfolioTwr(j).status, 'unavailable');
   });
   test('TWR uses only its read endpoint', () async {
-    final api = RestOmniApi(
+    final api = RestTestRepositories(
       baseUrl: 'http://localhost',
       client: MockClient((r) async {
         expect(r.method, 'GET');

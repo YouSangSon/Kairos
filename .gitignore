@@ -25,6 +25,8 @@ credentials/
 
 # Local financial data and SQLite runtime files
 data/
+!/apps/client/lib/**/data/
+!/apps/client/lib/**/data/**
 backups/
 *.db
 *.db-shm

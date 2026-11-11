@@ -1,16 +1,18 @@
 import 'dart:async';
 import 'dart:convert';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
-import 'package:omni_folio_client/api.dart';
-import 'package:omni_folio_client/app.dart';
-import 'package:omni_folio_client/models.dart';
-import 'package:omni_folio_client/research_report.dart' show researchPercent;
-
-import 'vertical_slice_test.dart' show FakeApi, fixture, goldenApi, pumpUi;
+import 'package:omni_folio_client/core/data/json_codec.dart';
+import 'package:omni_folio_client/core/domain/api_exception.dart';
+import 'package:omni_folio_client/core/domain/decimal.dart';
+import 'package:omni_folio_client/features/portfolio/data/codecs.dart';
+import 'package:omni_folio_client/features/portfolio/domain/models.dart';
+import 'package:omni_folio_client/features/portfolio/presentation/portfolio_pages.dart';
+import 'package:omni_folio_client/features/research/data/research_report_codec.dart';
+import 'support/fixtures.dart';
+import 'support/repositories.dart';
 
 Json _report() => fixture('golden-portfolio-xirr.json');
 Json _issue(String code) => {
@@ -32,11 +34,10 @@ Json _candidate() {
   return j;
 }
 
-FakeApi _api(Json json) =>
-    goldenApi()..xirrValue = PortfolioXirr.fromJson(json);
+FakeApi _api(Json json) => goldenApi()..xirrValue = decodePortfolioXirr(json);
 
 Future<void> _open(WidgetTester tester, FakeApi api) async {
-  await tester.pumpWidget(OmniFolioApp(api: api));
+  await tester.pumpWidget(testApp(api: api));
   await pumpUi(tester);
   final entry = find.text('입출금을 반영한 수익률 보기');
   await tester.scrollUntilVisible(
@@ -61,10 +62,10 @@ Future<void> _show(WidgetTester tester, Finder target) async {
 
 void main() {
   test('unique rate and nonconventional candidate remain different', () {
-    final unique = PortfolioXirr.fromJson(_report());
+    final unique = decodePortfolioXirr(_report());
     expect(unique.annualRate, '0.1');
     expect(unique.candidateRate, isNull);
-    final candidate = PortfolioXirr.fromJson(_candidate());
+    final candidate = decodePortfolioXirr(_candidate());
     expect(candidate.annualRate, isNull);
     expect(candidate.candidateRate, '0.1');
   });
@@ -73,7 +74,7 @@ void main() {
     final reports =
         fixture('golden-portfolio-xirr-states.json')['reports'] as Json;
     for (final entry in reports.entries) {
-      final report = PortfolioXirr.fromJson(entry.value as Json);
+      final report = decodePortfolioXirr(entry.value as Json);
       expect(report.annualRate, isNull);
       expect(report.candidateRate, isNull);
       expect(report.netContributions, isNull);
@@ -123,7 +124,7 @@ void main() {
     test('XIRR parser rejects ${mutate.key}', () {
       final j = _report();
       mutate.value(j);
-      expect(() => PortfolioXirr.fromJson(j), throwsFormatException);
+      expect(() => decodePortfolioXirr(j), throwsFormatException);
     });
   }
 
@@ -138,7 +139,7 @@ void main() {
       });
       addTearDown(client.close);
       expect(
-        (await RestOmniApi(client: client).portfolioXirr()).annualRate,
+        (await RestTestRepositories(client: client).portfolioXirr()).annualRate,
         '0.1',
       );
     },
@@ -148,7 +149,7 @@ void main() {
     'home opens report only on explicit action and keeps old result on error',
     (tester) async {
       final api = _api(_report());
-      await tester.pumpWidget(OmniFolioApp(api: api));
+      await tester.pumpWidget(testApp(api: api));
       await pumpUi(tester);
       expect(api.xirrCalls, 0);
       await _open(tester, api);
@@ -201,7 +202,7 @@ void main() {
     await _open(tester, api);
     expect(find.byKey(const Key('portfolio-xirr-rate')), findsNothing);
     expect(find.text('약 0%'), findsNothing);
-    api.xirrValue = PortfolioXirr.fromJson(_report()..['annual_rate'] = '0');
+    api.xirrValue = decodePortfolioXirr(_report()..['annual_rate'] = '0');
     await tester.tap(find.byTooltip('수익률 새로고침'));
     await tester.pumpAndSettle();
     expect(find.text('약 0%'), findsOneWidget);

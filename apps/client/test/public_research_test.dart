@@ -1,20 +1,21 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
-import 'package:omni_folio_client/api.dart';
-import 'package:omni_folio_client/app.dart';
-import 'package:omni_folio_client/models.dart';
-import 'package:omni_folio_client/public_research.dart';
-import 'package:omni_folio_client/public_research_page.dart';
-import 'package:omni_folio_client/watchlist.dart';
-import 'package:omni_folio_client/watchlist_page.dart';
-
-import 'vertical_slice_test.dart' show fixture, goldenApi;
+import 'package:omni_folio_client/core/domain/api_exception.dart';
+import 'package:omni_folio_client/features/market_data/domain/models.dart';
+import 'package:omni_folio_client/features/portfolio/data/codecs.dart';
+import 'package:omni_folio_client/features/research/data/public_research_codec.dart';
+import 'package:omni_folio_client/features/research/domain/public_research.dart';
+import 'package:omni_folio_client/features/research/presentation/public_research_page.dart';
+import 'package:omni_folio_client/features/watchlist/application/watchlist_controller.dart';
+import 'package:omni_folio_client/features/watchlist/data/codecs.dart';
+import 'package:omni_folio_client/features/watchlist/domain/models.dart';
+import 'support/fixtures.dart';
+import 'support/repositories.dart';
 
 Map<String, dynamic> researchView({
   bool empty = false,
@@ -43,7 +44,7 @@ void main() {
   test(
     'public research preserves typed kinds, rights URLs and immutable identity',
     () {
-      final view = PublicResearch.fromJson(researchView(), apple);
+      final view = decodePublicResearch(researchView(), apple);
       expect(view.items.map((v) => v.kind).toSet(), {
         'filing',
         'news',
@@ -67,7 +68,7 @@ void main() {
         throwsFormatException,
       );
       expect(
-        () => PublicResearch.fromJson(researchView(market: 'KR'), apple),
+        () => decodePublicResearch(researchView(market: 'KR'), apple),
         throwsFormatException,
       );
     },
@@ -92,14 +93,14 @@ void main() {
     ]) {
       final json = researchView();
       mutate(json);
-      expect(() => PublicResearch.fromJson(json, apple), throwsFormatException);
+      expect(() => decodePublicResearch(json, apple), throwsFormatException);
     }
   });
 
   test(
     'REST research request binds exact pair and redacts server failures',
     () async {
-      final api = RestOmniApi(
+      final api = RestTestRepositories(
         client: MockClient((request) async {
           expect(request.url.path, '/v1/research/feed');
           expect(request.url.queryParameters, {
@@ -110,14 +111,14 @@ void main() {
         }),
       );
       expect((await api.publicResearch(apple)).items.length, 3);
-      final mismatch = RestOmniApi(
+      final mismatch = RestTestRepositories(
         client: MockClient(
           (_) async =>
               http.Response(jsonEncode(researchView(market: 'KR')), 200),
         ),
       );
       await expectLater(mismatch.publicResearch(apple), throwsFormatException);
-      final failed = RestOmniApi(
+      final failed = RestTestRepositories(
         client: MockClient(
           (_) async => http.Response(
             '{"code":"research_feed_unavailable","message":"private-path-secret"}',
@@ -147,11 +148,11 @@ void main() {
       ];
       final body = jsonEncode(view).replaceAll('&', r'\u0026');
       expect(utf8.encode(body).length, greaterThan(1024 * 1024 + 4096));
-      final api = RestOmniApi(
+      final api = RestTestRepositories(
         client: MockClient((_) async => http.Response(body, 200)),
       );
       expect((await api.publicResearch(apple)).items.length, 100);
-      final oversized = RestOmniApi(
+      final oversized = RestTestRepositories(
         client: MockClient(
           (_) async => http.Response(' ' * (6 * 1024 * 1024 + 4097), 200),
         ),
@@ -169,7 +170,7 @@ void main() {
         data['items'] = (data['items'] as List)
             .where((item) => item['kind'] == 'filing')
             .toList();
-        final api = _ResearchApi()..next = PublicResearch.fromJson(data, apple);
+        final api = _ResearchApi()..next = decodePublicResearch(data, apple);
         await tester.pumpWidget(
           MaterialApp(
             home: PublicResearchPage(api: api, identity: apple),
@@ -205,7 +206,7 @@ void main() {
     'research renders all kinds, source terms and retains success then clears on valid empty',
     (tester) async {
       final api = _ResearchApi()
-        ..next = PublicResearch.fromJson(researchView(), apple);
+        ..next = decodePublicResearch(researchView(), apple);
       await tester.pumpWidget(
         MaterialApp(
           home: PublicResearchPage(api: api, identity: apple),
@@ -262,7 +263,7 @@ void main() {
       expect(find.textContaining('관측 시각 2026-11-03T01:00:00Z'), findsOneWidget);
       expect(find.textContaining('private path'), findsNothing);
       api.failure = null;
-      api.next = PublicResearch.fromJson(researchView(empty: true), apple);
+      api.next = decodePublicResearch(researchView(empty: true), apple);
       await tester.tap(find.byTooltip('공개 연구 새로고침'));
       await tester.pumpAndSettle();
       expect(find.text('이 파일에서 해당 시장·종목의 자료가 없습니다.'), findsOneWidget);
@@ -292,7 +293,7 @@ void main() {
       await tester.pump();
       final korean = PublicResearchIdentity(market: 'KR', symbol: 'AAPL');
       api.pending = null;
-      api.next = PublicResearch.fromJson(
+      api.next = decodePublicResearch(
         researchView(empty: true, market: 'KR'),
         korean,
       );
@@ -302,7 +303,7 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-      pending.complete(PublicResearch.fromJson(researchView(), apple));
+      pending.complete(decodePublicResearch(researchView(), apple));
       await tester.pumpAndSettle();
       expect(find.text('KR AAPL 공개 연구'), findsOneWidget);
       expect(find.text('이 파일에서 해당 시장·종목의 자료가 없습니다.'), findsOneWidget);
@@ -315,7 +316,7 @@ void main() {
     'explicit selector has no inferred market and requires a choice',
     (tester) async {
       final api = _ResearchApi()
-        ..next = PublicResearch.fromJson(researchView(empty: true), apple);
+        ..next = decodePublicResearch(researchView(empty: true), apple);
       await tester.pumpWidget(
         MaterialApp(
           home: Builder(
@@ -353,13 +354,13 @@ void main() {
     'holding detail requests explicit market and watchlist opens its venue directly',
     (tester) async {
       final api = _ResearchApi()
-        ..next = PublicResearch.fromJson(researchView(empty: true), apple);
-      final holding = PortfolioSnapshot.fromJson(
+        ..next = decodePublicResearch(researchView(empty: true), apple);
+      final holding = decodePortfolioSnapshot(
         fixture('golden-snapshot.json'),
       ).holdings.first;
       await tester.pumpWidget(
         MaterialApp(
-          home: AssetDetailPage(api: api, holding: holding),
+          home: testAssetDetailPage(api: api, holding: holding),
         ),
       );
       await tester.pumpAndSettle();
@@ -372,7 +373,7 @@ void main() {
       final controller = WatchlistController(api);
       addTearDown(controller.dispose);
       await tester.pumpWidget(
-        MaterialApp(home: WatchlistPage(controller: controller)),
+        MaterialApp(home: testWatchlistPage(controller: controller)),
       );
       await tester.pumpAndSettle();
       await tester.scrollUntilVisible(
@@ -396,7 +397,7 @@ void main() {
         addTearDown(tester.view.resetDevicePixelRatio);
         final data = researchView();
         data['items'][1]['title'] = '긴 한국어 공시 제목 ' * 10;
-        final api = _ResearchApi()..next = PublicResearch.fromJson(data, apple);
+        final api = _ResearchApi()..next = decodePublicResearch(data, apple);
         await tester.pumpWidget(
           MaterialApp(
             theme: ThemeData(brightness: brightness),
@@ -422,7 +423,7 @@ void main() {
   }
 }
 
-class _ResearchApi implements OmniApi {
+class _ResearchApi implements TestRepositories {
   final base = goldenApi();
   PublicResearch? next;
   Completer<PublicResearch>? pending;
@@ -443,7 +444,7 @@ class _ResearchApi implements OmniApi {
   }
 
   @override
-  Future<WatchlistReport> watchlist() async => WatchlistReport.fromJson({
+  Future<WatchlistReport> watchlist() async => decodeWatchlistReport({
     'policy_version': 'watchlist_stored_prices_24h.v1',
     'max_observation_age_seconds': 86400,
     'observed_at': '2026-11-03T01:00:00Z',

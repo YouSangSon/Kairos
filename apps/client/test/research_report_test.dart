@@ -1,17 +1,16 @@
 import 'dart:async';
 import 'dart:convert';
-
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
-import 'package:omni_folio_client/api.dart';
-import 'package:omni_folio_client/models.dart'
-    show PortfolioXirr, PortfolioTwr, PortfolioBenchmarks;
-import 'package:omni_folio_client/app.dart';
-import 'package:omni_folio_client/research_report.dart';
-import 'package:omni_folio_client/research_report_page.dart';
+import 'package:omni_folio_client/core/domain/api_exception.dart';
+import 'package:omni_folio_client/features/portfolio/domain/models.dart';
+import 'package:omni_folio_client/features/research/data/research_report_codec.dart';
+import 'package:omni_folio_client/features/research/domain/research_report.dart';
+import 'package:omni_folio_client/features/research/presentation/research_report_page.dart';
+import 'support/repositories.dart';
 
 Map<String, dynamic> researchReportJson({bool empty = false}) => {
   'schema_version': 'research-report.v1',
@@ -54,18 +53,18 @@ Map<String, dynamic> researchReportJson({bool empty = false}) => {
 
 void main() {
   test('closed report preserves exact metrics and the empty observation', () {
-    final view = ResearchReport.fromJson(researchReportJson());
+    final view = decodeResearchReport(researchReportJson());
     expect(view.report!.walkForward.afterCostReturn, '0.014734027');
     expect(view.report!.quantity, '10');
     expect(
-      ResearchReport.fromJson(researchReportJson(empty: true)).report,
+      decodeResearchReport(researchReportJson(empty: true)).report,
       isNull,
     );
     final value = researchReportJson();
     value['report']['promotion_target'] = 'no_promotion';
     value['report']['failed_gates'] = ['walk_forward', 'buy_and_hold_baseline'];
     expect(
-      ResearchReport.fromJson(value).report!.promotionTarget,
+      decodeResearchReport(value).report!.promotionTarget,
       ResearchPromotion.noPromotion,
     );
   });
@@ -76,7 +75,7 @@ void main() {
       void reject(void Function(Map<String, dynamic>) change) {
         final value = researchReportJson();
         change(value);
-        expect(() => ResearchReport.fromJson(value), throwsFormatException);
+        expect(() => decodeResearchReport(value), throwsFormatException);
       }
 
       for (final key in researchReportJson().keys) {
@@ -152,19 +151,19 @@ void main() {
         '2026-04-01T00:00:00.1234567891Z',
       ]) {
         final value = researchReportJson()..['observed_at'] = date;
-        expect(() => ResearchReport.fromJson(value), throwsFormatException);
+        expect(() => decodeResearchReport(value), throwsFormatException);
       }
       final value = researchReportJson();
       value['report']['final_holdout']['first_bar_at'] =
           '2026-04-01T00:00:00.000000002Z';
       value['report']['final_holdout']['last_bar_at'] =
           '2026-04-01T00:00:00.000000001Z';
-      expect(() => ResearchReport.fromJson(value), throwsFormatException);
+      expect(() => decodeResearchReport(value), throwsFormatException);
       value['report']['final_holdout']['last_bar_at'] =
           '2026-04-01T00:00:00.000000002Z';
-      expect(() => ResearchReport.fromJson(value), throwsFormatException);
+      expect(() => decodeResearchReport(value), throwsFormatException);
       value['report']['final_holdout']['bar_count'] = 1;
-      expect(ResearchReport.fromJson(value).report, isNotNull);
+      expect(decodeResearchReport(value).report, isNotNull);
     },
   );
 
@@ -185,13 +184,13 @@ void main() {
     final value = researchReportJson();
     value['report']['holdout']['after_cost_return'] = '-2';
     value['report']['holdout']['max_drawdown'] = '3';
-    expect(ResearchReport.fromJson(value).report!.holdout.maxDrawdown, '3');
+    expect(decodeResearchReport(value).report!.holdout.maxDrawdown, '3');
   });
 
   test(
     'REST uses GET at fixed path without query and propagates errors',
     () async {
-      final api = RestOmniApi(
+      final api = RestTestRepositories(
         baseUrl: 'http://example.test/',
         client: MockClient((request) async {
           expect(request.method, 'GET');
@@ -203,7 +202,7 @@ void main() {
         }),
       );
       expect((await api.researchReport()).report, isNotNull);
-      final failed = RestOmniApi(
+      final failed = RestTestRepositories(
         client: MockClient((_) async => http.Response('{}', 503)),
       );
       await expectLater(failed.researchReport(), throwsA(isA<ApiException>()));
@@ -214,13 +213,13 @@ void main() {
     tester,
   ) async {
     final api = _ResearchApi()
-      ..next = ResearchReport.fromJson(researchReportJson(empty: true));
-    final controller = PortfolioController(api);
+      ..next = decodeResearchReport(researchReportJson(empty: true));
+    final controller = testPortfolioController(api);
     addTearDown(controller.dispose);
     await tester.pumpWidget(
       MaterialApp(
         home: Scaffold(
-          body: DataPage(api: api, controller: controller),
+          body: testDataPage(api: api, controller: controller),
         ),
       ),
     );
@@ -246,7 +245,7 @@ void main() {
     expect(find.textContaining('secret'), findsNothing);
     api
       ..failure = null
-      ..next = ResearchReport.fromJson(researchReportJson(empty: true));
+      ..next = decodeResearchReport(researchReportJson(empty: true));
     await tester.tap(find.text('다시 시도'));
     await tester.pumpAndSettle();
     expect(find.text('저장된 연구 보고서 없음'), findsOneWidget);
@@ -257,7 +256,7 @@ void main() {
     'refresh retains full observation and timestamp; fetch is single flight',
     (tester) async {
       final api = _ResearchApi()
-        ..next = ResearchReport.fromJson(researchReportJson());
+        ..next = decodeResearchReport(researchReportJson());
       await tester.pumpWidget(MaterialApp(home: ResearchReportPage(api: api)));
       await tester.pumpAndSettle();
       final pending = Completer<ResearchReport>();
@@ -289,7 +288,7 @@ void main() {
         'final_holdout',
         'buy_and_hold_baseline',
       ];
-      final api = _ResearchApi()..next = ResearchReport.fromJson(value);
+      final api = _ResearchApi()..next = decodeResearchReport(value);
       await tester.pumpWidget(MaterialApp(home: ResearchReportPage(api: api)));
       await tester.pumpAndSettle();
       expect(find.text('저장된 연구 결과 · 지표 재계산 안 함'), findsOneWidget);
@@ -322,7 +321,7 @@ void main() {
       final value = researchReportJson();
       value['report']['holdout']['after_cost_return'] = '9' * 128;
       value['report']['quantity'] = '9' * 128;
-      final api = _ResearchApi()..next = ResearchReport.fromJson(value);
+      final api = _ResearchApi()..next = decodeResearchReport(value);
       for (final brightness in [Brightness.light, Brightness.dark]) {
         await tester.pumpWidget(
           MaterialApp(
@@ -351,7 +350,7 @@ void main() {
     final semantics = tester.ensureSemantics();
     try {
       final api = _ResearchApi()
-        ..next = ResearchReport.fromJson(researchReportJson(empty: true));
+        ..next = decodeResearchReport(researchReportJson(empty: true));
       await tester.pumpWidget(MaterialApp(home: ResearchReportPage(api: api)));
       await tester.pumpAndSettle();
       await expectLater(tester, meetsGuideline(androidTapTargetGuideline));
@@ -372,13 +371,13 @@ void main() {
     await tester.pump();
     expect(find.byType(CircularProgressIndicator), findsOneWidget);
     await tester.pumpWidget(const MaterialApp(home: SizedBox()));
-    pending.complete(ResearchReport.fromJson(researchReportJson()));
+    pending.complete(decodeResearchReport(researchReportJson()));
     await tester.pump();
     expect(tester.takeException(), isNull);
   });
 }
 
-class _ResearchApi implements OmniApi {
+class _ResearchApi implements TestRepositories {
   @override
   Future<PortfolioBenchmarks> portfolioBenchmarks() async =>
       throw UnimplementedError();

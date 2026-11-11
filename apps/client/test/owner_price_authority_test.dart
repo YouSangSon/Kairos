@@ -1,18 +1,17 @@
 import 'dart:convert';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
-import 'package:omni_folio_client/api.dart';
-import 'package:omni_folio_client/app.dart';
-import 'package:omni_folio_client/holding_valuation_page.dart';
-import 'package:omni_folio_client/models.dart';
-import 'package:omni_folio_client/portfolio_benchmarks_page.dart';
-import 'package:omni_folio_client/portfolio_twr_page.dart';
-import 'package:omni_folio_client/portfolio_xirr_page.dart';
-
-import 'vertical_slice_test.dart' show FakeApi, fixture, goldenApi, pumpUi;
+import 'package:omni_folio_client/core/data/json_codec.dart';
+import 'package:omni_folio_client/features/portfolio/data/codecs.dart';
+import 'package:omni_folio_client/features/portfolio/presentation/holding_valuation_page.dart';
+import 'package:omni_folio_client/features/portfolio/presentation/portfolio_benchmarks_page.dart';
+import 'package:omni_folio_client/features/portfolio/presentation/portfolio_pages.dart';
+import 'package:omni_folio_client/features/portfolio/presentation/portfolio_twr_page.dart';
+import 'package:omni_folio_client/features/portfolio/presentation/portfolio_xirr_page.dart';
+import 'support/fixtures.dart';
+import 'support/repositories.dart';
 
 const _notice = '직접 입력 가격 사용 · 시세 제공자가 검증한 값이 아닙니다.';
 const _fxNotice = '직접 입력 환율 사용 · 시세 제공자가 검증한 값이 아닙니다.';
@@ -20,12 +19,10 @@ Json _report(String name) =>
     (fixture('golden-owner-price-reports.json')['reports'] as Json)[name]
         as Json;
 FakeApi _api() => goldenApi()
-  ..currentValuationValue = CurrentPortfolioValuation.fromJson(
-    _report('current'),
-  )
-  ..twrValue = PortfolioTwr.fromJson(_report('twr'))
-  ..xirrValue = PortfolioXirr.fromJson(_report('xirr'))
-  ..benchmarksValue = PortfolioBenchmarks.fromJson(_report('benchmarks'));
+  ..currentValuationValue = decodeCurrentPortfolioValuation(_report('current'))
+  ..twrValue = decodePortfolioTwr(_report('twr'))
+  ..xirrValue = decodePortfolioXirr(_report('xirr'))
+  ..benchmarksValue = decodePortfolioBenchmarks(_report('benchmarks'));
 
 void main() {
   test(
@@ -37,7 +34,7 @@ void main() {
         'stale_holding',
         'split_holding',
       ]) {
-        final value = HoldingValuation.fromJson(_report(name));
+        final value = decodeHoldingValuation(_report(name));
         expect(value.ownerDeclaredPrice, isTrue);
         expect(value.sample, name == 'sample_holding');
         expect(value.lines.single.price?.sourceVersion, 'price-v1');
@@ -48,13 +45,13 @@ void main() {
           _ => 'unavailable',
         });
       }
-      final current = CurrentPortfolioValuation.fromJson(_report('current'));
+      final current = decodeCurrentPortfolioValuation(_report('current'));
       expect(current.ownerDeclaredPrice && current.ownerDeclaredFx, isTrue);
       expect(current.missingInputCount, 0);
       expect(current.sample, isFalse);
-      final twr = PortfolioTwr.fromJson(_report('twr'));
-      final xirr = PortfolioXirr.fromJson(_report('xirr'));
-      final comparison = PortfolioBenchmarks.fromJson(_report('benchmarks'));
+      final twr = decodePortfolioTwr(_report('twr'));
+      final xirr = decodePortfolioXirr(_report('xirr'));
+      final comparison = decodePortfolioBenchmarks(_report('benchmarks'));
       expect(
         twr.ownerDeclaredPrice &&
             xirr.ownerDeclaredPrice &&
@@ -107,10 +104,10 @@ void main() {
         }
         expect(
           () => switch (name) {
-            'current' => CurrentPortfolioValuation.fromJson(json),
-            'twr' => PortfolioTwr.fromJson(json),
-            'xirr' => PortfolioXirr.fromJson(json),
-            _ => HoldingValuation.fromJson(json),
+            'current' => decodeCurrentPortfolioValuation(json),
+            'twr' => decodePortfolioTwr(json),
+            'xirr' => decodePortfolioXirr(json),
+            _ => decodeHoldingValuation(json),
           },
           throwsFormatException,
         );
@@ -158,7 +155,7 @@ void main() {
         case 'split without mark':
           line['price'] = null;
       }
-      expect(() => HoldingValuation.fromJson(json), throwsFormatException);
+      expect(() => decodeHoldingValuation(json), throwsFormatException);
     });
   }
   test('comparison cannot lose nested price policy or notice', () {
@@ -172,7 +169,7 @@ void main() {
           (i) => i['code'] == 'owner_declared_price',
         );
       }
-      expect(() => PortfolioBenchmarks.fromJson(json), throwsFormatException);
+      expect(() => decodePortfolioBenchmarks(json), throwsFormatException);
     }
   });
 
@@ -185,7 +182,7 @@ void main() {
       } else {
         totals.add(Json.from(totals.single as Json));
       }
-      expect(() => HoldingValuation.fromJson(json), throwsFormatException);
+      expect(() => decodeHoldingValuation(json), throwsFormatException);
     });
   }
 
@@ -194,7 +191,7 @@ void main() {
     (tester) async {
       final semantics = tester.ensureSemantics();
       try {
-        await tester.pumpWidget(OmniFolioApp(api: _api()));
+        await tester.pumpWidget(testApp(api: _api()));
         await pumpUi(tester);
         await tester.scrollUntilVisible(
           find.text(_notice),
@@ -229,7 +226,7 @@ void main() {
             tester.platformDispatcher.clearTextScaleFactorTestValue();
           });
           final semantics = tester.ensureSemantics();
-          final holdingApi = RestOmniApi(
+          final holdingApi = RestTestRepositories(
             baseUrl: 'http://example.test/',
             client: MockClient(
               (_) async => http.Response(jsonEncode(_report('holding')), 200),
@@ -281,7 +278,7 @@ void main() {
       '$name keeps source, reason, and known-good version after failed refresh',
       (tester) async {
         var fail = false;
-        final api = RestOmniApi(
+        final api = RestTestRepositories(
           baseUrl: 'http://example.test/',
           client: MockClient(
             (_) async => fail

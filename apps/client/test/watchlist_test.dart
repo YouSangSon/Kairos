@@ -1,22 +1,23 @@
 import 'dart:async';
 import 'dart:convert';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:omni_folio_client/api.dart';
-import 'package:omni_folio_client/app.dart';
-import 'package:omni_folio_client/models.dart';
-import 'package:omni_folio_client/watchlist.dart';
-import 'package:omni_folio_client/watchlist_page.dart';
-
-import 'vertical_slice_test.dart' show goldenApi;
+import 'package:omni_folio_client/core/data/json_codec.dart';
+import 'package:omni_folio_client/core/domain/api_exception.dart';
+import 'package:omni_folio_client/features/connections/domain/models.dart';
+import 'package:omni_folio_client/features/portfolio/domain/models.dart';
+import 'package:omni_folio_client/features/watchlist/application/watchlist_controller.dart';
+import 'package:omni_folio_client/features/watchlist/data/codecs.dart';
+import 'package:omni_folio_client/features/watchlist/domain/models.dart';
+import 'support/fixtures.dart';
+import 'support/repositories.dart';
 
 const _now = '2026-10-28T12:00:00Z';
 const _observed = '2026-10-28T10:00:00Z';
 const _fetched = '2026-10-28T11:00:00Z';
 const _recorded = '2026-10-28T11:30:00Z';
 
-WatchlistEntry _entry(String venue, String symbol) => WatchlistEntry.fromJson({
+WatchlistEntry _entry(String venue, String symbol) => decodeWatchlistEntry({
   'venue': venue,
   'symbol': symbol,
   'currency': venue == 'XKRX' ? 'KRW' : 'USD',
@@ -28,11 +29,11 @@ final _us = _entry('XNAS', 'AAPL');
 Json _stateJson(int revision, List<WatchlistEntry> entries) => {
   'revision': revision,
   'updated_at': revision == 0 ? null : _recorded,
-  'entries': entries.map((entry) => entry.toJson()).toList(),
+  'entries': entries.map((entry) => encodeWatchlistEntry(entry)).toList(),
 };
 
 WatchlistState _state(int revision, List<WatchlistEntry> entries) =>
-    WatchlistState.fromJson(_stateJson(revision, entries));
+    decodeWatchlistState(_stateJson(revision, entries));
 
 Json _reportJson(
   int revision,
@@ -48,7 +49,7 @@ Json _reportJson(
       quotes ??
       [
         for (final entry in entries)
-          {...entry.toJson(), 'status': 'missing', 'price': null},
+          {...encodeWatchlistEntry(entry), 'status': 'missing', 'price': null},
       ],
 };
 
@@ -57,7 +58,7 @@ WatchlistReport _report(
   List<WatchlistEntry> entries, {
   List<Json>? quotes,
   String observedAt = _now,
-}) => WatchlistReport.fromJson(
+}) => decodeWatchlistReport(
   _reportJson(revision, entries, quotes: quotes, observedAt: observedAt),
 );
 
@@ -67,7 +68,7 @@ Json _priceQuote(
   String source = 'owner_declared',
   bool sample = false,
 }) => {
-  ...entry.toJson(),
+  ...encodeWatchlistEntry(entry),
   'status': status,
   'price': {
     'source': source,
@@ -83,7 +84,7 @@ Json _priceQuote(
   },
 };
 
-class _Api implements OmniApi {
+class _Api implements TestRepositories {
   Future<WatchlistReport> Function()? read;
   Future<WatchlistState> Function(WatchlistChange)? write;
   int reads = 0;
@@ -246,7 +247,7 @@ void main() {
       await controller.refresh();
       expect(await controller.add(_kr), isFalse);
       final pending = controller.pending!;
-      final intent = jsonEncode(pending.toJson());
+      final intent = jsonEncode(encodeWatchlistChange(pending));
       expect(() => pending.entries.add(_us), throwsUnsupportedError);
       expect(await controller.add(_us), isFalse);
       await controller.retry();
@@ -262,7 +263,7 @@ void main() {
       expect(await controller.retry(), isTrue);
       expect(controller.pending, isNull);
       expect(
-        api.requests.map((value) => jsonEncode(value.toJson())),
+        api.requests.map((value) => jsonEncode(encodeWatchlistChange(value))),
         everyElement(intent),
       );
       expect(api.reads, 2);
@@ -456,7 +457,7 @@ void main() {
       for (final mutate in mutations) {
         final wire = _reportJson(1, [_kr]);
         mutate(wire);
-        expect(() => WatchlistReport.fromJson(wire), throwsFormatException);
+        expect(() => decodeWatchlistReport(wire), throwsFormatException);
       }
       final fixture = _reportJson(
         1,
@@ -471,11 +472,11 @@ void main() {
         ],
       );
       expect(
-        WatchlistReport.fromJson(fixture).quotes.single.price!.sample,
+        decodeWatchlistReport(fixture).quotes.single.price!.sample,
         isTrue,
       );
       fixture['quotes'][0]['status'] = 'unknown';
-      expect(() => WatchlistReport.fromJson(fixture), throwsFormatException);
+      expect(() => decodeWatchlistReport(fixture), throwsFormatException);
     },
   );
 
@@ -514,7 +515,7 @@ void main() {
                 ),
                 child: child!,
               ),
-              home: WatchlistPage(controller: controller),
+              home: testWatchlistPage(controller: controller),
             ),
           );
           await tester.pumpAndSettle();
@@ -572,7 +573,7 @@ void main() {
       final controller = WatchlistController(api);
       addTearDown(controller.dispose);
       await tester.pumpWidget(
-        MaterialApp(home: WatchlistPage(controller: controller)),
+        MaterialApp(home: testWatchlistPage(controller: controller)),
       );
       await tester.pumpAndSettle();
       await tester.scrollUntilVisible(
@@ -620,7 +621,7 @@ void main() {
       final controller = WatchlistController(api);
       addTearDown(controller.dispose);
       await tester.pumpWidget(
-        MaterialApp(home: WatchlistPage(controller: controller)),
+        MaterialApp(home: testWatchlistPage(controller: controller)),
       );
       await tester.pumpAndSettle();
       final venue = find.byType(DropdownButtonFormField<String>);
@@ -652,7 +653,7 @@ void main() {
       expect(api.requests.single.entries.single.key, _us.key);
       expect(controller.pending, isNotNull);
       expect(find.textContaining('private'), findsNothing);
-      final original = jsonEncode(api.requests.single.toJson());
+      final original = jsonEncode(encodeWatchlistChange(api.requests.single));
       api.write = (_) async => _state(1, [_us]);
       api.read = () async => _report(1, [_us]);
       await tester.scrollUntilVisible(
@@ -662,7 +663,7 @@ void main() {
       );
       await tester.tap(find.text('같은 변경 다시 시도'));
       await tester.pumpAndSettle();
-      expect(jsonEncode(api.requests.last.toJson()), original);
+      expect(jsonEncode(encodeWatchlistChange(api.requests.last)), original);
       await tester.scrollUntilVisible(
         find.text('저장 가격 없음'),
         180,
@@ -681,14 +682,14 @@ void main() {
         1,
         [_kr, _us],
         quotes: [
-          {..._kr.toJson(), 'status': 'missing', 'price': null},
-          {..._us.toJson(), 'status': 'ambiguous', 'price': null},
+          {...encodeWatchlistEntry(_kr), 'status': 'missing', 'price': null},
+          {...encodeWatchlistEntry(_us), 'status': 'ambiguous', 'price': null},
         ],
       );
     final controller = WatchlistController(api);
     addTearDown(controller.dispose);
     await tester.pumpWidget(
-      MaterialApp(home: WatchlistPage(controller: controller)),
+      MaterialApp(home: testWatchlistPage(controller: controller)),
     );
     await tester.pumpAndSettle();
     await tester.scrollUntilVisible(
@@ -718,7 +719,7 @@ void main() {
       final gate = Completer<WatchlistState>();
       final api = _AppApi()..read = () async => _report(0, []);
       api.write = (_) => gate.future;
-      await tester.pumpWidget(OmniFolioApp(api: api));
+      await tester.pumpWidget(testApp(api: api));
       await tester.pumpAndSettle();
       await tester.tap(find.byTooltip('관심종목'));
       await tester.pumpAndSettle();
@@ -757,7 +758,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('같은 변경 다시 시도'), findsOneWidget);
       expect(find.textContaining('private-token'), findsNothing);
-      final original = jsonEncode(api.requests.single.toJson());
+      final original = jsonEncode(encodeWatchlistChange(api.requests.single));
       api.write = (_) async => _state(1, [_kr]);
       api.read = () async => _report(1, [_kr]);
       await tester.scrollUntilVisible(
@@ -767,7 +768,7 @@ void main() {
       );
       await tester.tap(find.text('같은 변경 다시 시도'));
       await tester.pumpAndSettle();
-      expect(jsonEncode(api.requests.last.toJson()), original);
+      expect(jsonEncode(encodeWatchlistChange(api.requests.last)), original);
       expect(api.requests, hasLength(2));
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox.shrink());

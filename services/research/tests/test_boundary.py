@@ -22,6 +22,7 @@ def boundary_violations(package: Path) -> list[str]:
         module = ".".join((package.name, *(parts[:-1] if parts[-1] == "__init__" else parts)))
         sources[module] = (path.name == "__init__.py", ast.parse(path.read_text(encoding="utf-8")))
     violations = []
+    graph = {}
     for module, (is_package, tree) in sources.items():
         aliases = {}
         imports = []
@@ -44,6 +45,7 @@ def boundary_violations(package: Path) -> list[str]:
                     if qualified in sources:
                         imports.append(qualified)
 
+        graph[module] = sorted({target for target in imports if target in sources})
         layer = module.split(".")[1] if "." in module else ""
         for target in imports:
             if target.split(".")[0] in FORBIDDEN_MODULES:
@@ -74,6 +76,23 @@ def boundary_violations(package: Path) -> list[str]:
                 name = qualified_name(node.func)
                 if name.rsplit(".", 1)[-1] in FILE_CALLS or name in {"__import__", "eval", "exec", "getattr"}:
                     violations.append(f"{module}: pure layer I/O or dynamic call {name}")
+    active = []
+    complete = set()
+
+    def visit(module: str) -> None:
+        if module in active:
+            violations.append("import cycle: " + " -> ".join(active[active.index(module):] + [module]))
+            return
+        if module in complete:
+            return
+        active.append(module)
+        for target in graph[module]:
+            visit(target)
+        active.pop()
+        complete.add(module)
+
+    for module in sorted(graph):
+        visit(module)
     return violations
 
 
@@ -111,6 +130,25 @@ class ResearchBoundaryTest(unittest.TestCase):
                 nested.parent.mkdir(parents=True)
                 nested.write_text(source, encoding="utf-8")
                 self.assertTrue(any(expected in violation for violation in boundary_violations(package)))
+
+    def test_import_cycles_are_rejected(self) -> None:
+        cases = (
+            (("domain/first.py", "import omni_research.domain.second as next_model"),
+             ("domain/second.py", "from . import first")),
+            (("application/first.py", "from .second import run"),
+             ("application/second.py", "from .third import run"),
+             ("application/third.py", "from .first import run")),
+            (("domain/nested/first.py", "from ..second import value"),
+             ("domain/second.py", "from .nested.first import value")),
+        )
+        for files in cases:
+            with self.subTest(files=files), tempfile.TemporaryDirectory() as temporary:
+                package = Path(temporary) / "omni_research"
+                for path, source in files:
+                    target = package / path
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_text(source, encoding="utf-8")
+                self.assertTrue(any("import cycle" in violation for violation in boundary_violations(package)))
 
     def test_relative_domain_and_application_imports_are_allowed(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

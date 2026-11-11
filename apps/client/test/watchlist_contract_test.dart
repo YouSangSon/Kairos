@@ -1,11 +1,13 @@
 import 'dart:convert';
 import 'dart:io';
-
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
-import 'package:omni_folio_client/api.dart';
-import 'package:omni_folio_client/models.dart';
+import 'package:omni_folio_client/core/data/json_codec.dart';
+import 'package:omni_folio_client/core/domain/api_exception.dart';
+import 'package:omni_folio_client/features/watchlist/data/codecs.dart';
+import 'package:omni_folio_client/features/watchlist/domain/models.dart';
+import 'support/repositories.dart';
 
 Json _fixture(String name) =>
     (jsonDecode(
@@ -30,10 +32,10 @@ void main() {
   test(
     'server-produced shared states preserve exact native prices and provenance',
     () {
-      final empty = WatchlistReport.fromJson(_fixture('empty'));
+      final empty = decodeWatchlistReport(_fixture('empty'));
       expect(empty.watchlist.revision, 0);
       expect(empty.quotes, isEmpty);
-      final mixed = WatchlistReport.fromJson(_fixture('mixed'));
+      final mixed = decodeWatchlistReport(_fixture('mixed'));
       expect(mixed.quotes.map((q) => q.status), [
         'stale',
         'unknown',
@@ -91,22 +93,22 @@ void main() {
       for (final mutate in mutations) {
         final bad = _copy(_fixture('mixed'));
         mutate(bad);
-        expect(() => WatchlistReport.fromJson(bad), throwsFormatException);
+        expect(() => decodeWatchlistReport(bad), throwsFormatException);
       }
       final boundary = _copy(_fixture('mixed'));
       boundary['quotes'][1]['price']['observed_at'] = '2026-01-01T00:00:00Z';
-      expect(WatchlistReport.fromJson(boundary).quotes[1].status, 'unknown');
+      expect(decodeWatchlistReport(boundary).quotes[1].status, 'unknown');
       boundary['quotes'][1]['price']['observed_at'] =
           '2025-12-31T23:59:59.999999999Z';
       boundary['quotes'][1]['status'] = 'stale';
-      expect(WatchlistReport.fromJson(boundary).quotes[1].status, 'stale');
+      expect(decodeWatchlistReport(boundary).quotes[1].status, 'stale');
     },
   );
 
   test(
     'HTTP GET and exact CAS POST are bounded and validate matching acknowledgements',
     () async {
-      final mixed = WatchlistReport.fromJson(_fixture('mixed'));
+      final mixed = decodeWatchlistReport(_fixture('mixed'));
       final change = WatchlistChange(
         expectedRevision: 0,
         entries: mixed.watchlist.entries.reversed.toList(),
@@ -122,11 +124,14 @@ void main() {
         writes++;
         expect(request.method, 'POST');
         expect(request.headers['content-type'], startsWith('application/json'));
-        expect(jsonDecode(request.body), change.toJson());
+        expect(jsonDecode(request.body), encodeWatchlistChange(change));
         return http.Response(jsonEncode(_fixture('mixed')['watchlist']), 200);
       });
       addTearDown(client.close);
-      final api = RestOmniApi(client: client, baseUrl: 'http://localhost:8080');
+      final api = RestTestRepositories(
+        client: client,
+        baseUrl: 'http://localhost:8080',
+      );
       expect((await api.watchlist()).quotes[1].price!.price, '150.25');
       expect((await api.updateWatchlist(change)).revision, 1);
       expect(reads, 1);
@@ -137,17 +142,17 @@ void main() {
       );
       addTearDown(bad.close);
       await expectLater(
-        RestOmniApi(client: bad).updateWatchlist(change),
+        RestTestRepositories(client: bad).updateWatchlist(change),
         throwsFormatException,
       );
       final over = _OversizedClient();
       addTearDown(over.close);
       await expectLater(
-        RestOmniApi(client: over).watchlist(),
+        RestTestRepositories(client: over).watchlist(),
         throwsFormatException,
       );
       await expectLater(
-        RestOmniApi(client: over).updateWatchlist(change),
+        RestTestRepositories(client: over).updateWatchlist(change),
         throwsFormatException,
       );
       for (final code in [400, 403, 409, 503]) {
@@ -164,7 +169,7 @@ void main() {
         );
         try {
           await expectLater(
-            RestOmniApi(client: error).updateWatchlist(change),
+            RestTestRepositories(client: error).updateWatchlist(change),
             throwsA(
               isA<ApiException>().having((e) => e.statusCode, 'status', code),
             ),
