@@ -37,9 +37,16 @@ func requirePaperPromotionJournalSchema(ctx context.Context, q orderQuerier) err
 					break
 				}
 			}
+			schemaErr := errors.New("paper promotion physical journal schema changed")
+			if expected == "" {
+				return schemaErr
+			}
 			var actual string
-			if expected == "" || q.QueryRowContext(ctx, `SELECT sql FROM sqlite_master WHERE name=? AND type=? AND tbl_name=?`, name, strings.ToLower(kind), table).Scan(&actual) != nil || strings.Join(strings.Fields(actual), " ") != expected {
-				return errors.New("paper promotion physical journal schema changed")
+			if err := q.QueryRowContext(ctx, `SELECT sql FROM sqlite_master WHERE name=? AND type=? AND tbl_name=?`, name, strings.ToLower(kind), table).Scan(&actual); err != nil {
+				return errors.Join(schemaErr, err)
+			}
+			if strings.Join(strings.Fields(actual), " ") != expected {
+				return schemaErr
 			}
 		}
 		var objects int
