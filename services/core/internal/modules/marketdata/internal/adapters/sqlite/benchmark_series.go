@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	c "omni-folio/services/core/internal/modules/marketdata/contracts"
 	"omni-folio/services/core/internal/modules/marketdata/internal/application"
 	"strings"
 	"time"
@@ -15,7 +16,7 @@ const benchmarkSeriesSchema = "benchmark-index-series.v1"
 
 var errBenchmarkSeriesInput = errors.New("benchmark index series contract is invalid")
 
-var errBenchmarkSeriesNotFound = errors.New("benchmark index series was not found")
+var errBenchmarkSeriesNotFound = c.ErrBenchmarkNotFound
 
 type benchmarkSeriesRecord = application.BenchmarkRecord
 

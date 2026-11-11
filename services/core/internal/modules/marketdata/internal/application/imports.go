@@ -144,7 +144,7 @@ func (s *Service) BenchmarkStatus(ctx context.Context, id, version string) (*c.B
 			return err
 		}
 		if record == nil {
-			return errors.New("benchmark index series was not found")
+			return c.ErrBenchmarkNotFound
 		}
 		result = BenchmarkReceipt(record)
 		return nil
