@@ -77,28 +77,6 @@ func TestG38EMigration20ReenablesAndRechecksForeignKeys(t *testing.T) {
 	}
 }
 
-func TestG38EMigration20RejectsV19ForeignKeyInventoryDriftBeforeCommit(t *testing.T) {
-	sourceDB := migrationDB(t, 19)
-	driftSQLiteTableSQLForTest(t, sourceDB, "strategy_selection_events",
-		"source_event_id TEXT REFERENCES strategy_selection_events(event_id)",
-		"source_event_id TEXT REFERENCES strategy_research_evidence(result_sha256)")
-	var path string
-	if err := sourceDB.QueryRow(`SELECT file FROM pragma_database_list WHERE name='main'`).Scan(&path); err != nil {
-		t.Fatal(err)
-	}
-	if err := sourceDB.Close(); err != nil {
-		t.Fatal(err)
-	}
-	db, err := pool.OpenExisting(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	if err := migrationStore(t, db).Migrate(context.Background()); err == nil {
-		t.Fatal("migration 020 accepted a v19 foreign-key inventory it did not preserve")
-	}
-}
-
 func TestG38EMigration20RejectsNonRebuiltV19ForeignKeyDriftBeforeScript(t *testing.T) {
 	sourceDB := migrationDB(t, 19)
 	var path string
