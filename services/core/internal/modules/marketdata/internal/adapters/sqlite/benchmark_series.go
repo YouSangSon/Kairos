@@ -8,6 +8,7 @@ import (
 	"errors"
 	c "omni-folio/services/core/internal/modules/marketdata/contracts"
 	"omni-folio/services/core/internal/modules/marketdata/internal/application"
+	"omni-folio/services/core/internal/modules/marketdata/internal/domain"
 	"strings"
 	"time"
 )
@@ -94,7 +95,7 @@ func replayBenchmarkSeries(ctx context.Context, q queryer, id, version string) (
 		r.Input = *input
 		at, _ := time.Parse(time.RFC3339Nano, r.RecordedAt)
 		fetched, _ := time.Parse(time.RFC3339Nano, input.FetchedAt)
-		if at.Before(fetched) || (proof.Versions > 0 && at.Before(previousRecorded)) {
+		if !domain.SeriesRecordTimeValid(at, fetched, previousRecorded, proof.Versions > 0) {
 			return nil, proof, errors.New("benchmark record time is invalid")
 		}
 		previousRecorded = at

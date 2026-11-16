@@ -8,6 +8,7 @@ import (
 	"fmt"
 	ledger "omni-folio/services/core/internal/modules/ledger/contracts"
 	"omni-folio/services/core/internal/modules/maintenance/internal/application"
+	"omni-folio/services/core/internal/modules/maintenance/internal/domain"
 	pool "omni-folio/services/core/internal/storage/sqlite"
 	"os"
 )
@@ -43,10 +44,8 @@ func (s *Store) verifyCandidate(ctx context.Context, path, goldenPath string, ar
 		return application.BackupFacts{}, fmt.Errorf("golden snapshot: %w", err)
 	}
 	actual := facts.Ledger.Snapshot
-	if archival && golden.CostBasisPolicy == "" {
-		golden.CostBasisPolicy = actual.CostBasisPolicy
-	}
-	if golden.CostBasisPolicy != actual.CostBasisPolicy {
+	golden.CostBasisPolicy = domain.GoldenReplayPolicy(golden.CostBasisPolicy, actual.CostBasisPolicy, archival)
+	if !domain.GoldenReplayPolicyMatches(golden.CostBasisPolicy, actual.CostBasisPolicy) {
 		return application.BackupFacts{}, errors.New("golden snapshot replay policy does not match artifact version")
 	}
 	actualJSON, err := json.Marshal(actual)
@@ -67,7 +66,7 @@ func (s *Store) VerifyRestore(ctx context.Context, path, goldenPath string) erro
 	if err != nil {
 		return err
 	}
-	if facts.Trading.Runner.Active != 0 {
+	if !domain.RunnerEligible(facts.Trading.Runner.Active) {
 		return errors.New("restore candidate contains an active paper runner lease")
 	}
 	return nil

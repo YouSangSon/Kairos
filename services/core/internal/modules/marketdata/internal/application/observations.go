@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	c "omni-folio/services/core/internal/modules/marketdata/contracts"
@@ -68,7 +67,7 @@ func (s *Service) RecordFX(ctx context.Context, input c.FXObservationInput) (*c.
 	err := s.store.Write(ctx, func(scope Scope) error {
 		stored, err := scope.FXBySource(ctx, input.Source, input.SourceObservationID)
 		if err == nil {
-			if stored.Source != input.Source || stored.SourceObservationID != input.SourceObservationID || stored.BaseCurrency != input.BaseCurrency || stored.QuoteCurrency != input.QuoteCurrency || stored.Rate != input.Rate || stored.ObservedAt != input.ObservedAt || stored.FetchedAt != input.FetchedAt {
+			if !domain.SameFXObservation(domain.FXInput{stored.Source, stored.SourceObservationID, stored.BaseCurrency, stored.QuoteCurrency, stored.Rate, stored.ObservedAt, stored.FetchedAt}, domain.FXInput(input)) {
 				return errors.New("FX source observation identity is already bound to different data")
 			}
 			result = stored
@@ -78,7 +77,7 @@ func (s *Service) RecordFX(ctx context.Context, input c.FXObservationInput) (*c.
 			return err
 		}
 		value := c.FXObservation{ObservationID: s.id("fx_observation"), Source: input.Source, SourceObservationID: input.SourceObservationID, BaseCurrency: input.BaseCurrency, QuoteCurrency: input.QuoteCurrency, Rate: input.Rate, ObservedAt: input.ObservedAt, FetchedAt: input.FetchedAt, RecordedAt: s.now().UTC().Format(time.RFC3339Nano)}
-		if !domain.SafeID(value.ObservationID) || !domain.CanonicalUTC(value.RecordedAt) {
+		if !domain.DurableMetadataValid(value.ObservationID, value.RecordedAt) {
 			return errors.New("FX observation durable metadata is invalid")
 		}
 		if err := scope.InsertFX(ctx, value); err != nil {
@@ -101,8 +100,7 @@ func (s *Service) RecordPrice(ctx context.Context, input c.SecurityPriceObservat
 	err := s.store.Write(ctx, func(scope Scope) error {
 		stored, err := scope.PriceBySource(ctx, input.Source, input.SourceObservationID)
 		if err == nil {
-			fetched := stored.FetchedAt == input.FetchedAt || strings.HasPrefix(input.Source, "kiwoom_")
-			if stored.Source != input.Source || stored.SourceObservationID != input.SourceObservationID || stored.InstrumentID != input.InstrumentID || stored.Symbol != input.Symbol || stored.Venue != input.Venue || stored.Currency != input.Currency || stored.Price != input.Price || stored.PriceAdjustment != input.PriceAdjustment || stored.ObservedAt != input.ObservedAt || !fetched {
+			if !domain.SamePriceObservation(domain.PriceInput{stored.Source, stored.SourceObservationID, stored.InstrumentID, stored.Symbol, stored.Venue, stored.Currency, stored.Price, stored.PriceAdjustment, stored.ObservedAt, stored.FetchedAt}, domain.PriceInput(input)) {
 				return errors.New("security price source observation identity is already bound to different data")
 			}
 			result = stored
@@ -111,22 +109,20 @@ func (s *Service) RecordPrice(ctx context.Context, input c.SecurityPriceObservat
 		if !errors.Is(err, ErrNotFound) {
 			return err
 		}
-		if strings.HasPrefix(input.Source, "kiwoom_") {
+		if domain.RequiresOwnerListing(input.Source) {
 			listing, err := scope.ResolveListing(ctx, input.Venue, input.Symbol, input.Currency)
 			if err != nil {
 				return err
 			}
-			if listing.InstrumentID != input.InstrumentID {
+			if !domain.ListingAuthorizes(listing.InstrumentID, input.InstrumentID) {
 				return errors.New("Kiwoom price observation instrument is not owner-declared")
 			}
 		}
 		value := c.SecurityPriceObservation{ObservationID: s.id("security_price_observation"), Source: input.Source, SourceObservationID: input.SourceObservationID, InstrumentID: input.InstrumentID, Symbol: input.Symbol, Venue: input.Venue, Currency: input.Currency, Price: input.Price, PriceAdjustment: input.PriceAdjustment, ObservedAt: input.ObservedAt, FetchedAt: input.FetchedAt, RecordedAt: s.now().UTC().Format(time.RFC3339Nano)}
-		if !domain.SafeID(value.ObservationID) || !domain.CanonicalUTC(value.RecordedAt) {
+		if !domain.DurableMetadataValid(value.ObservationID, value.RecordedAt) {
 			return errors.New("security price observation durable metadata is invalid")
 		}
-		fetched, _ := time.Parse(time.RFC3339Nano, value.FetchedAt)
-		recorded, _ := time.Parse(time.RFC3339Nano, value.RecordedAt)
-		if recorded.Before(fetched) {
+		if !domain.PriceRecordedAfterCapture(value.FetchedAt, value.RecordedAt) {
 			return errors.New("security price observation recorded_at precedes fetched_at")
 		}
 		if err := scope.InsertPrice(ctx, value); err != nil {
@@ -172,14 +168,13 @@ func (s *Service) recordListing(ctx context.Context, eventType string, input c.I
 			return err
 		}
 		current, exists := active[input.Venue+"\x00"+input.Symbol+"\x00"+input.Currency]
-		if eventType == "DECLARE" && exists {
-			if current.InstrumentID != input.InstrumentID {
-				return errors.New("instrument listing is already declared")
-			}
+		switch domain.ListingDecision(eventType, input.InstrumentID, current.InstrumentID, exists) {
+		case domain.ListingConflict:
+			return errors.New("instrument listing is already declared")
+		case domain.ListingDuplicate:
 			result = &current
 			return nil
-		}
-		if eventType == "REVOKE" && (!exists || current.InstrumentID != input.InstrumentID) {
+		case domain.ListingMissing:
 			return ErrListingNotFound
 		}
 		previous, err := scope.PreviousListing(ctx, input.Venue, input.Symbol, input.Currency)
@@ -187,7 +182,7 @@ func (s *Service) recordListing(ctx context.Context, eventType string, input c.I
 			return err
 		}
 		value := c.InstrumentListingEvent{EventID: s.id("instrument_listing"), EventType: eventType, Authority: "owner_declared", InstrumentID: input.InstrumentID, Venue: input.Venue, Symbol: input.Symbol, Currency: input.Currency, ExpectedPreviousEventID: previous, RecordedAt: s.now().UTC().Format(time.RFC3339Nano)}
-		if !domain.SafeID(value.EventID) || !domain.CanonicalUTC(value.RecordedAt) {
+		if !domain.DurableMetadataValid(value.EventID, value.RecordedAt) {
 			return errors.New("instrument listing durable metadata is invalid")
 		}
 		if err := scope.InsertListing(ctx, value); err != nil {

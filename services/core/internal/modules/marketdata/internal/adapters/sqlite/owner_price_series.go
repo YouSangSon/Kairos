@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"omni-folio/services/core/internal/modules/marketdata/internal/application"
+	"omni-folio/services/core/internal/modules/marketdata/internal/domain"
 	"strings"
 	"time"
 )
@@ -109,13 +110,13 @@ func replayOwnerPriceSeries(ctx context.Context, q queryer, admitted map[string]
 		if err != nil || r.Sequence != int64(proof.Versions+1) || string(canonical) != payload || sha != r.DataSHA256 || storedBase != input.InstrumentID || storedQuote != input.Currency || storedVersion != input.SourceVersion || !canonicalUTCString(r.RecordedAt) {
 			return nil, proof, errors.New("stored owner price series is invalid")
 		}
-		if _, ok := admitted[ownerPriceKey(input.InstrumentID, input.Currency)]; !ok {
+		if !domain.OwnerPriceAdmitted(admitted, input.InstrumentID, input.Currency) {
 			return nil, proof, errors.New("owner price identity has no admitted ledger instrument")
 		}
 		r.Input = *input
 		at, _ := time.Parse(time.RFC3339Nano, r.RecordedAt)
 		fetched, _ := time.Parse(time.RFC3339Nano, input.FetchedAt)
-		if at.Before(fetched) || (proof.Versions > 0 && at.Before(previous)) {
+		if !domain.SeriesRecordTimeValid(at, fetched, previous, proof.Versions > 0) {
 			return nil, proof, errors.New("owner price record time is invalid")
 		}
 		previous = at

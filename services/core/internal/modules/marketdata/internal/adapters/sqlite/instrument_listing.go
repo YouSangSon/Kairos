@@ -8,7 +8,7 @@ import (
 	"errors"
 	"fmt"
 	c "omni-folio/services/core/internal/modules/marketdata/contracts"
-	"strings"
+	"omni-folio/services/core/internal/modules/marketdata/internal/domain"
 )
 
 const (
@@ -58,14 +58,10 @@ func replayInstrumentListingRegistry(ctx context.Context, q orderQuerier) (map[s
 		}
 		key := instrumentListingKey(event.Venue, event.Symbol, event.Currency)
 		previous, exists := latest[key]
-		if !exists {
-			if event.ExpectedPreviousEventID != noInstrumentListingEvent || event.EventType != instrumentListingDeclare {
+		if !domain.ListingTransitionValid(domain.ListingEvent(event), domain.ListingEvent(previous), exists) {
+			if !exists {
 				return nil, instrumentListingRecoveryProof{}, fmt.Errorf("instrument listing event %q has an invalid initial transition", event.EventID)
 			}
-		} else if event.ExpectedPreviousEventID != previous.EventID ||
-			(previous.EventType == instrumentListingDeclare && event.EventType != instrumentListingRevoke) ||
-			(previous.EventType == instrumentListingRevoke && event.EventType != instrumentListingDeclare) ||
-			(event.EventType == instrumentListingRevoke && event.InstrumentID != previous.InstrumentID) {
 			return nil, instrumentListingRecoveryProof{}, fmt.Errorf("instrument listing event %q has an invalid transition", event.EventID)
 		}
 		if err := encoder.Encode([]any{sequence, event.EventID, event.EventType, event.Authority, event.InstrumentID,
@@ -94,8 +90,7 @@ func proveInstrumentListingRecovery(ctx context.Context, q orderQuerier) (instru
 }
 
 func resolveInstrumentListing(ctx context.Context, q orderQuerier, venue, symbol, currency string) (*InstrumentListingEvent, error) {
-	if !safeOrderID(venue) || !safeOrderID(symbol) || venue != strings.ToUpper(venue) ||
-		symbol != strings.ToUpper(symbol) || !currencyCodePattern.MatchString(currency) {
+	if !domain.ListingQueryValid(venue, symbol, currency) {
 		return nil, errors.New("instrument listing query is invalid")
 	}
 	active, _, err := replayInstrumentListingRegistry(ctx, q)

@@ -7,13 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math/big"
-	"omni-folio/services/core/internal/codec"
-	"omni-folio/services/core/internal/exact"
 	c "omni-folio/services/core/internal/modules/marketdata/contracts"
+	"omni-folio/services/core/internal/modules/marketdata/internal/domain"
 	"os"
 	"reflect"
-	"regexp"
 	"time"
 )
 
@@ -25,7 +22,6 @@ const (
 )
 
 var errMarketDataNotFound = c.ErrMarketDataNotFound
-var currencyCodePattern = regexp.MustCompile(`^[A-Z]{3}$`)
 
 type MarketDataPort = c.CandleSource
 type MarketDataSeries = c.MarketDataSeries
@@ -82,22 +78,22 @@ func Parse(source io.Reader) (MarketDataPort, error) {
 			return nil, errors.New("market fixture instrument_id and currency are invalid")
 		}
 	}
-	if series.Symbol == "" || series.Venue == "" || series.Timezone == "" || series.Interval == "" {
+	if !domain.CandleMetadataValid(series.Symbol, series.Venue, series.Timezone, series.Interval) {
 		return nil, errors.New("market fixture symbol, venue, timezone, and interval are required")
 	}
 	var previous time.Time
 	for rowNumber, row := range records[1:] {
-		if row[1] != series.Symbol || row[2] != series.Venue || row[3] != series.Timezone || row[4] != series.Interval {
+		if !domain.CandleMetadataMatches(domain.CandleMetadata{row[1], row[2], row[3], row[4]}, domain.CandleMetadata{series.Symbol, series.Venue, series.Timezone, series.Interval}) {
 			return nil, fmt.Errorf("market fixture row %d has inconsistent metadata", rowNumber+2)
 		}
-		if series.InstrumentID != nil && (row[10] != *series.InstrumentID || row[11] != *series.Currency) {
+		if series.InstrumentID != nil && !domain.CandleIdentityMatches(series.InstrumentID, series.Currency, row[10], row[11]) {
 			return nil, fmt.Errorf("market fixture row %d has inconsistent identity", rowNumber+2)
 		}
 		at, err := time.Parse(time.RFC3339, row[0])
 		if err != nil {
 			return nil, fmt.Errorf("market fixture row %d has invalid bar_at", rowNumber+2)
 		}
-		if !previous.IsZero() && !at.After(previous) {
+		if !domain.CandleTimeOrdered(at, previous) {
 			return nil, fmt.Errorf("market fixture row %d is not strictly ordered by bar_at", rowNumber+2)
 		}
 		previous = at
@@ -110,29 +106,9 @@ func Parse(source io.Reader) (MarketDataPort, error) {
 }
 
 func validMarketDataIdentity(series *MarketDataSeries) bool {
-	if series.InstrumentID == nil && series.Currency == nil {
-		return true
-	}
-	return series.InstrumentID != nil && series.Currency != nil &&
-		codec.SafeID(*series.InstrumentID) && currencyCodePattern.MatchString(*series.Currency)
+	return domain.CandleIdentityValid(series.InstrumentID, series.Currency)
 }
 
 func validateMarketDataValues(open, high, low, close, volume string) error {
-	prices := make([]*big.Rat, 4)
-	for index, item := range []struct{ name, raw string }{{"open", open}, {"high", high}, {"low", low}, {"close", close}} {
-		value, err := exact.ParseDecimal(item.raw)
-		if err != nil || value.Sign() <= 0 {
-			return fmt.Errorf("has invalid %s", item.name)
-		}
-		prices[index] = value
-	}
-	parsedVolume, err := exact.ParseDecimal(volume)
-	if err != nil || parsedVolume.Sign() < 0 {
-		return errors.New("has invalid volume")
-	}
-	if prices[2].Cmp(prices[0]) > 0 || prices[2].Cmp(prices[3]) > 0 ||
-		prices[0].Cmp(prices[1]) > 0 || prices[3].Cmp(prices[1]) > 0 {
-		return errors.New("has invalid OHLC range")
-	}
-	return nil
+	return domain.ValidateOHLC(open, high, low, close, volume)
 }

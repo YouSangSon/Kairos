@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"omni-folio/services/core/internal/modules/maintenance/contracts"
+	"omni-folio/services/core/internal/modules/maintenance/internal/domain"
 	trading "omni-folio/services/core/internal/modules/trading/contracts"
 	"time"
 )
@@ -113,7 +114,7 @@ func BuildManifest(source, candidate BackupFacts, createdAt, verifiedAt time.Tim
 		return nil, errors.New("backup owner price series recovery proof does not match source")
 	}
 	status, eligible, verificationErrors := "verified", true, []string{}
-	if candidatePaperRunnerLease.Active != 0 {
+	if !domain.RunnerEligible(candidatePaperRunnerLease.Active) {
 		status, eligible = "rejected", false
 		verificationErrors = []string{"active_paper_runner_lease_present"}
 	}
