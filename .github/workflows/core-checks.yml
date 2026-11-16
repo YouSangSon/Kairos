@@ -40,8 +40,8 @@ jobs:
         run: |
           golang=$(awk '$1 == "golang" { print $2 }' .tool-versions)
           python=$(awk '$1 == "python" { print $2 }' .tool-versions)
-          [[ "$golang" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
-          [[ "$python" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "$golang" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'Invalid golang version in .tool-versions' >&2; exit 1; }
+          [[ "$python" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'Invalid python version in .tool-versions' >&2; exit 1; }
           printf 'golang=%s\npython=%s\n' "$golang" "$python" >> "$GITHUB_OUTPUT"
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
