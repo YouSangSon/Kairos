@@ -58,9 +58,28 @@ func CanonicalEntries(entries []WatchlistEntry) ([]WatchlistEntry, error) {
 	return result, nil
 }
 
-func Transition(state *WatchlistState, change WatchlistChange, now func() time.Time) (*WatchlistState, bool, error) {
+func ValidRevision(revision int64) bool {
+	return revision >= 0 && revision <= watchlistRevisionLimit
+}
+
+func ValidateChange(change WatchlistChange) ([]WatchlistEntry, error) {
 	entries, err := CanonicalEntries(change.Entries)
-	if err != nil || change.ExpectedRevision < 0 || change.ExpectedRevision > watchlistRevisionLimit {
+	if err != nil || !ValidRevision(change.ExpectedRevision) {
+		return nil, ErrInput
+	}
+	return entries, nil
+}
+
+func StateMetadataValid(state WatchlistState) bool {
+	entries, err := CanonicalEntries(state.Entries)
+	return err == nil && slices.Equal(entries, state.Entries) &&
+		!(state.Revision == 0 && (state.UpdatedAt != nil || len(entries) != 0)) &&
+		!(state.Revision > 0 && (state.UpdatedAt == nil || !canonicalUTCString(*state.UpdatedAt)))
+}
+
+func Transition(state *WatchlistState, change WatchlistChange, now func() time.Time) (*WatchlistState, bool, error) {
+	entries, err := ValidateChange(change)
+	if err != nil {
 		return nil, false, ErrInput
 	}
 	same := state.Entries != nil && slices.Equal(state.Entries, entries)

@@ -46,8 +46,8 @@ func (q *Queries) requested(raw, kind string) (time.Time, error) {
 		}
 		return time.Time{}, f
 	}
-	if at.After(q.Now().UTC()) {
-		return time.Time{}, &c.Failure{Code: "invalid_query", Message: "valuation as_of cannot be in the future", Field: "as_of"}
+	if err := domain.ValidateRequestedCutoff(at, q.Now().UTC()); err != nil {
+		return time.Time{}, domainError(err)
 	}
 	return at, nil
 }

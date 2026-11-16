@@ -47,6 +47,13 @@ func CanonicalEntries(entries []c.WatchlistEntry) ([]c.WatchlistEntry, error) {
 	canonical, err := domain.CanonicalEntries(domainEntries(entries))
 	return publicEntries(canonical), domainError(err)
 }
+func ValidateChange(change c.WatchlistChange) error {
+	_, err := domain.ValidateChange(domain.WatchlistChange{ExpectedRevision: change.ExpectedRevision, Entries: domainEntries(change.Entries)})
+	return domainError(err)
+}
+func StateMetadataValid(state c.WatchlistState) bool {
+	return domain.StateMetadataValid(domainState(state))
+}
 func Transition(state *c.WatchlistState, change c.WatchlistChange, now func() time.Time) (*c.WatchlistState, bool, error) {
 	canonical := domainState(*state)
 	next, changed, err := domain.Transition(&canonical, domain.WatchlistChange{ExpectedRevision: change.ExpectedRevision, Entries: domainEntries(change.Entries)}, now)
