@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"omni-folio/services/core/internal/modules/trading/internal/adapters/files"
+	"omni-folio/services/core/internal/modules/trading/internal/domain"
 
 	"omni-folio/services/core/internal/modules/trading/contracts"
 	"omni-folio/services/core/internal/modules/trading/internal/application"
@@ -45,8 +46,8 @@ func validateStrategyOrderSelection(ctx context.Context, q orderQuerier, intent 
 	if err != nil {
 		return err
 	}
-	if state.SelectedResultSHA256 != intent.StrategyResultSHA256 || state.CurrentEventID != intent.StrategySelectionEventID {
-		return errors.New("strategy order is not bound to the current paper candidate")
+	if err := domain.ValidateCurrentOrderSelection(domain.OrderIntent(intent), state.SelectedResultSHA256, state.CurrentEventID); err != nil {
+		return err
 	}
 	return nil
 }
@@ -219,35 +220,14 @@ func replayStrategyRegistry(ctx context.Context, q orderQuerier) (strategyRegist
 			rows.Close()
 			return strategyRegistryRecoveryProof{}, fmt.Errorf("strategy selection event %q metadata or hash mismatch", eventID)
 		}
-		switch eventType {
-		case "SELECT":
-			if evidenceTargets[candidateSHA.String] != "paper_candidate" || sourceEvent.Valid || (reason != "manual_selection" && reason != "auto_comparison") || (reason == "auto_comparison") != promotionAttemptID.Valid || policyEventID.Valid || nextSelected != candidateSHA.String || nextSelected == selected {
-				rows.Close()
-				return strategyRegistryRecoveryProof{}, fmt.Errorf("strategy selection event %q is invalid", eventID)
-			}
-			stack = append(stack, nextSelected)
-		case "ROLLBACK":
-			if promotionAttemptID.Valid || candidateSHA.Valid || !sourceEvent.Valid || sourceEvent.String != currentEvent || !knownEvents[sourceEvent.String] ||
-				(reason != "manual_rollback" && reason != "automatic_performance_rollback") ||
-				(reason == "automatic_performance_rollback") != policyEventID.Valid || len(stack) == 0 {
-				rows.Close()
-				return strategyRegistryRecoveryProof{}, fmt.Errorf("strategy rollback event %q is invalid", eventID)
-			}
-			stack = stack[:len(stack)-1]
-			expectedSelected := noStrategySelection
-			if len(stack) != 0 {
-				expectedSelected = stack[len(stack)-1]
-			}
-			if nextSelected != expectedSelected {
-				rows.Close()
-				return strategyRegistryRecoveryProof{}, fmt.Errorf("strategy rollback event %q skipped selection history", eventID)
-			}
-			if policyEventID.Valid {
-				linkedRollbacks = append(linkedRollbacks, policyLink{policyID: policyEventID.String, eventID: eventID})
-			}
-		default:
+		nextStack, transitionErr := domain.ApplyStrategySelectionTransition(domain.StrategySelectionEvent(event), domain.SelectionFieldPresence{Candidate: candidateSHA.Valid, Source: sourceEvent.Valid, Policy: policyEventID.Valid, Promotion: promotionAttemptID.Valid}, evidenceTargets[candidateSHA.String], currentEvent, selected, stack, knownEvents[sourceEvent.String])
+		if transitionErr != nil {
 			rows.Close()
-			return strategyRegistryRecoveryProof{}, fmt.Errorf("strategy selection event %q has unsupported type", eventID)
+			return strategyRegistryRecoveryProof{}, transitionErr
+		}
+		stack = nextStack
+		if eventType == "ROLLBACK" && policyEventID.Valid {
+			linkedRollbacks = append(linkedRollbacks, policyLink{policyID: policyEventID.String, eventID: eventID})
 		}
 		selectionHashFields := []any{"strategy_selection_events", sequence, eventID, eventType, candidateSHA, expectedCurrent,
 			sourceEvent, previousSelected, nextSelected, reason}
@@ -374,8 +354,8 @@ func loadCurrentStrategyExecutionPolicy(ctx context.Context, q orderQuerier, res
 	if err != nil {
 		return strategyExecutionPolicy{}, err
 	}
-	if state.SelectedResultSHA256 != resultSHA256 || state.CurrentEventID != eventID {
-		return strategyExecutionPolicy{}, errors.New("strategy execution policy is not current")
+	if err := domain.ValidateCurrentExecutionPolicy(state.SelectedResultSHA256, state.CurrentEventID, resultSHA256, eventID); err != nil {
+		return strategyExecutionPolicy{}, err
 	}
 	var artifactJSON string
 	if err := q.QueryRowContext(ctx, `SELECT artifact_json FROM strategy_research_evidence WHERE result_sha256=?`, resultSHA256).Scan(&artifactJSON); err != nil {
@@ -385,8 +365,8 @@ func loadCurrentStrategyExecutionPolicy(ctx context.Context, q orderQuerier, res
 	if err != nil {
 		return strategyExecutionPolicy{}, err
 	}
-	if evidence.ResultSHA256 != resultSHA256 {
-		return strategyExecutionPolicy{}, errors.New("strategy execution policy result mismatch")
+	if err := domain.ValidateExecutionPolicyResult(evidence.ResultSHA256, resultSHA256); err != nil {
+		return strategyExecutionPolicy{}, err
 	}
 	return evidence.ExecutionPolicy, nil
 }

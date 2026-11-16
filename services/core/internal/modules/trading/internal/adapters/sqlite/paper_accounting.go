@@ -11,6 +11,7 @@ import (
 	"math/big"
 	"omni-folio/services/core/internal/modules/trading/contracts"
 	"omni-folio/services/core/internal/modules/trading/internal/application"
+	"omni-folio/services/core/internal/modules/trading/internal/domain"
 	paperdomain "omni-folio/services/core/internal/modules/trading/internal/domain/paper"
 	"strings"
 	"time"
@@ -338,13 +339,8 @@ func replayPaperAccountingStateWithCutoff(ctx context.Context, q orderQuerier, c
 		if err != nil {
 			return nil, err
 		}
-		if event.PaperAuthorizationID != authorization.AuthorizationID || event.PaperAccountingSessionID != session.SessionID ||
-			event.PaperSignalEventID != signal.EventID || event.PaperFillPolicyVersion != paperFillPolicyVersion ||
-			event.ExecutionAuthorityEventID != authority.EventID || event.FencingToken != authority.FencingToken ||
-			event.OccurredAt != bar.OpenAt || event.ProviderOrderRef != paperProviderAlias("order", stored.orderID) ||
-			event.ProviderExecutionRef != paperProviderAlias("execution", stored.orderID, bar.ObservationID, paperFillPolicyVersion) ||
-			event.EventID != paperEventID("fill", stored.orderID, bar.ObservationID, paperFillPolicyVersion) {
-			return nil, errors.New("capitalized paper fill provenance does not match its evidence")
+		if err := domain.ValidateCapitalizedFillProvenance(domain.OrderEvent(event), authorization, session.SessionID, signal.EventID, authority.EventID, authority.FencingToken, domain.PaperMarketBarObservation(*bar), stored.orderID); err != nil {
+			return nil, err
 		}
 		account := accounts[intent.AccountRef]
 		if account == nil {
@@ -454,8 +450,7 @@ func validatePaperIntentDeltas(ctx context.Context, q orderQuerier) error {
 	if err := closeRows(rows); err != nil {
 		return err
 	}
-	positions, active := map[string]*big.Int{}, map[string]string{}
-	filled := map[string]*big.Int{}
+	history := domain.NewPaperIntentDeltaHistory()
 	intents := map[string]OrderIntent{}
 	for _, item := range stored {
 		intent, ok := intents[item.orderID]
@@ -466,21 +461,10 @@ func validatePaperIntentDeltas(ctx context.Context, q orderQuerier) error {
 			}
 			intents[item.orderID] = intent
 		}
-		key := intent.AccountRef + "\x00" + intent.Symbol
-		if positions[key] == nil {
-			positions[key] = new(big.Int)
-		}
 		if item.eventType == "INTENT_RECORDED" {
-			if active[key] != "" {
-				return errors.New("capitalized paper intents cross an active order")
+			if err := history.RecordIntent(item.orderID, domain.OrderIntent(intent)); err != nil {
+				return err
 			}
-			target, _ := new(big.Int).SetString(intent.SignalTargetQuantity, 10)
-			delta := new(big.Int).Sub(target, positions[key])
-			quantity, _ := new(big.Int).SetString(intent.Quantity, 10)
-			if delta.Sign() == 0 || new(big.Int).Abs(delta).Cmp(quantity) != 0 || (delta.Sign() > 0) != (intent.Side == "BUY") {
-				return errors.New("capitalized paper intent target delta is invalid")
-			}
-			active[key], filled[item.orderID] = item.orderID, new(big.Int)
 			continue
 		}
 		if item.eventType != "FILL_RECORDED" {
@@ -490,22 +474,8 @@ func validatePaperIntentDeltas(ctx context.Context, q orderQuerier) error {
 		if err := json.Unmarshal([]byte(item.raw), &event); err != nil {
 			return err
 		}
-		quantity, _ := new(big.Int).SetString(event.Quantity, 10)
-		if intent.Side == "BUY" {
-			positions[key].Add(positions[key], quantity)
-		} else {
-			positions[key].Sub(positions[key], quantity)
-			if positions[key].Sign() < 0 {
-				return errors.New("capitalized paper SELL oversold holdings")
-			}
-		}
-		filled[item.orderID].Add(filled[item.orderID], quantity)
-		total, _ := new(big.Int).SetString(intent.Quantity, 10)
-		if filled[item.orderID].Cmp(total) > 0 {
-			return errors.New("capitalized paper fill exceeds its order")
-		}
-		if filled[item.orderID].Cmp(total) == 0 {
-			delete(active, key)
+		if err := history.RecordFill(item.orderID, domain.OrderIntent(intent), event.Quantity); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -551,15 +521,8 @@ func paperFillBars(ctx context.Context, q orderQuerier, signal PaperSignalEvent,
 
 func validatePaperFillAuthority(ctx context.Context, q orderQuerier, accountRef string, event OrderEvent, recordedAt string) (executionAuthoritySnapshot, error) {
 	record, err := loadExecutionAuthorityRecordByID(ctx, q, event.ExecutionAuthorityEventID)
-	if err != nil || record.AccountRef != accountRef || !record.Armed || record.LeaseOwner == "" ||
-		record.ReasonCode != "lease_acquired" || record.FencingToken != event.FencingToken {
-		return executionAuthoritySnapshot{}, errors.New("paper fill execution authority binding is invalid")
-	}
-	fillTime, fillOK := canonicalUTCTime(recordedAt)
-	recorded, recordedOK := canonicalUTCTime(record.RecordedAt)
-	expires, expiresOK := canonicalUTCTime(record.LeaseExpiresAt)
-	if !fillOK || !recordedOK || !expiresOK || fillTime.Before(recorded) || !fillTime.Before(expires) {
-		return executionAuthoritySnapshot{}, errors.New("paper fill is outside its execution lease")
+	if bindErr := domain.ValidatePaperFillAuthority(record, err == nil, accountRef, domain.OrderEvent(event), recordedAt); bindErr != nil {
+		return executionAuthoritySnapshot{}, bindErr
 	}
 	return executionAuthoritySnapshot{ExecutionAuthorityState: *authorityState(record), EventID: record.EventID}, nil
 }

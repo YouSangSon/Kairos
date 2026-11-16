@@ -14,24 +14,11 @@ import (
 )
 
 func CapitalizedPaperOrderIntent(signal PaperSignalEvent, side, quantity string) OrderIntent {
-	return OrderIntent{
-		ClientOrderID: "paper_" + signal.SignalID, Provider: "kiwoom", Mode: "paper", AccountRef: signal.AccountRef,
-		Symbol: signal.Symbol, Exchange: "KRX", Side: side, OrderType: "PAPER_MARKET", Quantity: quantity,
-		Currency: "KRW", StrategyResultSHA256: signal.StrategyResultSHA256,
-		StrategySelectionEventID: signal.StrategySelectionEventID, SignalSchemaVersion: signal.SchemaVersion,
-		SignalID: signal.SignalID, SignalDataSHA256: signal.DataSHA256, SignalDataAsOf: signal.DataAsOf,
-		SignalGeneratedAt: signal.GeneratedAt, SignalExpiresAt: signal.ExpiresAt, SignalTargetQuantity: signal.TargetQuantity,
-		PaperAccountingSessionID: signal.PaperAccountingSessionID, PaperAccountingPolicyVersion: paperAccountingPolicyVersion,
-		PaperSignalEventID: signal.EventID, ExecutionPolicySHA256: signal.ExecutionPolicySHA256,
-	}
+	return OrderIntent(domain.CapitalizedPaperOrderIntent(domain.PaperSignalEvent(signal), side, quantity))
 }
 
 func PaperAuthorizedOrderEvent(eventID, orderID, eventType string, authorization paperExecutionAuthorization) OrderEvent {
-	return OrderEvent{
-		EventID: eventID, OrderID: orderID, Type: eventType, Source: "synthetic",
-		PaperAuthorizationID: authorization.AuthorizationID, RiskPolicyVersion: authorization.PolicyVersion,
-		FencingToken: authorization.FencingToken,
-	}
+	return OrderEvent(domain.PaperAuthorizedOrderEvent(eventID, orderID, eventType, authorization))
 }
 
 func ValidateOrderEvent(event OrderEvent) error {
@@ -50,11 +37,7 @@ func AuthorityState(record executionAuthorityRecord) *ExecutionAuthorityState {
 }
 
 func AuthorizedOrderEvent(eventID, orderID, eventType string, reservation riskReservationRecord) OrderEvent {
-	return OrderEvent{
-		EventID: eventID, OrderID: orderID, Type: eventType, Source: "synthetic",
-		RiskReservationID: reservation.ReservationID, RiskPolicyVersion: reservation.PolicyVersion,
-		FencingToken: reservation.FencingToken,
-	}
+	return OrderEvent(domain.AuthorizedOrderEvent(eventID, orderID, eventType, reservation))
 }
 
 func ValidateExecutionAuthorityRecord(record executionAuthorityRecord, previous *executionAuthorityRecord) error {

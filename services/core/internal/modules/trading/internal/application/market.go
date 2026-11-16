@@ -34,8 +34,8 @@ func (s *UseCases) RecordPaperMarketBar(ctx context.Context, input PaperMarketBa
 	if err := validatePaperMarketBar(bar); err != nil {
 		return nil, err
 	}
-	if fetched, _ := parsePaperTime(bar.FetchedAt); fetched.After(now) {
-		return nil, errors.New("paper market bar was fetched in the future")
+	if err := domain.ValidateMarketBarFetchTime(domain.PaperMarketBarObservation(bar), now); err != nil {
+		return nil, err
 	}
 	return writeResult(ctx, s.journal, func(tx WriteScope) (*PaperMarketBarObservation, error) {
 		if _, err := tx.Market().ProveMarketRecovery(ctx); err != nil {
@@ -106,8 +106,12 @@ func (s *UseCases) RecordPaperSignalEventTx(ctx context.Context, tx WriteScope, 
 	if err != nil {
 		return nil, err
 	}
-	if !found || session.ExecutionPolicySHA256 != policy.SHA256 {
-		return nil, errors.New("paper signal accounting policy does not match the account session")
+	var sessionPolicy string
+	if found {
+		sessionPolicy = session.ExecutionPolicySHA256
+	}
+	if err := domain.ValidateSignalAccountingPolicy(found, sessionPolicy, policy.SHA256); err != nil {
+		return nil, err
 	}
 	if err := tx.Market().ValidatePromotionSignalCutoff(ctx, signal.StrategyResultSHA256, signal.StrategySelectionEventID, signal.DataAsOf); err != nil {
 		return nil, err
@@ -116,15 +120,8 @@ func (s *UseCases) RecordPaperSignalEventTx(ctx context.Context, tx WriteScope, 
 	if err != nil {
 		return nil, err
 	}
-	if bar.Symbol != signal.Symbol || bar.InputDataSHA256 != signal.DataSHA256 || bar.CloseAt != signal.DataAsOf ||
-		bar.Source != "paper_fixture" || bar.Venue != "KRX" || bar.Currency != "KRW" || bar.Interval != "1d" ||
-		bar.Timezone != "Asia/Seoul" || bar.PriceAdjustment != "unspecified" {
-		return nil, errors.New("paper signal bar metadata is invalid")
-	}
-	availableAt, _ := parsePaperTime(bar.SourceAvailableAt)
-	generatedAt, _ := parsePaperTime(signal.GeneratedAt)
-	if generatedAt.Before(availableAt) {
-		return nil, errors.New("paper signal predates source availability")
+	if err := domain.ValidateSignalMarketBinding(domain.PaperSignal(signal), domain.PaperMarketBarObservation(*bar)); err != nil {
+		return nil, err
 	}
 	cutoff, sameSeriesLatest, err := tx.Market().SignalCutoff(ctx, *bar)
 	if err != nil {
@@ -137,8 +134,8 @@ func (s *UseCases) RecordPaperSignalEventTx(ctx context.Context, tx WriteScope, 
 	if err != nil {
 		return nil, err
 	}
-	if legacyOrders != 0 {
-		return nil, errors.New("paper signal cannot follow a legacy paper order")
+	if err := domain.ValidateCapitalizedSignalHistory(legacyOrders); err != nil {
+		return nil, err
 	}
 	event := PaperSignalEvent{
 		EventID: paperSignalEventID(accountRef, signal.SignalID), SchemaVersion: capitalizedPaperSignalSchema,

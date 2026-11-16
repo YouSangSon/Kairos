@@ -1,3 +1,5 @@
 package application
 
-type RunnerRollbackBinding struct{ EventType, SourceEventID, PreviousResult, ReasonCode, PolicyID, Decision, RollbackEventID string }
+import "omni-folio/services/core/internal/modules/trading/internal/domain"
+
+type RunnerRollbackBinding = domain.RunnerRollbackBinding

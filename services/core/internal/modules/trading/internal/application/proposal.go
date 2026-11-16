@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"omni-folio/services/core/internal/modules/trading/internal/domain"
 	strategydomain "omni-folio/services/core/internal/modules/trading/internal/domain/strategy"
 	"time"
 )
@@ -52,8 +53,8 @@ func (s *UseCases) processPaperProposalInScope(ctx context.Context, tx WriteScop
 	if err != nil {
 		return nil, nil, false, err
 	}
-	if evidence.StrategyVersion != "1.0.0" || evidence.ParameterSHA256 != StringField(proposal, "strategy_parameter_sha256") || evidence.Target != "paper_candidate" {
-		return nil, nil, false, errors.New("paper proposal strategy binding is invalid")
+	if err := domain.ValidateProposalStrategy(evidence.StrategyVersion, evidence.ParameterSHA256, evidence.Target, StringField(proposal, "strategy_parameter_sha256")); err != nil {
+		return nil, nil, false, err
 	}
 	var root map[string]any
 	decoder := json.NewDecoder(bytes.NewBufferString(artifact))
@@ -69,16 +70,22 @@ func (s *UseCases) processPaperProposalInScope(ctx context.Context, tx WriteScop
 	slow, slowOK := parameters["slow_window"].(json.Number)
 	fastN, fastErr := fast.Int64()
 	slowN, slowErr := slow.Int64()
-	if !ExactKeys(parameters, "quantity", "fast_window", "slow_window") || !fastOK || !slowOK || fastErr != nil || slowErr != nil || fastN <= 0 || slowN <= fastN || slowN > 365 ||
-		!validPaperTargetQuantity(quantity) || quantity == "0" || (StringField(proposal, "signal") == "golden_cross" && StringField(proposal, "target_quantity") != quantity) {
+	if !ExactKeys(parameters, "quantity", "fast_window", "slow_window") || !fastOK || !slowOK || fastErr != nil || slowErr != nil {
 		return nil, nil, false, errors.New("paper proposal target is not the registered strategy target")
+	}
+	if err := domain.ValidateProposalTarget(fastN, slowN, quantity, StringField(proposal, "signal"), StringField(proposal, "target_quantity")); err != nil {
+		return nil, nil, false, err
 	}
 	session, found, err := tx.Paper().LoadPaperAccountingSession(ctx, accountRef)
 	if err != nil {
 		return nil, nil, false, err
 	}
-	if !found || session.ExecutionPolicySHA256 != policy.SHA256 {
-		return nil, nil, false, errors.New("paper proposal session does not match")
+	var sessionPolicy string
+	if found {
+		sessionPolicy = session.ExecutionPolicySHA256
+	}
+	if err := domain.ValidateProposalSession(found, sessionPolicy, policy.SHA256); err != nil {
+		return nil, nil, false, err
 	}
 	if admit {
 		if _, err := s.RequireCurrentSyntheticExecutionLease(ctx, tx, accountRef, fencingToken, s.now().UTC()); err != nil {
@@ -90,8 +97,8 @@ func (s *UseCases) processPaperProposalInScope(ctx context.Context, tx WriteScop
 		return nil, nil, false, err
 	}
 	asOf, _ := canonicalPaperTime(StringField(proposal, "data_as_of"))
-	if bar.Symbol != StringField(proposal, "symbol") || bar.InputDataSHA256 != StringField(proposal, "input_sha256") || bar.CloseAt != asOf {
-		return nil, nil, false, errors.New("paper proposal does not match its stored bar")
+	if err := domain.ValidateProposalBar(domain.PaperMarketBarObservation(*bar), StringField(proposal, "symbol"), StringField(proposal, "input_sha256"), asOf); err != nil {
+		return nil, nil, false, err
 	}
 	recordedAt, _ := parsePaperTime(bar.RecordedAt)
 	signal := PaperSignal{

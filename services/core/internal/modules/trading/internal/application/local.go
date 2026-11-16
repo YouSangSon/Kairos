@@ -5,8 +5,9 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
-	"math"
 	"omni-folio/services/core/internal/modules/trading/contracts"
+	"omni-folio/services/core/internal/modules/trading/internal/domain"
+	orderdomain "omni-folio/services/core/internal/modules/trading/internal/domain/order"
 	"time"
 )
 
@@ -82,8 +83,8 @@ func (r *LocalPaperRun) Step(ctx context.Context, proposalRaw, barsRaw, research
 			return nil, err
 		}
 	}
-	if selection != r.Claim.StrategySelectionEventID || StringField(proposal, "strategy_result_sha256") != r.Claim.SelectedResultSHA256 {
-		return nil, errors.New("local paper proposal selection changed")
+	if err := domain.ValidateLocalProposalSelection(selection, StringField(proposal, "strategy_result_sha256"), r.Claim.StrategySelectionEventID, r.Claim.SelectedResultSHA256); err != nil {
+		return nil, err
 	}
 	facts, err := inspectResult(ctx, s.journal, func(tx InspectionScope) (LocalResearchFacts, error) {
 		return tx.Selections().LocalResearch(ctx, r.Claim.SelectedResultSHA256)
@@ -99,8 +100,8 @@ func (r *LocalPaperRun) Step(ctx context.Context, proposalRaw, barsRaw, research
 	if err != nil {
 		return nil, err
 	}
-	if slow < 2 || snapshot.Bars <= slow {
-		return nil, errors.New("paper snapshot lacks the complete strategy warmup window")
+	if err := domain.ValidateLocalWarmup(slow, snapshot.Bars); err != nil {
+		return nil, err
 	}
 	committed, _, err := s.ProcessPaperProposal(ctx, account, selection, proposalRaw, snapshot.SignalBarObservationID, 0, false, r.Claim)
 	if err != nil {
@@ -149,7 +150,7 @@ func (r *LocalPaperRun) Step(ctx context.Context, proposalRaw, barsRaw, research
 				// before this close's safety policy has committed.
 				// ponytail: full replay per fill/close grows with history;
 				// optimize only with measured, equivalent recovery proof.
-				for state.Status == "OPEN" || state.Status == "PARTIALLY_FILLED" {
+				for domain.PaperOrderNeedsFill((*orderdomain.State)(state)) {
 					if err := r.Heartbeat(ctx); err != nil {
 						return nil, err
 					}
@@ -172,7 +173,7 @@ func (r *LocalPaperRun) Step(ctx context.Context, proposalRaw, barsRaw, research
 		if err != nil {
 			return nil, err
 		}
-		if result.Policy.Decision == "HALT_AND_ROLLBACK" {
+		if domain.PaperPolicyStopsExecution(result.Policy.Decision) {
 			return result, nil
 		}
 	}
@@ -257,17 +258,17 @@ func (s *UseCases) LocalPaperPolicyCloses(ctx context.Context, account, latest s
 		if err != nil {
 			return nil, err
 		}
-		includePrevious := !complete || previous == latest
+		includePrevious := domain.IncludeLocalPolicyFrontier(complete, previous, latest)
 		// New C3 rows must fall inside the current selection's D window. Keep an
 		// existing frontier for retry/selection validation, never invent one before
 		// selection and strand an immutable point which D cannot consume.
 		now := s.now().UTC().Format(canonicalPaperTimeLayout)
-		closes, err := tx.Evaluations().PolicyCloses(ctx, previous, latest, selectedAt, now, includePrevious, points > 0 && includePrevious)
+		closes, err := tx.Evaluations().PolicyCloses(ctx, previous, latest, selectedAt, now, includePrevious, domain.IncludeCommittedPolicyFrontier(points, includePrevious))
 		if err != nil {
 			return nil, err
 		}
-		if len(closes) == 0 || closes[len(closes)-1] != latest {
-			return nil, errors.New("local paper policy snapshot regressed or has no available close")
+		if err := domain.ValidateLocalPolicyCloses(closes, latest); err != nil {
+			return nil, err
 		}
 		return closes, nil
 	})
@@ -284,22 +285,19 @@ func (s *UseCases) OpenLocalPaperOrderIDs(ctx context.Context, account string) (
 			if err != nil {
 				return nil, err
 			}
-			if intent.SignalSchemaVersion != capitalizedPaperSignalSchema || intent.OrderType != "PAPER_MARKET" {
-				return nil, errors.New("local paper cannot execute legacy orders")
+			if err := domain.ValidateLocalPaperIntent(domain.OrderIntent(intent)); err != nil {
+				return nil, err
 			}
 			state, err := tx.Orders().LoadOrderStateFrom(ctx, id)
 			if err != nil {
 				return nil, err
 			}
-			if state.PendingAction != "" {
-				return nil, errors.New("local paper has an unresolved order action")
+			include, err := domain.LocalPaperOrderExecutable((*orderdomain.State)(state))
+			if err != nil {
+				return nil, err
 			}
-			switch state.Status {
-			case "OPEN", "PARTIALLY_FILLED":
+			if include {
 				active = append(active, id)
-			case "FILLED", "CANCELED", "REJECTED":
-			default:
-				return nil, errors.New("local paper has an unexecutable order")
 			}
 		}
 		return active, nil
@@ -319,16 +317,20 @@ func (s *UseCases) StartLocalPaperExecutionWithClaim(ctx context.Context, accoun
 			return nil, err
 		}
 		_, currentEvent, result, err := tx.Evaluations().CurrentPaperPerformanceSelection(ctx)
-		if err != nil || currentEvent != selectionEventID || result == noStrategySelection {
-			return nil, errors.New("local paper selection changed")
+		if bindErr := domain.ValidateLocalExecutionSelection(err == nil, currentEvent, result, selectionEventID); bindErr != nil {
+			return nil, bindErr
 		}
 		session, found, err := tx.Paper().LoadPaperAccountingSession(ctx, accountRef)
 		if err != nil {
 			return nil, err
 		}
 		policy, err := tx.Selections().LoadCurrentStrategyExecutionPolicy(ctx, result, selectionEventID)
-		if err != nil || !found || session.ExecutionPolicySHA256 != policy.SHA256 {
-			return nil, errors.New("local paper requires a matching initialized session")
+		var sessionPolicy string
+		if err == nil && found {
+			sessionPolicy = session.ExecutionPolicySHA256
+		}
+		if bindErr := domain.ValidateLocalExecutionSession(err == nil, found, sessionPolicy, policy.SHA256); bindErr != nil {
+			return nil, bindErr
 		}
 		if err := tx.Paper().RequireIsolatedPaperAccount(ctx, accountRef); err != nil {
 			return nil, err
@@ -337,8 +339,8 @@ func (s *UseCases) StartLocalPaperExecutionWithClaim(ctx context.Context, accoun
 		if err != nil {
 			return nil, err
 		}
-		if current.FencingToken >= math.MaxInt64-1 {
-			return nil, errors.New("local paper execution fence overflow")
+		if err := domain.ValidateLocalExecutionFence(current.FencingToken); err != nil {
+			return nil, err
 		}
 		if !current.Armed {
 			if err := tx.Authority().InsertExecutionAuthorityRecord(ctx, executionAuthorityRecord{
@@ -370,8 +372,8 @@ func (s *UseCases) HaltOwnedSyntheticExecutionLease(ctx context.Context, account
 		if !current.Armed {
 			return false, nil
 		}
-		if current.LeaseOwner != s.executionOwner || current.FencingToken != fence || fence == math.MaxInt64 {
-			return false, errors.New("local paper cleanup does not own the current lease")
+		if err := domain.ValidateLocalCleanupLease(domain.ExecutionAuthorityState(current.ExecutionAuthorityState), s.executionOwner, fence); err != nil {
+			return false, err
 		}
 		if _, err := s.HaltSyntheticExecutionTx(ctx, tx, s.now().UTC(), "manual_halt", "", []string{accountRef}, nil); err != nil {
 			return false, err

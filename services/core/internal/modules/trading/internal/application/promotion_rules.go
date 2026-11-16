@@ -9,10 +9,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math/big"
 	"omni-folio/services/core/internal/modules/trading/contracts"
 	"omni-folio/services/core/internal/modules/trading/internal/domain"
-	paperdomain "omni-folio/services/core/internal/modules/trading/internal/domain/paper"
 	researchdomain "omni-folio/services/core/internal/modules/trading/internal/domain/research"
 	"regexp"
 	"strconv"
@@ -107,8 +105,8 @@ func DecodeStrategyArtifact(artifact []byte) (*Evidence, error) {
 			return nil, errors.New("strategy failed gates are invalid")
 		}
 	}
-	if (target == "paper_candidate") != (len(expectedFailed) == 0) || (target != "paper_candidate" && target != "no_promotion") {
-		return nil, errors.New("strategy promotion target is inconsistent with its gates")
+	if err := domain.ValidateResearchPromotionTarget(target, len(expectedFailed)); err != nil {
+		return nil, err
 	}
 	delete(result, "result_sha256")
 	bodyJSON, err := StrategyCanonicalJSON(result)
@@ -138,29 +136,9 @@ func DecodeStrategyExecutionContract(value any) (strategyExecutionPolicy, error)
 		StringField(execution, "signal_price") != "bar_close" || StringField(execution, "fill_price") != "next_eligible_bar_open" {
 		return strategyExecutionPolicy{}, errors.New("strategy execution contract is invalid")
 	}
-	startingCash, err := parseDecimal(StringField(execution, "starting_cash"))
-	if err != nil || startingCash.Sign() <= 0 {
-		return strategyExecutionPolicy{}, errors.New("strategy execution contract is invalid")
-	}
-	fee, err := parseDecimal(StringField(execution, "fee"))
-	if err != nil || fee.Sign() < 0 {
-		return strategyExecutionPolicy{}, errors.New("strategy execution contract is invalid")
-	}
-	tax, err := parseDecimal(StringField(execution, "tax"))
-	if err != nil || tax.Sign() < 0 || tax.Cmp(big.NewRat(1, 1)) > 0 {
-		return strategyExecutionPolicy{}, errors.New("strategy execution contract is invalid")
-	}
-	slippage, err := parseDecimal(StringField(execution, "slippage_bps"))
-	if err != nil || slippage.Sign() < 0 || slippage.Cmp(big.NewRat(10000, 1)) >= 0 {
-		return strategyExecutionPolicy{}, errors.New("strategy execution contract is invalid")
-	}
-	delay, err := parseDecimal(StringField(execution, "delay_bars"))
-	if err != nil || delay.Sign() <= 0 || !delay.IsInt() || !delay.Num().IsInt64() {
-		return strategyExecutionPolicy{}, errors.New("strategy execution contract is invalid")
-	}
-	participation, err := parseDecimal(StringField(execution, "max_participation"))
-	if err != nil || participation.Sign() <= 0 || participation.Cmp(big.NewRat(1, 1)) > 0 {
-		return strategyExecutionPolicy{}, errors.New("strategy execution contract is invalid")
+	delay, err := domain.ValidateStrategyExecutionTerms(domain.StrategyExecutionTerms{StartingCash: StringField(execution, "starting_cash"), Fee: StringField(execution, "fee"), Tax: StringField(execution, "tax"), SlippageBPS: StringField(execution, "slippage_bps"), DelayBars: StringField(execution, "delay_bars"), MaxParticipation: StringField(execution, "max_participation")})
+	if err != nil {
+		return strategyExecutionPolicy{}, err
 	}
 	canonicalJSON, err := StrategyCanonicalJSON(execution)
 	if err != nil {
@@ -169,7 +147,7 @@ func DecodeStrategyExecutionContract(value any) (strategyExecutionPolicy, error)
 	hash := sha256.Sum256(canonicalJSON)
 	return strategyExecutionPolicy{
 		StartingCash: StringField(execution, "starting_cash"), Fee: StringField(execution, "fee"), Tax: StringField(execution, "tax"),
-		SlippageBPS: StringField(execution, "slippage_bps"), DelayBars: delay.Num().Int64(),
+		SlippageBPS: StringField(execution, "slippage_bps"), DelayBars: delay,
 		MaxParticipation: StringField(execution, "max_participation"), SignalPrice: StringField(execution, "signal_price"),
 		FillPrice: StringField(execution, "fill_price"), SHA256: hex.EncodeToString(hash[:]), CanonicalJSON: string(canonicalJSON),
 	}, nil
@@ -217,7 +195,7 @@ func StringField(value map[string]any, key string) string {
 
 func PaperPromotionStrategy(evidence Evidence) (researchdomain.Strategy, error) {
 	invalid := errors.New("paper promotion requires a bound long_only_sma_crossover 1.0.0 with capitalized shares and bounded windows")
-	if evidence.StrategyName != "long_only_sma_crossover" || evidence.StrategyVersion != "1.0.0" ||
+	if !domain.SupportedPromotionStrategy(evidence.StrategyName, evidence.StrategyVersion) ||
 		len(evidence.ArtifactJSON) == 0 || len(evidence.ArtifactJSON) > maxBodyBytes || !utf8.ValidString(evidence.ArtifactJSON) {
 		return researchdomain.Strategy{}, invalid
 	}
@@ -237,9 +215,8 @@ func PaperPromotionStrategy(evidence Evidence) (researchdomain.Strategy, error) 
 	slow, slowOK := ResearchReportInteger(parameters["slow_window"])
 	quantity := StringField(parameters, "quantity")
 	if !ExactKeys(strategy, "name", "version", "parameters", "parameter_hash") ||
-		StringField(strategy, "name") != evidence.StrategyName || StringField(strategy, "version") != evidence.StrategyVersion ||
-		!ExactKeys(parameters, "fast_window", "slow_window", "quantity") || !fastOK || !slowOK || slow <= fast || slow > 365 ||
-		!paperdomain.ValidCapitalizedQuantity(quantity, false) {
+		!domain.PromotionStrategyMatches(StringField(strategy, "name"), StringField(strategy, "version"), evidence.StrategyName, evidence.StrategyVersion) ||
+		!ExactKeys(parameters, "fast_window", "slow_window", "quantity") || !fastOK || !slowOK || !domain.ValidPromotionSMA(researchdomain.Strategy{FastWindow: fast, SlowWindow: slow, Quantity: quantity}) {
 		return researchdomain.Strategy{}, invalid
 	}
 	canonicalParameters, err := StrategyCanonicalJSON(parameters)

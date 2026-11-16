@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"omni-folio/services/core/internal/modules/trading/contracts"
+	"omni-folio/services/core/internal/modules/trading/internal/domain"
 )
 
 type LocalPaperStepResult = contracts.LocalPaperStepResult
@@ -43,8 +44,8 @@ func requireIsolatedPaperAccount(ctx context.Context, q orderQuerier, account st
 	if err := q.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM order_idempotency WHERE account_ref=? AND mode<>'paper')`, account).Scan(&mixed); err != nil {
 		return err
 	}
-	if mixed {
-		return errors.New("local paper requires an isolated paper account")
+	if err := domain.ValidateIsolatedPaperAccount(mixed); err != nil {
+		return err
 	}
 	return nil
 }

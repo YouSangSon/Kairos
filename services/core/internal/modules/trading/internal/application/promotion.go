@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"omni-folio/services/core/internal/modules/trading/internal/domain"
 	researchdomain "omni-folio/services/core/internal/modules/trading/internal/domain/research"
 	"time"
 )
@@ -52,28 +53,24 @@ func (s *UseCases) claimPaperPromotionInScope(ctx context.Context, tx WriteScope
 	if err != nil {
 		return nil, nil, err
 	}
-	if pending != 0 {
-		return nil, nil, errors.New("a paper comparison is pending; inspect or explicitly abort it first")
+	if err := domain.ValidateNoPendingPromotion(pending); err != nil {
+		return nil, nil, err
 	}
 	now := s.now().UTC()
 	stateSHA, session, cash, selection, err := CapturePromotionState(ctx, tx, account, now)
 	if err != nil {
 		return nil, nil, err
 	}
-	if selection.CurrentEventID != expectedSelection || selection.SelectedResultSHA256 == candidateSHA || selection.SelectedResultSHA256 == noStrategySelection {
-		return nil, nil, errors.New("paper promotion requires a distinct candidate and the current incumbent")
+	if err := domain.ValidatePromotionIncumbent(selection.CurrentEventID, selection.SelectedResultSHA256, expectedSelection, candidateSHA); err != nil {
+		return nil, nil, err
 	}
 	candidate, incumbent, _, err := tx.Promotions().PromotionInputs(ctx, candidateSHA, selection.SelectedResultSHA256, cash, session.ExecutionPolicySHA256)
 	if err != nil {
 		return nil, nil, err
 	}
-	warmup := int(max(candidate.SlowWindow, incumbent.SlowWindow))
-	if len(bars) != warmup+90 {
-		return nil, nil, errors.New("paper promotion requires common warmup and three fresh 30-bar windows")
-	}
-	end, _ := PaperResearchWholeSecond(bars[len(bars)-1].At)
-	if end.After(now) {
-		return nil, nil, errors.New("paper promotion input contains future bars")
+	warmup, err := domain.ValidatePromotionClaimBars(candidate, incumbent, bars, now)
+	if err != nil {
+		return nil, nil, err
 	}
 	hash := sha256.Sum256(raw)
 	claim := PromotionClaim{SchemaVersion: paperPromotionClaimSchema, AttemptID: attemptID, ExpectedPreviousAttemptID: "no_attempt",
@@ -149,18 +146,11 @@ func (s *UseCases) finishPaperPromotionInScope(ctx context.Context, tx WriteScop
 		return nil, errors.New("paper promotion clock regressed")
 	}
 	decision := PromotionDecision{AttemptID: claim.AttemptID, ClaimSHA256: claimSHA, CandidateResultSHA256: claim.CandidateResultSHA256, ExpectedCurrentEventID: claim.ExpectedCurrentEventID, RecordedAt: now.Format(canonicalPaperTimeLayout)}
-	switch {
-	case abort:
-		decision.Decision, decision.Reason = "ABORTED", "explicit_abort"
-	case scoreErr != nil:
-		decision.Decision, decision.Reason = "ERROR", "comparison_failed"
-	default:
+	decision.Decision, decision.Reason = domain.InitialPromotionOutcome(abort, scoreErr != nil, comparison.Decision, comparison.Reason)
+	if domain.PromotionOutcomeNeedsState(abort, scoreErr != nil) {
 		decision.Comparison = &comparison
-		decision.Decision, decision.Reason = comparison.Decision, comparison.Reason
 		stateSHA, _, _, selection, stateErr := CapturePromotionState(ctx, tx, claim.AccountRef, now)
-		if stateErr != nil || stateSHA != claim.StateSHA256 || selection.CurrentEventID != claim.ExpectedCurrentEventID {
-			decision.Decision, decision.Reason = "STALE", "account_or_selection_changed"
-		}
+		decision.Decision, decision.Reason = domain.BoundPromotionOutcome(decision.Decision, decision.Reason, stateErr == nil, stateSHA, claim.StateSHA256, selection.CurrentEventID, claim.ExpectedCurrentEventID)
 	}
 	var event StrategySelectionEvent
 	if decision.Decision == "PROMOTE" {

@@ -11,6 +11,8 @@ import (
 	"math/big"
 	"omni-folio/services/core/internal/modules/trading/contracts"
 	"omni-folio/services/core/internal/modules/trading/internal/application"
+	"omni-folio/services/core/internal/modules/trading/internal/domain"
+	orderdomain "omni-folio/services/core/internal/modules/trading/internal/domain/order"
 
 	"strings"
 	"time"
@@ -205,25 +207,13 @@ func replayPaperProjectionFrom(ctx context.Context, q orderQuerier, accountRef, 
 		if err != nil {
 			return paperProjection{}, err
 		}
-		total, totalOK := new(big.Int).SetString(state.Quantity, 10)
-		filled, filledOK := new(big.Int).SetString(state.FilledQuantity, 10)
-		if !totalOK || !filledOK || filled.Sign() < 0 || filled.Cmp(total) > 0 {
-			return paperProjection{}, errors.New("paper projected quantity is invalid")
-		}
-		sign := int64(1)
-		if intent.Side == "SELL" {
-			sign = -1
-		}
-		projected.Add(projected, new(big.Int).Mul(filled, big.NewInt(sign)))
-		active := state.Status == "RECORDED" || state.Status == "READY" || reservationIsActive(state)
-		if active {
-			activeCount++
-			remaining := new(big.Int).Sub(total, filled)
-			projected.Add(projected, remaining.Mul(remaining, big.NewInt(sign)))
+		activeCount, err = domain.AccumulatePaperProjection(projected, activeCount, domain.OrderIntent(intent), (*orderdomain.State)(state))
+		if err != nil {
+			return paperProjection{}, err
 		}
 	}
-	if activeCount > 1 || projected.Sign() < 0 {
-		return paperProjection{}, errors.New("paper projection violates the one-active-order or long-only boundary")
+	if err := domain.ValidatePaperProjection(projected, activeCount); err != nil {
+		return paperProjection{}, err
 	}
 	return paperProjection{Quantity: projected, Active: activeCount == 1}, nil
 }

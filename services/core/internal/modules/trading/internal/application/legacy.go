@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math/big"
 	"omni-folio/services/core/internal/modules/trading/internal/domain"
+	orderdomain "omni-folio/services/core/internal/modules/trading/internal/domain/order"
 	"time"
 )
 
@@ -32,7 +33,7 @@ func (s *UseCases) RunPaperSignal(ctx context.Context, accountRef string, signal
 		return nil, nil
 	}
 	if state.Status == "RECORDED" {
-		if now.Before(generatedAt) || !now.Before(expiresAt) {
+		if !domain.PaperSignalActive(now, generatedAt, expiresAt) {
 			return state, errors.New("paper signal expired before dispatch")
 		}
 		state, err = s.AuthorizeSyntheticDispatch(ctx, state.OrderID, fencingToken)
@@ -50,23 +51,15 @@ func (s *UseCases) RunPaperSignal(ctx context.Context, accountRef string, signal
 			return state, err
 		}
 	}
-	if state.Status != "OPEN" && state.Status != "PARTIALLY_FILLED" {
+	if !domain.PaperOrderNeedsFill((*orderdomain.State)(state)) {
 		return state, nil
 	}
-	limit, _ := parseDecimal(state.LimitPrice)
-	if ask.Cmp(limit) > 0 {
-		return state, nil
-	}
-	total, _ := parseDecimal(state.Quantity)
-	filled, _ := parseDecimal(state.FilledQuantity)
-	remaining := new(big.Rat).Sub(total, filled)
-	fillQuantity := new(big.Rat).Set(available)
-	if fillQuantity.Cmp(remaining) > 0 {
-		fillQuantity.Set(remaining)
-	}
-	quantity, err := formatDecimal(fillQuantity)
+	quantity, eligible, err := domain.LegacyPaperFillQuantity((*orderdomain.State)(state), ask, available)
 	if err != nil {
 		return state, err
+	}
+	if !eligible {
+		return state, nil
 	}
 	return s.AppendOrderEvent(ctx, OrderEvent{
 		EventID: paperEventID("fill", state.OrderID, observation.ObservedAt, observation.AskPrice, observation.AvailableQuantity),
@@ -92,15 +85,15 @@ func (s *UseCases) RecordPaperTarget(ctx context.Context, accountRef string, sig
 			state, err := tx.Orders().LoadOrderStateFrom(ctx, orderID)
 			return state, false, err
 		}
-		if now.Before(generatedAt) || !now.Before(expiresAt) {
+		if !domain.PaperSignalActive(now, generatedAt, expiresAt) {
 			return nil, false, errors.New("paper signal is not active")
 		}
 		projection, err := tx.Paper().ReplayPaperProjectionFrom(ctx, accountRef, signal.Symbol)
 		if err != nil {
 			return nil, false, err
 		}
-		delta := new(big.Int).Sub(target, projection.Quantity)
-		if delta.Sign() <= 0 {
+		delta := domain.LegacyTargetDelta(target, projection.Quantity)
+		if delta == nil {
 			return nil, false, nil
 		}
 		intent := PaperOrderIntent(accountRef, signal, delta.String(), limitPrice)

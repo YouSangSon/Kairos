@@ -342,10 +342,7 @@ func (s *UseCases) EvaluatePaperStrategyPerformance(ctx context.Context, account
 }
 
 type PerformanceMark = domain.PerformanceMark
-type StrategyPerformanceWindow struct {
-	Baseline, Latest PaperPerformanceEvent
-	Equities         []string
-}
+type StrategyPerformanceWindow = domain.StrategyPerformanceWindow
 
 type OperationalOrderReads interface {
 	OperationalOrderIDs(context.Context, string) ([]string, error)

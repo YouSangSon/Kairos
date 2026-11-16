@@ -86,11 +86,8 @@ func rejectLivePaperRunnerLease(ctx context.Context, q orderQuerier, now time.Ti
 	if err != nil {
 		return err
 	}
-	if nowNS < row.record.HeartbeatAtNS {
-		return errors.New("paper runner lease clock regressed")
-	}
-	if nowNS < row.record.ExpiresAtNS {
-		return errors.New("paper runner is active; stop and release it before changing strategy selection")
+	if err := domain.ValidateStrategyChangeRunnerLease(row.record, nowNS); err != nil {
+		return err
 	}
 	if err := rejectIncompletePaperRunForExpiredClaim(ctx, q, row.record); err != nil {
 		return err
@@ -117,8 +114,8 @@ func rejectIncompletePaperRunForExpiredClaim(ctx context.Context, q orderQuerier
 	if err != nil {
 		return err
 	}
-	if incomplete != 0 {
-		return errors.New("expired paper runner has an incomplete paper performance chain")
+	if err := domain.ValidateExpiredPaperRunCompleteness(incomplete); err != nil {
+		return err
 	}
 	return nil
 }

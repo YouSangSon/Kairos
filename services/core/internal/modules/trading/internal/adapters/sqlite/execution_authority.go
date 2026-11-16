@@ -135,15 +135,12 @@ func validateAuthorizedReservation(ctx context.Context, q orderQuerier, reservat
 	if err != nil {
 		return nil, err
 	}
-	notional, _, err := validateSyntheticBuyPolicy(intent)
-	if err != nil || reservation.AccountRef != intent.AccountRef || reservation.Quantity != intent.Quantity ||
-		reservation.LimitPrice != intent.LimitPrice || reservation.LimitNotional != notional {
-		return nil, errors.New("risk reservation does not match its order intent")
+	if err := domain.ValidateReservationIntent(reservation, domain.OrderIntent(intent)); err != nil {
+		return nil, err
 	}
 	authority, err := loadExecutionAuthorityRecordByID(ctx, q, reservation.AuthorityEventID)
-	if err != nil || authority.AccountRef != reservation.AccountRef || authority.FencingToken != reservation.FencingToken ||
-		authority.ReasonCode != "lease_acquired" || authority.LeaseOwner == "" {
-		return nil, errors.New("risk reservation does not match its execution authority")
+	if bindErr := domain.ValidateReservationAuthority(reservation, authority, err == nil); bindErr != nil {
+		return nil, bindErr
 	}
 	if _, err := loadExecutionAuthoritySnapshot(ctx, q, reservation.AccountRef); err != nil {
 		return nil, err
@@ -156,11 +153,8 @@ func validateAuthorizedReservation(ctx context.Context, q orderQuerier, reservat
 	if err != nil {
 		return nil, err
 	}
-	for _, event := range []OrderEvent{risk, dispatch} {
-		if event.OrderID != reservation.OrderID || event.Source != "synthetic" || event.RiskReservationID != reservation.ReservationID ||
-			event.RiskPolicyVersion != reservation.PolicyVersion || event.FencingToken != reservation.FencingToken {
-			return nil, errors.New("authorized order event does not match its reservation")
-		}
+	if err := domain.ValidateReservationEvents(reservation, domain.OrderEvent(risk), domain.OrderEvent(dispatch)); err != nil {
+		return nil, err
 	}
 	if risk.Type != "RISK_APPROVED" || dispatch.Type != "SUBMIT_DISPATCHED" || dispatchSequence != riskSequence+1 {
 		return nil, errors.New("risk reservation is missing its consecutive authorized event pair")
@@ -169,12 +163,10 @@ func validateAuthorizedReservation(ctx context.Context, q orderQuerier, reservat
 	if err != nil {
 		return nil, err
 	}
-	switch state.Status {
-	case "SUBMIT_UNKNOWN", "OPEN", "PARTIALLY_FILLED", "CANCEL_UNKNOWN", "REJECTED", "FILLED", "CANCELED":
-		return state, nil
-	default:
-		return nil, errors.New("reserved order is not in an authorized post-dispatch state")
+	if err := domain.ValidateReservedOrderState((*orderdomain.State)(state)); err != nil {
+		return nil, err
 	}
+	return state, nil
 }
 
 var authorizedOrderEvent = application.AuthorizedOrderEvent

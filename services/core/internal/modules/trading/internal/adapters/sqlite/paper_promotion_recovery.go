@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"omni-folio/services/core/internal/modules/trading/internal/domain"
 	"reflect"
 	"strings"
 )
@@ -308,10 +309,8 @@ func validateStoredPaperPromotionClaim(ctx context.Context, q orderQuerier, c pa
 	if account.Cash != c.StartingCash {
 		return errors.New("paper promotion starting cash does not match the account prefix")
 	}
-	for _, lots := range account.Lots {
-		if len(lots) != 0 {
-			return errors.New("paper promotion account prefix is not flat")
-		}
+	if err := domain.ValidatePromotionPrefixFlat(account); err != nil {
+		return err
 	}
 	return validatePaperPromotionFreshRange(ctx, q, c, sequence)
 }

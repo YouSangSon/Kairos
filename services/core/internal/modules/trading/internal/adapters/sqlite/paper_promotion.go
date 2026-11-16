@@ -3,12 +3,12 @@ package sqlite
 import (
 	"context"
 	"omni-folio/services/core/internal/modules/trading/internal/application"
+	"omni-folio/services/core/internal/modules/trading/internal/domain"
 
 	"database/sql"
 
 	"encoding/json"
 	"errors"
-	"fmt"
 	"omni-folio/services/core/internal/modules/trading/contracts"
 	researchdomain "omni-folio/services/core/internal/modules/trading/internal/domain/research"
 )
@@ -96,10 +96,8 @@ func loadPaperPromotion(ctx context.Context, q orderQuerier, id string) (*paperP
 }
 
 func validatePaperPromotionFreshRange(ctx context.Context, q orderQuerier, claim paperPromotionClaim, sequence int64) error {
-	start, ok := paperResearchWholeSecond(claim.ComparisonStart)
-	end, endOK := paperResearchWholeSecond(claim.ComparisonEnd)
-	if !ok || !endOK || end.Before(start) {
-		return errors.New("paper promotion interval is invalid")
+	if err := domain.ValidatePromotionInterval(claim.ComparisonStart, claim.ComparisonEnd); err != nil {
+		return err
 	}
 	rows, err := q.QueryContext(ctx, `SELECT artifact_json FROM strategy_research_evidence WHERE sequence<=? ORDER BY sequence`, claim.ResearchSequenceCutoff)
 	if err != nil {
@@ -132,13 +130,8 @@ func validatePaperPromotionFreshRange(ctx context.Context, q orderQuerier, claim
 			periods = append(periods, fold.Train, fold.Validation)
 		}
 		for _, period := range periods {
-			first, firstOK := paperResearchWholeSecond(stringField(period, "first_bar_at"))
-			last, lastOK := paperResearchWholeSecond(stringField(period, "last_bar_at"))
-			if !firstOK || !lastOK || last.Before(first) {
-				return errors.New("registered research interval cannot be verified")
-			}
-			if !start.After(last) {
-				return errors.New("paper comparison must follow all registered research data")
+			if err := domain.ValidatePromotionResearchRange(claim.ComparisonStart, stringField(period, "first_bar_at"), stringField(period, "last_bar_at")); err != nil {
+				return err
 			}
 		}
 	}
@@ -146,8 +139,8 @@ func validatePaperPromotionFreshRange(ctx context.Context, q orderQuerier, claim
 	if err := q.QueryRowContext(ctx, `SELECT COUNT(*) FROM paper_promotion_claims WHERE (?=0 OR sequence<?) AND json_extract(record_json,'$.comparison_end')>=?`, sequence, sequence, claim.ComparisonStart).Scan(&overlap); err != nil {
 		return err
 	}
-	if overlap != 0 {
-		return errors.New("paper comparison interval has already been consumed")
+	if err := domain.ValidatePromotionUnconsumedRange(overlap); err != nil {
+		return err
 	}
 	return nil
 }
@@ -168,10 +161,8 @@ func validatePaperPromotionSignalCutoff(ctx context.Context, q orderQuerier, res
 		return err
 	}
 	if cutoff.Valid {
-		at, ok := parsePaperTime(asOf)
-		end, endOK := paperResearchWholeSecond(cutoff.String)
-		if !ok || !endOK || !at.After(end) {
-			return fmt.Errorf("paper signal must follow the automatic comparison interval")
+		if err := domain.ValidatePromotionSignalTime(asOf, cutoff.String); err != nil {
+			return err
 		}
 	}
 	return nil

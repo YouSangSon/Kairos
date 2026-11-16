@@ -290,11 +290,8 @@ func replayPaperPerformancePolicyRecovery(ctx context.Context, q orderQuerier) (
 
 func validatePaperPerformancePolicyEvidence(ctx context.Context, q orderQuerier, event PaperPerformancePolicyEvent) error {
 	performance, sequence, err := loadPaperStrategyPerformanceByID(ctx, q, event.StrategyPerformanceID)
-	if err != nil || sequence > event.PaperStrategyPerformanceSequenceCutoff || performance.AccountRef != event.AccountRef ||
-		performance.PaperAccountingSessionID != event.PaperAccountingSessionID || performance.StrategySelectionEventID != event.StrategySelectionEventID ||
-		performance.SelectedStrategyResultRef != event.SelectedStrategyResultRef || performance.BaselinePerformanceID != event.BaselinePerformanceID ||
-		performance.LatestPerformanceID != event.LatestPerformanceID || performance.SampleCount != event.SampleCount {
-		return errors.New("paper performance policy strategy evidence is invalid")
+	if bindErr := domain.ValidatePerformancePolicyEvidence(domain.PaperPerformancePolicyEvent(event), domain.PaperStrategyPerformanceEvent(performance), sequence, err == nil); bindErr != nil {
+		return bindErr
 	}
 	var latestAtCutoff string
 	if err := q.QueryRowContext(ctx, `SELECT strategy_performance_id FROM paper_strategy_performance_events
@@ -417,8 +414,7 @@ func validatePaperPerformancePolicyActions(ctx context.Context, q orderQuerier, 
 		previous := states[row.record.AccountRef]
 		actionRecordedAt, actionTimeOK := canonicalUTCTime(row.record.RecordedAt)
 		if row.sequence != event.ExecutionAuthoritySequenceCutoff+int64(index+1) || row.record.AccountRef != expectedAccounts[index] ||
-			row.record.ReasonCode != "automatic_performance_halt" || row.record.PaperPerformancePolicyEventID != event.PolicyEventID ||
-			row.record.Armed || row.record.LeaseOwner != "" || row.record.LeaseExpiresAt != "" || row.record.FencingToken != previous.FencingToken+1 {
+			!domain.ValidAutomaticHaltTransition(row.record, event.PolicyEventID, previous.FencingToken) {
 			return nil, "", errors.New("automatic halt coverage or order is invalid")
 		}
 		if row.record.EventID != paperPerformanceAutomaticHaltID(event.PolicyEventID, row.record.AccountRef) ||
@@ -432,8 +428,7 @@ func validatePaperPerformancePolicyActions(ctx context.Context, q orderQuerier, 
 	err = q.QueryRowContext(ctx, `SELECT sequence,event_type,source_event_id,previous_selected_result_sha256,selected_result_sha256,reason_code,paper_performance_policy_event_id,recorded_at
 		FROM strategy_selection_events WHERE event_id=?`, event.RollbackSelectionEventID).
 		Scan(&sequence, &eventType, &sourceID, &previousResult, &selectedResult, &reason, &policyID, &rollbackRecordedAt)
-	if err != nil || sequence != event.StrategySelectionSequenceCutoff+1 || eventType != "ROLLBACK" || sourceID != event.StrategySelectionEventID ||
-		previousResult != event.SelectedStrategyResultRef || selectedResult == event.SelectedStrategyResultRef || reason != "automatic_performance_rollback" || policyID != event.PolicyEventID {
+	if err != nil || sequence != event.StrategySelectionSequenceCutoff+1 || !domain.ValidAutomaticRollbackBinding(domain.PaperPerformancePolicyEvent(event), eventType, sourceID, previousResult, selectedResult, reason, policyID) {
 		return nil, "", errors.New("automatic strategy rollback coverage is invalid")
 	}
 	rollbackTime, rollbackTimeOK := canonicalUTCTime(rollbackRecordedAt)

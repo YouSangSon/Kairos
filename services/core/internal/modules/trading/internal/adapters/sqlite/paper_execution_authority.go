@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"omni-folio/services/core/internal/modules/trading/internal/application"
 	"omni-folio/services/core/internal/modules/trading/internal/domain"
+	orderdomain "omni-folio/services/core/internal/modules/trading/internal/domain/order"
 )
 
 const (
@@ -24,27 +25,26 @@ func (s *Store) authorizePaperDispatchOnceTx(ctx context.Context, tx *transactio
 }
 
 func validateCapitalizedPaperOrderBindings(ctx context.Context, q orderQuerier, intent OrderIntent) (*PaperAccountingSession, *PaperSignalEvent, error) {
-	if intent.Mode != "paper" || intent.SignalSchemaVersion != capitalizedPaperSignalSchema || intent.OrderType != "PAPER_MARKET" || intent.LimitPrice != "" ||
-		intent.PaperAccountingPolicyVersion != paperAccountingPolicyVersion {
-		return nil, nil, errors.New("order is not a capitalized paper intent")
+	if err := domain.ValidateCapitalizedPaperIntent(domain.OrderIntent(intent)); err != nil {
+		return nil, nil, err
 	}
 	session, found, err := loadPaperAccountingSession(ctx, q, intent.AccountRef)
 	if err != nil {
 		return nil, nil, err
 	}
-	if !found || session.SessionID != intent.PaperAccountingSessionID || session.ExecutionPolicySHA256 != intent.ExecutionPolicySHA256 {
-		return nil, nil, errors.New("paper order accounting session binding is invalid")
+	var sessionID, policySHA string
+	if found {
+		sessionID, policySHA = session.SessionID, session.ExecutionPolicySHA256
+	}
+	if err := domain.ValidatePaperIntentSession(domain.OrderIntent(intent), found, sessionID, policySHA); err != nil {
+		return nil, nil, err
 	}
 	signal, found, err := loadPaperSignalEvent(ctx, q, intent.AccountRef, intent.SignalID)
 	if err != nil {
 		return nil, nil, err
 	}
-	if !found || signal.EventID != intent.PaperSignalEventID || signal.PaperAccountingSessionID != intent.PaperAccountingSessionID ||
-		signal.ExecutionPolicySHA256 != intent.ExecutionPolicySHA256 || signal.StrategyResultSHA256 != intent.StrategyResultSHA256 ||
-		signal.StrategySelectionEventID != intent.StrategySelectionEventID || signal.DataSHA256 != intent.SignalDataSHA256 ||
-		signal.Symbol != intent.Symbol || signal.TargetQuantity != intent.SignalTargetQuantity || signal.DataAsOf != intent.SignalDataAsOf ||
-		signal.GeneratedAt != intent.SignalGeneratedAt || signal.ExpiresAt != intent.SignalExpiresAt {
-		return nil, nil, errors.New("paper order signal binding is invalid")
+	if err := domain.ValidatePaperIntentSignal(domain.OrderIntent(intent), found, (*domain.PaperSignalEvent)(signal)); err != nil {
+		return nil, nil, err
 	}
 	return session, signal, nil
 }
@@ -109,22 +109,15 @@ func validatePaperExecutionAuthorization(ctx context.Context, q orderQuerier, au
 		// Retain cancellation identity without exposing a raw storage error.
 		return nil, errors.Join(errors.New("paper authorization does not match its order intent"), ctx.Err())
 	}
-	if authorization.AccountRef != intent.AccountRef || authorization.PaperAccountingSessionID != intent.PaperAccountingSessionID ||
-		authorization.ExecutionPolicySHA256 != intent.ExecutionPolicySHA256 || authorization.Side != intent.Side || authorization.Quantity != intent.Quantity {
-		return nil, errors.New("paper authorization does not match its order intent")
+	if err := domain.ValidatePaperAuthorizationIntent(authorization, domain.OrderIntent(intent)); err != nil {
+		return nil, err
 	}
 	authority, err := loadExecutionAuthorityRecordByID(ctx, q, authorization.AuthorityEventID)
 	if err != nil {
 		return nil, errors.Join(errors.New("paper authorization does not match its execution authority"), ctx.Err())
 	}
-	if authority.AccountRef != authorization.AccountRef || authority.FencingToken != authorization.FencingToken {
-		return nil, errors.New("paper authorization does not match its execution authority")
-	}
-	authorizedAt, authorizedOK := canonicalUTCTime(authorization.AuthorizedAt)
-	authorityRecordedAt, recordedOK := canonicalUTCTime(authority.RecordedAt)
-	authorityExpiresAt, expiresOK := canonicalUTCTime(authority.LeaseExpiresAt)
-	if !authorizedOK || !recordedOK || !expiresOK || authorizedAt.Before(authorityRecordedAt) || !authorizedAt.Before(authorityExpiresAt) {
-		return nil, errors.New("paper authorization is outside its execution lease")
+	if err := domain.ValidatePaperAuthorizationAuthority(authorization, authority); err != nil {
+		return nil, err
 	}
 	riskSequence, risk, err := loadPaperAuthorizedOrderEvent(ctx, q, authorization.RiskEventID)
 	if err != nil {
@@ -138,12 +131,8 @@ func validatePaperExecutionAuthorization(ctx context.Context, q orderQuerier, au
 	if err != nil {
 		return nil, err
 	}
-	for _, event := range []OrderEvent{risk, dispatch} {
-		if event.OrderID != authorization.OrderID || event.Source != "synthetic" || event.RiskReservationID != "" ||
-			event.PaperAuthorizationID != authorization.AuthorizationID || event.RiskPolicyVersion != authorization.PolicyVersion ||
-			event.FencingToken != authorization.FencingToken {
-			return nil, errors.New("paper authorized event does not match its authorization")
-		}
+	if err := domain.ValidatePaperAuthorizedEvents(authorization, domain.OrderEvent(risk), domain.OrderEvent(dispatch)); err != nil {
+		return nil, err
 	}
 	if risk.Type != "RISK_APPROVED" || dispatch.Type != "SUBMIT_DISPATCHED" || dispatchSequence != riskSequence+1 ||
 		ack.Type != "SUBMIT_ACKNOWLEDGED" || ack.Source != "synthetic" || ack.PaperAuthorizationID != "" ||
@@ -154,12 +143,10 @@ func validatePaperExecutionAuthorization(ctx context.Context, q orderQuerier, au
 	if err != nil {
 		return nil, err
 	}
-	switch state.Status {
-	case "OPEN", "PARTIALLY_FILLED", "CANCEL_UNKNOWN", "FILLED", "CANCELED":
-		return state, nil
-	default:
-		return nil, errors.New("paper order is not in an authorized post-acknowledgement state")
+	if err := domain.ValidatePaperAuthorizedState((*orderdomain.State)(state)); err != nil {
+		return nil, err
 	}
+	return state, nil
 }
 
 func loadPaperAuthorizedOrderEvent(ctx context.Context, q orderQuerier, eventID string) (int64, OrderEvent, error) {

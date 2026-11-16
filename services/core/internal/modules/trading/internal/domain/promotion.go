@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"omni-folio/services/core/internal/exact"
-	paperdomain "omni-folio/services/core/internal/modules/trading/internal/domain/paper"
 	researchdomain "omni-folio/services/core/internal/modules/trading/internal/domain/research"
 )
 
@@ -31,7 +30,7 @@ func ComparePaperPromotion(ctx context.Context, bars []researchdomain.Bar, candi
 		return PaperPromotionComparison{}, err
 	}
 	for _, strategy := range []researchdomain.Strategy{candidate, incumbent} {
-		if strategy.FastWindow <= 0 || strategy.SlowWindow <= strategy.FastWindow || strategy.SlowWindow > 365 || !paperdomain.ValidCapitalizedQuantity(strategy.Quantity, false) {
+		if !ValidPromotionSMA(strategy) {
 			return PaperPromotionComparison{}, errors.New("paper promotion strategy is outside the paper SMA bounds")
 		}
 	}
