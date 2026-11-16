@@ -3,6 +3,7 @@ package ledgerdomain
 import (
 	"reflect"
 	"testing"
+	"time"
 )
 
 func TestCashVoidPolicyRequiresExactEligibleReversal(t *testing.T) {
@@ -79,5 +80,31 @@ func TestImportIdentityAndResolutionPolicy(t *testing.T) {
 	left.Symbol = ""
 	if ResolveImportTransaction(left) != nil {
 		t.Fatal("cash-only input requires instrument resolution")
+	}
+}
+
+func TestPreviewAdmissionOwnsLifetimeRowsAndRevision(t *testing.T) {
+	if !PreviewCanApply(0, 0) || PreviewCanApply(1, 0) || PreviewCanApply(0, 1) {
+		t.Fatal("invalid or unresolved rows became applicable")
+	}
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		expiry   string
+		rejected bool
+	}{
+		{now.Add(-time.Nanosecond).Format(time.RFC3339Nano), true},
+		{now.Format(time.RFC3339Nano), true},
+		{now.Add(time.Nanosecond).Format(time.RFC3339Nano), false},
+		{"bad", true},
+	} {
+		if got := ValidatePreviewLifetime(now, tc.expiry); (got != nil) != tc.rejected {
+			t.Fatalf("expiry=%s rejection=%+v", tc.expiry, got)
+		}
+	}
+	if ValidateApplicablePreview(true) != nil || ValidateApplicablePreview(false) == nil {
+		t.Fatal("row eligibility changed")
+	}
+	if ValidatePreviewRevision(3, 3) != nil || ValidatePreviewRevision(3, 4) == nil {
+		t.Fatal("preview review revision changed")
 	}
 }

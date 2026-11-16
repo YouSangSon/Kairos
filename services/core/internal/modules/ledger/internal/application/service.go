@@ -85,7 +85,7 @@ func (s *UseCases) previewInScope(ctx context.Context, tx WriteScope, input cont
 	created := s.now().UTC()
 	preview := &ImportPreview{
 		PreviewID: s.id("preview"), FileSHA256: input.FileSHA256, SchemaVersion: csvSchema, MappingVersion: mappingSchema,
-		LedgerRevision: ledgerdomain.Revision(rev), CanApply: totals.ErrorRows == 0 && totals.UnresolvedRows == 0,
+		LedgerRevision: ledgerdomain.Revision(rev), CanApply: ledgerdomain.PreviewCanApply(totals.ErrorRows, totals.UnresolvedRows),
 		Rows: rows, Totals: totals,
 	}
 	preview.PreviewFingerprint = PreviewFingerprint(preview.FileSHA256, preview.SchemaVersion, preview.MappingVersion, preview.LedgerRevision)
@@ -101,7 +101,7 @@ func (s *UseCases) previewInScope(ctx context.Context, tx WriteScope, input cont
 
 func (s *UseCases) normalizeRows(ctx context.Context, q Reader, records []contracts.ImportRow) ([]PreviewRow, *contracts.Error) {
 	seen := map[string]PreviewRow{}
-	seenCorrectionTargets := map[string]bool{}
+	seenCorrectionTargets := map[string]int{}
 	result := make([]PreviewRow, 0, len(records))
 	for i, record := range records {
 		row := PreviewRow{RowNumber: i + 2}
@@ -161,10 +161,10 @@ func (s *UseCases) normalizeRows(ctx context.Context, q Reader, records []contra
 					row.Status, row.Errors = "error", []APIError{*validationErr}
 				} else {
 					targetKey := tx.AccountID + "\x00" + tx.CorrectsSourceEventID
-					if seenCorrectionTargets[targetKey] {
-						row.Status, row.Errors = "error", []APIError{*invalidCorrection()}
+					if rejection := ledgerdomain.ValidateCashVoidUse(seenCorrectionTargets[targetKey]); rejection != nil {
+						row.Status, row.Errors = "error", []APIError{APIError(*rejection)}
 					} else {
-						seenCorrectionTargets[targetKey] = true
+						seenCorrectionTargets[targetKey] = 1
 						row.CorrectionTarget = target
 					}
 				}
@@ -247,19 +247,18 @@ func (s *UseCases) applyInScope(ctx context.Context, tx WriteScope, req ApplyReq
 		return nil, contracts.InternalError(err)
 	}
 	previewJSON, fileSHA, expiresAt, previewRev := stored.JSON, stored.FileSHA256, stored.ExpiresAt, stored.LedgerRevision
-	expires, err := time.Parse(time.RFC3339Nano, expiresAt)
-	if err != nil || !received.Before(expires) {
-		return nil, &contracts.Error{Kind: contracts.Conflict, Body: APIError{Code: "stale_preview", Message: "preview expired; create a new preview"}}
+	if rejection := ledgerdomain.ValidatePreviewLifetime(received, expiresAt); rejection != nil {
+		return nil, &contracts.Error{Kind: contracts.Conflict, Body: APIError(*rejection)}
 	}
-	if !stored.CanApply {
-		return nil, &contracts.Error{Kind: contracts.InvalidInput, Body: APIError{Code: "preview_has_errors", Message: "preview contains invalid rows"}}
+	if rejection := ledgerdomain.ValidateApplicablePreview(stored.CanApply); rejection != nil {
+		return nil, &contracts.Error{Kind: contracts.InvalidInput, Body: APIError(*rejection)}
 	}
 	currentRev, err := tx.CurrentRevision(ctx)
 	if err != nil {
 		return nil, contracts.InternalError(err)
 	}
-	if currentRev != previewRev {
-		return nil, &contracts.Error{Kind: contracts.Conflict, Body: APIError{Code: "stale_preview", Message: "ledger revision changed; create a new preview"}}
+	if rejection := ledgerdomain.ValidatePreviewRevision(currentRev, previewRev); rejection != nil {
+		return nil, &contracts.Error{Kind: contracts.Conflict, Body: APIError(*rejection)}
 	}
 	var preview ImportPreview
 	if err := json.Unmarshal([]byte(previewJSON), &preview); err != nil {

@@ -62,3 +62,29 @@ func ResolveImportTransaction(tx Transaction) *ImportResolution {
 	}
 	return nil
 }
+
+func PreviewCanApply(errorRows, unresolvedRows int) bool {
+	return errorRows == 0 && unresolvedRows == 0
+}
+
+func ValidatePreviewLifetime(received time.Time, expiresAt string) *APIError {
+	expires, err := time.Parse(time.RFC3339Nano, expiresAt)
+	if err != nil || !received.Before(expires) {
+		return &APIError{Code: "stale_preview", Message: "preview expired; create a new preview"}
+	}
+	return nil
+}
+
+func ValidateApplicablePreview(canApply bool) *APIError {
+	if !canApply {
+		return &APIError{Code: "preview_has_errors", Message: "preview contains invalid rows"}
+	}
+	return nil
+}
+
+func ValidatePreviewRevision(current, preview int64) *APIError {
+	if current != preview {
+		return &APIError{Code: "stale_preview", Message: "ledger revision changed; create a new preview"}
+	}
+	return nil
+}
