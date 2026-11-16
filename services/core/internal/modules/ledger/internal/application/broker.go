@@ -30,8 +30,8 @@ type BrokerJournal interface {
 }
 
 func (s *UseCases) RecordBrokerSnapshot(ctx context.Context, account string, snapshot *contracts.BrokerSnapshot) (*contracts.BrokerKnownGoodSnapshot, error) {
-	if account != "account-main" {
-		return nil, errors.New("ledger account is outside the current account-main boundary")
+	if err := ledgerdomain.RequireBrokerLedgerAccount(account); err != nil {
+		return nil, err
 	}
 	input := brokerSnapshotDomain(snapshot)
 	if err := ledgerdomain.ValidateBrokerSnapshot(input); err != nil {
@@ -40,8 +40,12 @@ func (s *UseCases) RecordBrokerSnapshot(ctx context.Context, account string, sna
 	return s.recordBrokerSnapshot(ctx, account, "", input)
 }
 func (s *UseCases) RecordMockBrokerSnapshot(ctx context.Context, account, expected string, snapshot *contracts.BrokerSnapshot) (*contracts.BrokerKnownGoodSnapshot, error) {
-	if account != "account-main" || !ledgerdomain.BrokerAccountAlias(expected) || snapshot == nil || snapshot.Environment != "mock" || snapshot.AccountRef != expected {
-		return nil, errors.New("invalid Kiwoom mock account binding")
+	binding := ledgerdomain.MockBrokerBinding{LedgerAccount: account, ExpectedAccount: expected, SnapshotPresent: snapshot != nil}
+	if snapshot != nil {
+		binding.Environment, binding.SnapshotAccount = ledgerdomain.BrokerEnvironment(snapshot.Environment), snapshot.AccountRef
+	}
+	if err := ledgerdomain.ValidateMockBrokerBinding(binding); err != nil {
+		return nil, err
 	}
 	input := brokerSnapshotDomain(snapshot)
 	if err := ledgerdomain.ValidateBrokerSnapshot(input); err != nil {
@@ -104,8 +108,8 @@ func (s *UseCases) recordBrokerSnapshot(ctx context.Context, account, expected s
 	return result, nil
 }
 func (s *UseCases) LatestBrokerSnapshot(ctx context.Context, environment contracts.BrokerEnvironment, exchange contracts.BrokerExchange, account string) (*contracts.BrokerKnownGoodSnapshot, error) {
-	if (environment != "production" && environment != "mock") || exchange != "KRX" || !ledgerdomain.BrokerAccountAlias(account) {
-		return nil, errors.New("invalid Kiwoom snapshot identity")
+	if err := ledgerdomain.ValidateBrokerQueryIdentity(ledgerdomain.BrokerEnvironment(environment), ledgerdomain.BrokerExchange(exchange), account); err != nil {
+		return nil, err
 	}
 	var result *contracts.BrokerKnownGoodSnapshot
 	err := s.store.BrokerRead(ctx, func(reader BrokerReader) error {

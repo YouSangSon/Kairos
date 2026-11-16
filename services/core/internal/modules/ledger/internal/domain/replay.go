@@ -34,8 +34,8 @@ type position struct {
 }
 
 func Replay(policy string, rev int64, recorded string, events []ReplayEvent) (*PortfolioSnapshot, error) {
-	if policy != FIFOCostBasisPolicy && policy != LegacyFIFOCostBasisPolicy {
-		return nil, errors.New("unsupported ledger replay policy")
+	if err := RequireReplayPolicy(policy); err != nil {
+		return nil, err
 	}
 	if !CanonicalUTCString(recorded) {
 		return nil, errors.New("ledger recorded_at is not canonical UTC")
