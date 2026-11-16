@@ -98,7 +98,7 @@ func latestSecurityPriceObservation(ctx context.Context, q orderQuerier, source,
 	var selected *SecurityPriceObservation
 	for i := range observations {
 		observation := &observations[i]
-		if !domain.PriceIdentityMatches(domain.PriceIdentity{observation.Source, observation.InstrumentID, observation.Symbol, observation.Venue, observation.Currency, observation.PriceAdjustment}, domain.PriceIdentity{source, instrumentID, symbol, venue, currency, adjustment}) {
+		if !domain.PriceIdentityMatches(domain.PriceIdentity{Source: observation.Source, InstrumentID: observation.InstrumentID, Symbol: observation.Symbol, Venue: observation.Venue, Currency: observation.Currency, PriceAdjustment: observation.PriceAdjustment}, domain.PriceIdentity{Source: source, InstrumentID: instrumentID, Symbol: symbol, Venue: venue, Currency: currency, PriceAdjustment: adjustment}) {
 			continue
 		}
 		if !domain.PriceKnownAt(observation.ObservedAt, observation.FetchedAt, observation.RecordedAt, cutoff) {

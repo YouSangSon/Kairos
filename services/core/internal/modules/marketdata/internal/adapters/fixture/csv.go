@@ -83,7 +83,7 @@ func Parse(source io.Reader) (MarketDataPort, error) {
 	}
 	var previous time.Time
 	for rowNumber, row := range records[1:] {
-		if !domain.CandleMetadataMatches(domain.CandleMetadata{row[1], row[2], row[3], row[4]}, domain.CandleMetadata{series.Symbol, series.Venue, series.Timezone, series.Interval}) {
+		if !domain.CandleMetadataMatches(domain.CandleMetadata{Symbol: row[1], Venue: row[2], Timezone: row[3], Interval: row[4]}, domain.CandleMetadata{Symbol: series.Symbol, Venue: series.Venue, Timezone: series.Timezone, Interval: series.Interval}) {
 			return nil, fmt.Errorf("market fixture row %d has inconsistent metadata", rowNumber+2)
 		}
 		if series.InstrumentID != nil && !domain.CandleIdentityMatches(series.InstrumentID, series.Currency, row[10], row[11]) {

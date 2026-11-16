@@ -96,7 +96,7 @@ func (s *Service) ImportBenchmark(ctx context.Context, raw []byte) (*c.Benchmark
 		if err != nil {
 			return err
 		}
-		if definition != nil && !domain.SameBenchmarkDefinition(domain.BenchmarkDefinition{definition.Currency, definition.ReturnBasis, definition.SourceReference, definition.Sample}, domain.BenchmarkDefinition{input.Currency, input.ReturnBasis, input.SourceReference, input.Sample}) {
+		if definition != nil && !domain.SameBenchmarkDefinition(domain.BenchmarkDefinition{Currency: definition.Currency, ReturnBasis: definition.ReturnBasis, SourceReference: definition.SourceReference, Sample: definition.Sample}, domain.BenchmarkDefinition{Currency: input.Currency, ReturnBasis: input.ReturnBasis, SourceReference: input.SourceReference, Sample: input.Sample}) {
 			return c.ErrConflict
 		}
 		recorded, err := recordedAt(ctx, scope, "benchmark", input.FetchedAt, s.now)

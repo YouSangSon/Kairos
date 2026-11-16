@@ -67,7 +67,7 @@ func (s *Service) RecordFX(ctx context.Context, input c.FXObservationInput) (*c.
 	err := s.store.Write(ctx, func(scope Scope) error {
 		stored, err := scope.FXBySource(ctx, input.Source, input.SourceObservationID)
 		if err == nil {
-			if !domain.SameFXObservation(domain.FXInput{stored.Source, stored.SourceObservationID, stored.BaseCurrency, stored.QuoteCurrency, stored.Rate, stored.ObservedAt, stored.FetchedAt}, domain.FXInput(input)) {
+			if !domain.SameFXObservation(domain.FXInput{Source: stored.Source, SourceObservationID: stored.SourceObservationID, BaseCurrency: stored.BaseCurrency, QuoteCurrency: stored.QuoteCurrency, Rate: stored.Rate, ObservedAt: stored.ObservedAt, FetchedAt: stored.FetchedAt}, domain.FXInput(input)) {
 				return errors.New("FX source observation identity is already bound to different data")
 			}
 			result = stored
@@ -100,7 +100,7 @@ func (s *Service) RecordPrice(ctx context.Context, input c.SecurityPriceObservat
 	err := s.store.Write(ctx, func(scope Scope) error {
 		stored, err := scope.PriceBySource(ctx, input.Source, input.SourceObservationID)
 		if err == nil {
-			if !domain.SamePriceObservation(domain.PriceInput{stored.Source, stored.SourceObservationID, stored.InstrumentID, stored.Symbol, stored.Venue, stored.Currency, stored.Price, stored.PriceAdjustment, stored.ObservedAt, stored.FetchedAt}, domain.PriceInput(input)) {
+			if !domain.SamePriceObservation(domain.PriceInput{Source: stored.Source, SourceObservationID: stored.SourceObservationID, InstrumentID: stored.InstrumentID, Symbol: stored.Symbol, Venue: stored.Venue, Currency: stored.Currency, Price: stored.Price, PriceAdjustment: stored.PriceAdjustment, ObservedAt: stored.ObservedAt, FetchedAt: stored.FetchedAt}, domain.PriceInput(input)) {
 				return errors.New("security price source observation identity is already bound to different data")
 			}
 			result = stored

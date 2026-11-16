@@ -390,7 +390,7 @@ func DecodeBenchmarkSeries(ctx context.Context, raw []byte) (*BenchmarkSeriesInp
 }
 
 func SameBenchmarkDefinition(a, b BenchmarkSeriesInput) bool {
-	return domain.SameBenchmarkDefinition(domain.BenchmarkDefinition{a.Currency, a.ReturnBasis, a.SourceReference, a.Sample}, domain.BenchmarkDefinition{b.Currency, b.ReturnBasis, b.SourceReference, b.Sample})
+	return domain.SameBenchmarkDefinition(domain.BenchmarkDefinition{Currency: a.Currency, ReturnBasis: a.ReturnBasis, SourceReference: a.SourceReference, Sample: a.Sample}, domain.BenchmarkDefinition{Currency: b.Currency, ReturnBasis: b.ReturnBasis, SourceReference: b.SourceReference, Sample: b.Sample})
 }
 
 func BenchmarkRecordSHA(record benchmarkSeriesRecord) (string, error) {
