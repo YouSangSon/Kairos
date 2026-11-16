@@ -11,7 +11,7 @@
 [![Core checks](https://github.com/YouSangSon/Kairos/actions/workflows/core-checks.yml/badge.svg)](https://github.com/YouSangSon/Kairos/actions/workflows/core-checks.yml)
 [![Client release](https://github.com/YouSangSon/Kairos/actions/workflows/client-android-release.yml/badge.svg)](https://github.com/YouSangSon/Kairos/actions/workflows/client-android-release.yml)
 ![Flutter](https://img.shields.io/badge/Flutter-3.47.1-02569B?logo=flutter&logoColor=white)
-![Go](https://img.shields.io/badge/Go-1.24.5-00ADD8?logo=go&logoColor=white)
+![Go](https://img.shields.io/badge/Go-1.27.4-00ADD8?logo=go&logoColor=white)
 ![Python](https://img.shields.io/badge/Python-3.14.5-3776AB?logo=python&logoColor=white)
 
 [项目目标](#purpose) · [当前状态](#status) · [快速开始](#quick-start) · [文档](#documentation)
@@ -98,7 +98,7 @@ Go core 采用模块化单体架构，按业务责任和数据所有权划分模
 - `curl`
 - Docker Engine + Compose v2（仅容器运行时需要）
 
-项目的 [`.tool-versions`](.tool-versions) 固定使用 Flutter 3.47.1 stable、Go 1.24.5 和 Python 3.14.5。Python 研究运行时不使用第三方包。
+项目的 [`.tool-versions`](.tool-versions) 固定使用 Flutter 3.47.1 stable、Go 1.27.4 和 Python 3.14.5。Python 研究运行时不使用第三方包。`services/core/.tool-versions` 指向根文件，确保子目录选择相同的 asdf 版本；Core CI 也读取此配置。
 
 ```sh
 git clone https://github.com/YouSangSon/Kairos.git

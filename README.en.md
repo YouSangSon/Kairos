@@ -11,7 +11,7 @@ A personal investment system for long-term wealth: gather information, decide, i
 [![Core checks](https://github.com/YouSangSon/Kairos/actions/workflows/core-checks.yml/badge.svg)](https://github.com/YouSangSon/Kairos/actions/workflows/core-checks.yml)
 [![Client release](https://github.com/YouSangSon/Kairos/actions/workflows/client-android-release.yml/badge.svg)](https://github.com/YouSangSon/Kairos/actions/workflows/client-android-release.yml)
 ![Flutter](https://img.shields.io/badge/Flutter-3.47.1-02569B?logo=flutter&logoColor=white)
-![Go](https://img.shields.io/badge/Go-1.24.5-00ADD8?logo=go&logoColor=white)
+![Go](https://img.shields.io/badge/Go-1.27.4-00ADD8?logo=go&logoColor=white)
 ![Python](https://img.shields.io/badge/Python-3.14.5-3776AB?logo=python&logoColor=white)
 
 [Purpose](#purpose) · [Current status](#status) · [Quick start](#quick-start) · [Documentation](#documentation)
@@ -98,7 +98,7 @@ Required tools:
 - `curl`
 - Docker Engine + Compose v2 (only needed for container execution)
 
-The project's [`.tool-versions`](.tool-versions) pins Flutter 3.47.1 stable, Go 1.24.5, and Python 3.14.5. The Python research runtime has no third-party packages.
+The project's [`.tool-versions`](.tool-versions) pins Flutter 3.47.1 stable, Go 1.27.4, and Python 3.14.5. The Python research runtime has no third-party packages. `services/core/.tool-versions` points to the root file so asdf selects the same versions in subdirectories. Core CI reads these project versions too.
 
 ```sh
 git clone https://github.com/YouSangSon/Kairos.git

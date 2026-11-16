@@ -11,7 +11,7 @@
 [![Core checks](https://github.com/YouSangSon/Kairos/actions/workflows/core-checks.yml/badge.svg)](https://github.com/YouSangSon/Kairos/actions/workflows/core-checks.yml)
 [![Client release](https://github.com/YouSangSon/Kairos/actions/workflows/client-android-release.yml/badge.svg)](https://github.com/YouSangSon/Kairos/actions/workflows/client-android-release.yml)
 ![Flutter](https://img.shields.io/badge/Flutter-3.47.1-02569B?logo=flutter&logoColor=white)
-![Go](https://img.shields.io/badge/Go-1.24.5-00ADD8?logo=go&logoColor=white)
+![Go](https://img.shields.io/badge/Go-1.27.4-00ADD8?logo=go&logoColor=white)
 ![Python](https://img.shields.io/badge/Python-3.14.5-3776AB?logo=python&logoColor=white)
 
 [프로젝트 목표](#purpose) · [현재 상태](#status) · [빠른 시작](#quick-start) · [문서](#documentation)
@@ -98,7 +98,7 @@ Go core는 업무·데이터 소유권을 나눈 모듈형 단일 서비스입�
 - `curl`
 - Docker Engine + Compose v2 (컨테이너 실행 시에만 필요)
 
-프로젝트의 [`.tool-versions`](.tool-versions)는 Flutter 3.47.1 stable, Go 1.24.5, Python 3.14.5를 고정합니다. Python research runtime에는 제3자 패키지가 없습니다.
+프로젝트의 [`.tool-versions`](.tool-versions)는 Flutter 3.47.1 stable, Go 1.27.4, Python 3.14.5를 고정합니다. Python research runtime에는 제3자 패키지가 없습니다. `services/core/.tool-versions`는 루트 파일을 가리켜 하위 경로에서도 같은 asdf 버전을 선택합니다. Core CI도 이 파일의 버전을 읽습니다.
 
 ```sh
 git clone https://github.com/YouSangSon/Kairos.git
