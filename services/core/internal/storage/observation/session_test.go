@@ -71,6 +71,18 @@ func TestObservationLifetimeAndAuthority(t *testing.T) {
 	}
 }
 
+func TestOwnerPriceImportRejectsNilWorkWithoutReadingClock(t *testing.T) {
+	db, err := sql.Open("sqlite3", filepath.Join(t.TempDir(), "nil-work.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	registry := New(db, func() time.Time { t.Fatal("invalid work read the clock"); return time.Time{} })
+	if err := registry.ImportOwnerPrice(context.Background(), nil); !errors.Is(err, ErrReference) {
+		t.Fatalf("nil import work: %v", err)
+	}
+}
+
 func TestObservationFailureReleasesConnection(t *testing.T) {
 	db, err := sql.Open("sqlite3", filepath.Join(t.TempDir(), "failure.db"))
 	if err != nil {
@@ -236,7 +248,7 @@ func TestOwnerPriceImportPurposeRollbackAndCommitFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := errors.New("abort after persist")
-	err = registry.ImportOwnerPrice(context.Background(), func(ref storage.ObservationRef, _ time.Time) error {
+	err = registry.ImportOwnerPrice(context.Background(), func(ref storage.ObservationRef) error {
 		handle, err := importer.Resolve(ref)
 		if err != nil {
 			return err
@@ -249,7 +261,7 @@ func TestOwnerPriceImportPurposeRollbackAndCommitFailure(t *testing.T) {
 	if !errors.Is(err, want) {
 		t.Fatal(err)
 	}
-	err = registry.ImportOwnerPrice(context.Background(), func(ref storage.ObservationRef, _ time.Time) error {
+	err = registry.ImportOwnerPrice(context.Background(), func(ref storage.ObservationRef) error {
 		handle, err := importer.Resolve(ref)
 		if err != nil {
 			return err

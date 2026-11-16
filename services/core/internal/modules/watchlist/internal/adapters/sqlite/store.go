@@ -126,7 +126,7 @@ func readState(ctx context.Context, q queryer) (*c.WatchlistState, c.RecoveryPro
 	if err != nil || string(canonical) != raw || sha != hash {
 		return nil, proof, errors.New("watchlist state proof mismatch")
 	}
-	return &state, c.RecoveryProof{sha, revision, len(entries)}, nil
+	return &state, c.RecoveryProof{SHA256: sha, Revision: revision, Entries: len(entries)}, nil
 }
 
 func proveWatchlistRecovery(ctx context.Context, q queryer) (c.RecoveryProof, error) {

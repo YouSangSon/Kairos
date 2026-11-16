@@ -540,7 +540,11 @@ func provePaperPerformancePolicyRecovery(ctx context.Context, db *sql.DB) (paper
 	return proof.Policy, nil
 }
 func provePaperRunnerLeaseRecovery(ctx context.Context, db *sql.DB) (paperRunnerLeaseRecoveryProof, error) {
-	proof, err := tradingRecoveryForTest(ctx, db, false)
+	api, err := tradingOwnerForTest(db, observation.New(db, time.Now))
+	if err != nil {
+		return paperRunnerLeaseRecoveryProof{}, err
+	}
+	proof, err := api.VerifyRecovery(ctx)
 	if err != nil {
 		return paperRunnerLeaseRecoveryProof{}, err
 	}

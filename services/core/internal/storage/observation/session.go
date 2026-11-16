@@ -59,8 +59,14 @@ func (r *Registry) ReadWatchlist(ctx context.Context, work func(storage.Observat
 	return r.observe(ctx, watchlist, true, work)
 }
 
-func (r *Registry) ImportOwnerPrice(ctx context.Context, work func(storage.ObservationRef, time.Time) error) error {
-	return r.observe(ctx, ownerPriceImport, false, work)
+func (r *Registry) ImportOwnerPrice(ctx context.Context, work func(storage.ObservationRef) error) error {
+	if work == nil {
+		return ErrReference
+	}
+	zero := time.Time{}
+	return r.observeAt(ctx, ownerPriceImport, false, &zero, func(ref storage.ObservationRef, _ time.Time) error {
+		return work(ref)
+	})
 }
 
 func (r *Registry) VerifyBackup(ctx context.Context, work func(storage.ObservationRef, time.Time) error) error {

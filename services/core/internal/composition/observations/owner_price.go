@@ -3,7 +3,6 @@ package observations
 import (
 	"context"
 	"errors"
-	"time"
 
 	ledger "omni-folio/services/core/internal/modules/ledger/contracts"
 	market "omni-folio/services/core/internal/modules/marketdata/contracts"
@@ -27,7 +26,7 @@ func (c *OwnerPrice) ImportOwnerPriceAtomic(ctx context.Context, command market.
 	}
 	ctx = context.WithValue(ctx, ownerPriceContextKey{}, true)
 	var result *market.OwnerPriceSeriesReceipt
-	err := c.Registry.ImportOwnerPrice(ctx, func(ref storage.ObservationRef, _ time.Time) error {
+	err := c.Registry.ImportOwnerPrice(ctx, func(ref storage.ObservationRef) error {
 		admitted, err := c.Ledger.AdmittedPriceIdentities(ctx, ref)
 		if err != nil {
 			return err

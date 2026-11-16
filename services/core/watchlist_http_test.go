@@ -15,8 +15,8 @@ import (
 	"time"
 )
 
-var watchAAPL = watchapi.WatchlistEntry{"XNAS", "AAPL", "USD"}
-var watchKR = watchapi.WatchlistEntry{"XKRX", "005930", "KRW"}
+var watchAAPL = watchapi.WatchlistEntry{Venue: "XNAS", Symbol: "AAPL", Currency: "USD"}
+var watchKR = watchapi.WatchlistEntry{Venue: "XKRX", Symbol: "005930", Currency: "KRW"}
 
 func watchlistRequest(t testing.TB, handler http.Handler, method, path, body string, status int) *httptest.ResponseRecorder {
 	t.Helper()
@@ -52,7 +52,7 @@ func watchlistReadForTest(t testing.TB, svc *Service) *watchapi.WatchlistReport 
 
 func watchlistWriteForTest(t testing.TB, svc *Service, revision int64, entries ...watchapi.WatchlistEntry) *watchapi.WatchlistState {
 	t.Helper()
-	raw, err := json.Marshal(watchapi.WatchlistChange{revision, append([]watchapi.WatchlistEntry{}, entries...)})
+	raw, err := json.Marshal(watchapi.WatchlistChange{ExpectedRevision: revision, Entries: append([]watchapi.WatchlistEntry{}, entries...)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,7 +107,7 @@ func TestWatchlistStartsEmptyWithoutChangingTheLedger(t *testing.T) {
 	}
 	// A later add must make the original delayed CAS obsolete, even with the same desired entries.
 	watchlistWriteForTest(t, svc, 2, watchAAPL, watchKR)
-	old, _ := json.Marshal(watchapi.WatchlistChange{0, []watchapi.WatchlistEntry{watchAAPL, watchKR}})
+	old, _ := json.Marshal(watchapi.WatchlistChange{ExpectedRevision: 0, Entries: []watchapi.WatchlistEntry{watchAAPL, watchKR}})
 	watchlistRequest(t, svc.routes(), "POST", "/v1/watchlist", string(old), 409)
 	after, err := snapshotFrom(context.Background(), svc.db)
 	if err != nil || !reflect.DeepEqual(before, after) {
@@ -138,7 +138,7 @@ func TestWatchlistConcurrentChangesDoNotOverwriteOneAnother(t *testing.T) {
 		go func(s *Service, e watchapi.WatchlistEntry) {
 			defer group.Done()
 			<-start
-			raw, _ := json.Marshal(watchapi.WatchlistChange{0, []watchapi.WatchlistEntry{e}})
+			raw, _ := json.Marshal(watchapi.WatchlistChange{ExpectedRevision: 0, Entries: []watchapi.WatchlistEntry{e}})
 			r := httptest.NewRequest("POST", "/v1/watchlist", strings.NewReader(string(raw)))
 			r.Header.Set("Content-Type", "application/json")
 			w := httptest.NewRecorder()
@@ -197,13 +197,13 @@ func TestWatchlistClosedInputBoundsAndOrigin(t *testing.T) {
 		strings.Replace(valid, `"currency":"USD"`, `"currency":"USD","private_account":"secret"`, 1),
 		valid + strings.Repeat(" ", watchapi.BodyLimit),
 	}
-	duplicate, _ := json.Marshal(watchapi.WatchlistChange{0, []watchapi.WatchlistEntry{watchAAPL, watchAAPL}})
+	duplicate, _ := json.Marshal(watchapi.WatchlistChange{ExpectedRevision: 0, Entries: []watchapi.WatchlistEntry{watchAAPL, watchAAPL}})
 	bad = append(bad, string(duplicate))
 	tooMany := []watchapi.WatchlistEntry{}
 	for i := 0; i < 51; i++ {
-		tooMany = append(tooMany, watchapi.WatchlistEntry{"XNAS", fmt.Sprintf("S%d", i), "USD"})
+		tooMany = append(tooMany, watchapi.WatchlistEntry{Venue: "XNAS", Symbol: fmt.Sprintf("S%d", i), Currency: "USD"})
 	}
-	raw, _ := json.Marshal(watchapi.WatchlistChange{0, tooMany})
+	raw, _ := json.Marshal(watchapi.WatchlistChange{ExpectedRevision: 0, Entries: tooMany})
 	bad = append(bad, string(raw))
 	for i, input := range bad {
 		t.Run(fmt.Sprint(i), func(t *testing.T) { watchlistRequest(t, svc.routes(), "POST", "/v1/watchlist", input, 400) })
@@ -261,8 +261,8 @@ func TestWatchlistSharedMixedQuoteStatesAndWholeVersionWithdrawal(t *testing.T) 
 		i.Points = []OwnerPricePoint{{ObservedAt: i.FetchedAt, Price: "150.25"}}
 	})
 	importOwnerPriceForTest(t, svc, input)
-	msft := watchapi.WatchlistEntry{"XNAS", "MSFT", "USD"}
-	brk := watchapi.WatchlistEntry{"XNYS", "BRK.B", "USD"}
+	msft := watchapi.WatchlistEntry{Venue: "XNAS", Symbol: "MSFT", Currency: "USD"}
+	brk := watchapi.WatchlistEntry{Venue: "XNYS", Symbol: "BRK.B", Currency: "USD"}
 	watchlistRecordFixture(t, svc, "kr", watchKR, "70000", "2026-01-01T23:00:00Z")
 	watchlistRecordFixture(t, svc, "brk1", brk, "450", "2026-01-01T23:00:00Z")
 	watchlistRecordFixture(t, svc, "brk2", brk, "451", "2026-01-01T23:00:00Z")

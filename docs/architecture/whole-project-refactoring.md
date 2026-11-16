@@ -2,7 +2,7 @@
 
 - 설계 기준일: 2026-11-05. 코드 기준: `add8787eaa5f348daeea97df2df5cd06de3b90a8`.
 - 범위: Go core, Flutter client, Python research, 계약·테스트·빌드·운영 도구의 연결부.
-- 상태: 2026-11-09 사용자의 구현 요청으로 작업을 재개했다. 아래 구조는 목표이며 부분 구현과 전체 완료를 구분한다. 과거 중단 기록은 14절, 설계는 15절, 실행 단위와 검증 상태는 [구현 계획](modular-implementation-plan.md)을 따른다.
+- 상태: 승인한 15절의 모듈 구조와 호출자·테스트 이전을 구현하고 로컬 통합 검증을 마쳤다. 원격 CI와 main 반영 결과는 이 작업의 PR 기록에서 확인한다. 1–13절과 15.1–15.2절의 코드 관측은 각각 설계 기준일의 기록이다. 과거 중단 기록은 14절, 현재 구조는 15.14절, 실행·검증 범위는 [구현 계획](modular-implementation-plan.md)을 따른다.
 - 상위 결정: [ADR-0002](../adr/0002-domain-module-boundaries.md). 제품 기능과 승격 권한은 [CONTEXT](../../CONTEXT.md), [GATES](../../GATES.md)가 소유한다.
 
 ## 1. 목표와 설계의 한계
@@ -13,7 +13,7 @@ DDD는 업무별 용어와 규칙의 소유자를 정하는 방법으로 적용�
 
 백엔드는 Go, 클라이언트는 Flutter, 연구는 Python으로 유지한다. asdf의 프로젝트 버전 선택과 lockfile을 유지한다. Rust 전환, 마이크로서비스화, 새 DB·메시지 브로커·상태 관리 라이브러리를 이번 refactor와 함께 설치하지 않는다. MSA·복수 DB·인증·캐시·Kafka/RabbitMQ 단독 및 병행 운영의 목표와 전환 계약은 [플랫폼 확장 설계](scalability-and-platform.md)가 소유한다. Mimir 유래 공개 정보는 연구 입력이며 주문 권한의 근거로 승격되지 않는다.
 
-## 2. 현재 구조와 후보 비교
+## 2. 설계 기준일의 구조와 후보 비교
 
 현재 core의 `Service`는 저장소, 사용 사례, 외부 호출과 HTTP 구성을 함께 소유한다. 순수 계산은 여섯 `internal` 패키지로 일부 분리돼 있으나 대부분의 조합은 `package main`에 남아 있다. Flutter의 `app.dart`, `api.dart`, `models.dart`는 화면·요청·파싱 변경을 넓게 전파한다. Python은 CLI별 파일이 계산과 파일 I/O를 함께 수행한다.
 
@@ -435,7 +435,7 @@ Flutter의 새 `data/` 소스는 전역 ignore 패턴에 걸려 정확한 파일
 
 ### 15.1 범위와 적용 우선순위
 
-이번 요청은 **설계만** 수행한다. 확인한 checkout은 `main@f6a6075`이며 작업 트리는 깨끗했다. 14절의 구현 중단 기록은 과거 사실로 보존한다. 이 절은 사용자의 여섯 가지 요구를 기존 설계에 연결한 후속 제안이다. 아직 구현·배포됐거나 사용자가 세부안을 승인한 것으로 기록하지 않는다.
+2026-11-09 설계 검토 당시에는 설계만 수행했다. 확인한 checkout은 `main@f6a6075`이며 작업 트리는 깨끗했다. 이 관측과 14절의 중단 기록은 과거 근거로 보존한다. 이후 사용자의 구현 요청으로 아래 구조를 구현했고 현재 상태는 15.14절과 [구현 계획](modular-implementation-plan.md)에서 구분한다. 설계 승인이나 소스 구현을 배포 완료로 해석하지 않는다.
 
 1–13절의 금액·wire·트랜잭션·수명·복구 계약과 플랫폼 확장 설계는 유지한다. 이 절은 **후속 구현의 물리적 모듈 배치와 접근 제한**을 구체화한다. 3절의 책임 영역은 모두 독립 모듈이라는 뜻이 아니다. 5절의 전역 application/adapter 배치는 아래 모듈별 소유 배치로 옮기는 제안이며, 전역 SQLite adapter에 모든 테이블 접근을 계속 모으는 안을 대체한다. 3절의 읽기 SQL join 허용은 같은 owner 내부 join으로 제한하며 다른 owner 데이터는 공개 조회 계약으로 받는다. 6절의 Flutter 7 feature는 화면 경계다. 서버의 데이터 소유 모듈과 일대일 대응시키지 않는다.
 
@@ -536,7 +536,7 @@ SQL 정적 검사만으로 동적 SQL이나 SQLite 공유 pool의 실행 시 접
 
 | 시나리오 ID | 보존할 결과 | 검증 계층과 기존 근거 |
 | --- | --- | --- |
-| MOD-01 | import 재전송은 receipt를 재사용하고 입력 불일치는 거부 | ledger API/SQLite 통합, `core_test.go`, `internal/adapters/sqlite/ledger_test.go` |
+| MOD-01 | import 재전송은 receipt를 재사용하고 입력 불일치는 거부 | ledger API/SQLite 통합, `core_test.go`, `internal/modules/ledger/internal/adapters/sqlite/ledger_test.go` |
 | MOD-02 | callback/error/commit/cancel/panic에서 부분 쓰기 없음 | 실제 SQLite 통합, 기존 scope 실패 검사 재사용 |
 | MOD-03 | admission/runner heartbeat/policy 경합에서 하나의 유효 authority와 연속 pair 유지 | 실제 DB·독립 접속·barrier 경합, `paper_execution_authority_test.go`, `paper_runner_lease_test.go` 이식 |
 | MOD-04 | dispatch 전 crash는 미송신, dispatch 후 unknown은 재송신하지 않음 | 실제 DB+제어 transport, `kiwoom_order_transport_test.go` 거부/unknown/unauthorized 검사 |
@@ -678,3 +678,25 @@ HTTP endpoint의 요청 해석·owner 오류 매핑·응답과 owner별 CLI flag
 CLI에서 owner의 private adapter가 필요한 시점에 DB 자원을 요청해야 하는 경우, 별도의 좁은 construction 계약으로 기존 readonly/existing/readwrite 열기와 capability·schema 확인·close를 연결한다. 이 계약은 composition·module 구성 진입점·private CLI만 사용하며 DB/Tx/SQL을 노출하지 않는다. help·flag·입력 검증과 자원 열기의 기존 순서, 오류·취소 시 정리를 보존한다. 모든 모듈에 범용 CLI framework나 command별 전달 계층을 추가하지 않는다.
 
 `research_report.go`의 채택된 연구 결과는 trading journal과 같은 transaction으로 읽으므로 trading의 공개 조회·private projection에 귀속한다. Mimir의 public research feed는 별도의 읽기 전용 Go research artifact 입력 adapter에 두고 bounded file read·schema 검증·필터링을 보존한다. Python 연구 계산이나 trading 실행 권한을 이 호환 adapter에 추가하지 않는다. 이 inbound 배치는 15.5의 module-private 원칙을 유지하도록 독립 Astra 검토에서 구체화했다.
+
+
+### 15.14 구현 구조와 검증 연결
+
+Go의 실행 진입점은 `services/core/main.go`이며 인자·signal·종료 처리만 맡는다. `internal/composition/`이 owner 생성, 공통 관측 참조, HTTP 경로와 CLI의 자원 수명을 연결한다. 업무 기능은 `internal/modules/{ledger,marketdata,portfolio,watchlist,trading,maintenance,research}/`가 소유한다. 각 owner는 `contracts/`의 업무 값과 capability를 공개하고, nested `internal/` 아래에서 domain·application·adapter를 구현한다. 저장된 연구·전략 결과는 같은 transaction의 거래 판단에 쓰이므로 trading에 귀속하며, 공개 research feed 입력은 별도 읽기 전용 research adapter가 담당한다.
+
+원장·시장·평가·관심 종목 사이의 관측은 `internal/storage/contracts`의 불투명 참조로 연결한다. `internal/storage/observation`이 같은 DB transaction과 cutoff에 결박하고 scope 종료 시 rows와 지연 Scan을 무효화한다. migration 참조는 `MigrationStarter`가 실제 transaction과 함께 만들며 일반 backup 참조로 대체할 수 없다. 사용자 가격 등록의 쓰기 참조는 평가 cutoff를 요구하지 않는다. 신규 버전을 기록할 때만 기록 시계를 호출하고 동일 입력 재시도·기존 버전 충돌은 저장된 증거로 판단한다. 읽기·사용자 가격 쓰기·migration 목적을 나누는 계약은 15.12–15.13절을 유지한다.
+
+| 보존 계약 | 실제 검증 위치 |
+| --- | --- |
+| MOD-01·02 원장 멱등성·rollback | `internal/modules/ledger/internal/adapters/sqlite/` 및 root `core_test.go`, `internal/storage/observation/` |
+| MOD-03–06 거래·권한·부분 실패·승격 경합 | `internal/modules/trading/internal/{application,adapters/sqlite}/`의 기존 회귀 검사와 실제 프로세스 검사 |
+| MOD-07 wire·금액·hash·backup 호환 | `contracts/`, 각 owner private 검사, root의 비어 있지 않은 migration·backup 통합 검사 |
+| MOD-08 앱의 미확정 apply와 session | `apps/client/lib/features/ledger/application/` 및 client controller·widget 검사 |
+| MOD-09 연구 입력의 권한 거부 | trading의 `private_captured_research_test.go`와 Python capture·artifact 검사 |
+| MOD-10·14 모듈·계층·SQL 소유권·schema 제한 | `internal/architecture/`의 실제 소스 검사와 위반 fixture, `internal/storage/ownership/` |
+| MOD-11·16 동일 관측·관심 종목 경합 | `internal/composition/observations/modules_integration_test.go`의 `TestMOD11RealOwnerModulesPreservePortfolioObservation`, `TestMOD16RealOwnerModulesPreserveWatchlistObservation` |
+| MOD-12·13·15 사용자 가격 원자성·참조 수명·candidate 동등성 | `internal/composition/observations/`, `internal/storage/observation/`, marketdata 및 root owner-price backup 검사 |
+
+경계 검사는 임의 SQL을 허용한 뒤 실행 시 검사하는 방식으로 넓히지 않는다. 고정 SQL과 인자·허용 객체를 등록하며, catalog에서 읽은 이름이나 SQL을 바꿔치기하거나 다른 DB·transaction으로 교체하는 경우도 거부한다. `legacy_symbols.json`은 변경하지 않은 순수 계산 `internal/exact/exact.go`의 기존 hash만 유지한다. 새 모듈과 이전 root 경로에는 예외가 없다.
+
+실행 환경·저장된 schema·공개 wire·금액과 hash 형식은 그대로다. 이번 변경에 Rust, 새 DB·MQ·인증 공급자, MSA 배포나 사용자 코드를 실행하는 plugin host는 포함하지 않는다. 위 표는 구현과 검사 위치의 연결이며 전체 검사·CI·배포 통과 기록은 [구현 계획](modular-implementation-plan.md)을 따른다.
