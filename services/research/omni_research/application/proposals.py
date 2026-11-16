@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 from typing import Any
 
-from ..domain.experiment import Parameters, sma_crossover
+from ..domain.experiment import Parameters, signal_target, sma_crossover
 from ..domain.values import Bar
 from .artifacts import canonical_hash, canonical_json
 
@@ -20,7 +20,7 @@ def build_proposal(
         "strategy_result_sha256": artifact["result_sha256"], "strategy_parameter_sha256": strategy["parameter_hash"],
         "input_sha256": hashlib.sha256(raw_bars).hexdigest(), "symbol": bars[-1].symbol,
         "data_as_of": bars[-1].at, "signal": signal,
-        "target_quantity": quantity if signal == "golden_cross" else "0" if signal == "death_cross" else None,
+        "target_quantity": signal_target(signal, quantity),
     }
     return {**proposal, "proposal_sha256": canonical_hash(proposal)}
 

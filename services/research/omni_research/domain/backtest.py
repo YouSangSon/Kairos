@@ -2,10 +2,44 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
 from .values import BPS_DENOMINATOR, ONE, ZERO, Bar, Order, decimal_string
+
+
+def validate_execution_prices(signal_price: str, fill_price: str) -> None:
+    if signal_price != "bar_close" or fill_price != "next_eligible_bar_open":
+        raise ValueError("only close signals and next eligible open fills are supported")
+
+
+def validate_execution_values(starting_cash: Decimal, fee: Decimal, tax: Decimal, slippage_bps: Decimal,
+                              delay: Decimal, participation: Decimal) -> None:
+    if starting_cash <= ZERO or fee < ZERO or not ZERO <= tax <= ONE or not ZERO <= slippage_bps < BPS_DENOMINATOR or not ZERO < participation <= ONE:
+        raise ValueError("execution values are out of range")
+    if delay < ONE or delay != delay.to_integral_value():
+        raise ValueError("execution.delay_bars must be a whole number of at least 1 to prevent lookahead")
+
+
+def validate_run_times(finished_at: datetime, started_at: datetime) -> None:
+    if finished_at < started_at:
+        raise ValueError("finished_at must not precede started_at")
+
+
+def validate_strategy(name: str, liquidate_at_end: bool) -> None:
+    if name != "buy_and_hold" or liquidate_at_end is not True:
+        raise ValueError("only buy_and_hold with liquidate_at_end=true is supported")
+
+
+def validate_quantity(quantity: Decimal) -> None:
+    if quantity <= ZERO:
+        raise ValueError("strategy parameters or parameter_hash are invalid")
+
+
+def validate_daily_input(interval: str, timezone: str) -> None:
+    if interval != "1d" or timezone != "UTC":
+        raise ValueError("only UTC daily bars are supported")
 
 
 def fill(order: Order, bar: Bar, quantity: Decimal, fee: Decimal, tax_rate: Decimal, slippage_bps: Decimal) -> tuple[Decimal, Decimal, Decimal]:

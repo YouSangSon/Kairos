@@ -9,10 +9,11 @@ from pathlib import Path
 
 FACADES = {"omni_research." + name for name in ("engine", "improve", "paper_fill", "capture_research", "signal_cli")}
 FORBIDDEN_MODULES = {"socket", "urllib", "http", "sqlite3", "subprocess"}
-DOMAIN_STDLIB = {"__future__", "dataclasses", "decimal", "fractions", "math", "typing"}
+DOMAIN_STDLIB = {"__future__", "dataclasses", "datetime", "decimal", "fractions", "math", "typing"}
 APPLICATION_STDLIB = {"__future__", "decimal", "hashlib", "json", "typing"}
 ENVIRONMENT = {"os.environ", "os.getenv", "os.putenv", "os.unsetenv", "os.environb", "os.getenvb"}
 FILE_CALLS = {"open", "read_bytes", "read_text", "write_bytes", "write_text"}
+WALL_CLOCK_CALLS = {"datetime.datetime.now", "datetime.datetime.utcnow", "datetime.datetime.today", "datetime.date.today"}
 
 
 def boundary_violations(package: Path) -> list[str]:
@@ -76,6 +77,8 @@ def boundary_violations(package: Path) -> list[str]:
                 name = qualified_name(node.func)
                 if name.rsplit(".", 1)[-1] in FILE_CALLS or name in {"__import__", "eval", "exec", "getattr"}:
                     violations.append(f"{module}: pure layer I/O or dynamic call {name}")
+                if name in WALL_CLOCK_CALLS:
+                    violations.append(f"{module}: pure layer wall clock {name}")
     active = []
     complete = set()
 
@@ -120,6 +123,9 @@ class ResearchBoundaryTest(unittest.TestCase):
             ("adapters/nested/bad.py", "from os import getenv as setting", "environment access"),
             ("application/nested/bad.py", "data = source.read_bytes()", "pure layer I/O"),
             ("domain/nested/bad.py", "__import__('pathlib')", "dynamic call"),
+            ("domain/nested/bad.py", "from datetime import datetime as Clock\nClock.now()", "wall clock"),
+            ("domain/nested/bad.py", "import datetime as clocks\nclocks.datetime.utcnow()", "wall clock"),
+            ("domain/nested/bad.py", "from datetime import date as Day\nDay.today()", "wall clock"),
         )
         for path, source, expected in cases:
             with self.subTest(source=source), tempfile.TemporaryDirectory() as temporary:

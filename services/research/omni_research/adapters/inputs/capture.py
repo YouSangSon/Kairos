@@ -8,7 +8,7 @@ from decimal import Decimal
 from typing import Any
 
 from ...domain.experiment import ExperimentConfig
-from ...domain.values import Bar
+from ...domain.values import Bar, valid_ohlcv, validate_fetch_order, validate_observation_day
 from .config import parse_config
 from .validation import object_value
 
@@ -62,8 +62,7 @@ def _capture_bars(capture: dict[str, Any]) -> list[Bar]:
     base_date = _provider_date(body["base_dt"])
     started = _fetch_clock(capture["fetch_started_at"])
     fetched = _fetch_clock(capture["fetched_at"])
-    if fetched < started:
-        raise ValueError("fetch clock order is reversed")
+    validate_fetch_order(started, fetched)
     if base_date != (started[0] + timedelta(hours=9)).date():
         raise ValueError("request base date must match fetch start at fixed UTC+09")
     if capture["time_evidence"] != {
@@ -85,8 +84,7 @@ def _capture_bars(capture: dict[str, Any]) -> list[Bar]:
         _closed(row, {"provider_time", "open", "high", "low", "close", "volume"}, "bar")
         label = row["provider_time"]
         day = _provider_date(label)
-        if day > base_date or (previous is not None and day <= previous):
-            raise ValueError("provider dates must be unique, increasing and no later than request base date")
+        validate_observation_day(day, previous, base_date)
         previous = day
         values = {}
         for key in ("open", "high", "low", "close", "volume"):
@@ -96,8 +94,7 @@ def _capture_bars(capture: dict[str, Any]) -> list[Bar]:
             _canonical_decimal(value, f"bar.{key}")
             values[key] = Decimal(value)
         bar = Bar(label, symbol, **values)
-        if (min(bar.open, bar.high, bar.low, bar.close) <= 0 or bar.volume < 0
-            or bar.low > min(bar.open, bar.close) or bar.high < max(bar.open, bar.close) or bar.low > bar.high):
+        if not valid_ohlcv(bar):
             raise ValueError("bars require valid positive OHLC and nonnegative volume")
         bars.append(bar)
     return bars

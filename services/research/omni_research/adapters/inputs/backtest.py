@@ -7,15 +7,15 @@ from decimal import Decimal
 from typing import Any
 
 from ...application.artifacts import canonical_hash
-from ...domain.values import ZERO, decimal_input
+from ...domain import backtest
+from ...domain.values import decimal_input
 from .validation import object_value, request_execution, timestamp
 
 
 def parse_backtest_request(request: dict[str, Any], *, run_id: str, dataset_id: str, started_at: str, finished_at: str) -> Decimal:
     if not run_id or not dataset_id:
         raise ValueError("run_id and dataset_id are required")
-    if timestamp(finished_at, "finished_at") < timestamp(started_at, "started_at"):
-        raise ValueError("finished_at must not precede started_at")
+    backtest.validate_run_times(timestamp(finished_at, "finished_at"), timestamp(started_at, "started_at"))
     if not isinstance(request, dict) or request.get("schema_version") != "backtest-request.v1":
         raise ValueError("request must be a backtest-request.v1 object")
     strategy = object_value(request.get("strategy"), "strategy")
@@ -28,13 +28,14 @@ def parse_backtest_request(request: dict[str, Any], *, run_id: str, dataset_id: 
     if engine != {"name": "omni-folio-reference", "version": "0.1.0"}:
         raise ValueError("request engine does not match this implementation")
     parameters = object_value(strategy["parameters"], "strategy.parameters")
-    if strategy["name"] != "buy_and_hold" or set(parameters) != {"quantity", "liquidate_at_end"} or parameters["liquidate_at_end"] is not True:
+    if set(parameters) != {"quantity", "liquidate_at_end"}:
         raise ValueError("only buy_and_hold with liquidate_at_end=true is supported")
+    backtest.validate_strategy(strategy["name"], parameters["liquidate_at_end"])
     quantity = decimal_input(parameters["quantity"], "strategy.parameters.quantity")
-    if quantity <= ZERO or strategy["parameter_hash"] != canonical_hash(parameters):
+    backtest.validate_quantity(quantity)
+    if strategy["parameter_hash"] != canonical_hash(parameters):
         raise ValueError("strategy parameters or parameter_hash are invalid")
-    if data["bar_interval"] != "1d" or data["timezone"] != "UTC":
-        raise ValueError("only UTC daily bars are supported")
+    backtest.validate_daily_input(data["bar_interval"], data["timezone"])
     return quantity
 
 
