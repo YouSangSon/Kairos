@@ -8,7 +8,7 @@ import (
 	"log"
 	"net/http"
 	"net/http/httptest"
-	"omni-folio/services/core/internal/application/ledger"
+	"omni-folio/services/core/internal/codec"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -751,7 +751,11 @@ func TestStatusUnresolvedLimitsAndFingerprintBinding(t *testing.T) {
 	if appErr != nil {
 		t.Fatal(appErr)
 	}
-	if valid.PreviewFingerprint != ledger.PreviewFingerprint(valid.FileSHA256, csvSchema, mappingSchema, valid.LedgerRevision) {
+	_, fingerprint, err := codec.JSONHash(map[string]string{"file_sha256": valid.FileSHA256, "schema_version": csvSchema, "mapping_version": mappingSchema, "ledger_revision": valid.LedgerRevision})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if valid.PreviewFingerprint != fingerprint {
 		t.Fatal("preview fingerprint did not bind contract versions")
 	}
 	var stored string

@@ -85,6 +85,8 @@ flowchart LR
 
 判断の根拠は [`docs/adr/0001-runtime-and-monorepo.md`](docs/adr/0001-runtime-and-monorepo.md)、ブローカーの対応順序と UX 契約は [`docs/broker-priority-and-ux.md`](docs/broker-priority-and-ux.md) に従います。
 
+Go core は業務責任とデータ所有権を分けたモジュラーモノリスです。各モジュールの domain が業務ルールを、application がユースケースの調整を担当します。SQLite・HTTP・CLI・broker 接続は private adapter が実装し、composition が小さな公開契約で接続します。モジュール間の循環・階層違反・別 owner の SQL アクセスは自動検査します。実装・検証状況は[モジュール実装計画](docs/architecture/modular-implementation-plan.md)を参照してください。
+
 <a id="quick-start"></a>
 
 ## クイックスタート

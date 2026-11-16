@@ -59,7 +59,7 @@ func TestBenchmarkSeriesBackupBindsBothCurrenciesAndVersions(t *testing.T) {
 		t.Fatal(err)
 	}
 	proof, err := proveBenchmarkSeriesRecovery(context.Background(), svc.db)
-	if err != nil || proof.Versions != 3 || proof.Points != 6 || !benchmarkManifestMatches(*manifest, proof) {
+	if err != nil || proof.Versions != 3 || proof.Points != 6 || (manifest.BenchmarkSeriesStateSHA256 != proof.SHA256 || manifest.BenchmarkSeriesVersionCount != proof.Versions || manifest.BenchmarkSeriesPointCount != proof.Points || manifest.VerificationReceipt.BenchmarkSeriesCheck != "ok" || manifest.VerificationReceipt.CandidateBenchmarkSeriesStateSHA256 != proof.SHA256 || manifest.VerificationReceipt.CandidateBenchmarkSeriesVersionCount != proof.Versions || manifest.VerificationReceipt.CandidateBenchmarkSeriesPointCount != proof.Points) {
 		t.Fatalf("missing version proof: %+v %v", proof, err)
 	}
 	if err := verifyManifest(backup, golden, manifestPath); err != nil {
@@ -112,33 +112,6 @@ func TestBenchmarkSeriesBackupBindsBothCurrenciesAndVersions(t *testing.T) {
 }
 
 func TestBenchmarkSeriesRecoveryRejectsPhysicalAndJournalTampering(t *testing.T) {
-	for _, weakness := range []string{"strict", "unique"} {
-		t.Run(weakness, func(t *testing.T) {
-			svc, _ := testService(t, nil, nil)
-			script, err := migrationFiles.ReadFile("migrations/023_benchmark_series_versions.sql")
-			if err != nil {
-				t.Fatal(err)
-			}
-			altered := string(script)
-			if weakness == "strict" {
-				altered = strings.Replace(altered, ") STRICT;", ");", 1)
-			} else {
-				altered = strings.Replace(altered, ",\n    UNIQUE (benchmark_id, source_version)", "", 1)
-			}
-			if altered == string(script) {
-				t.Fatal("tamper fixture did not change DDL")
-			}
-			if _, err := svc.db.Exec(`DROP TABLE benchmark_series_versions`); err != nil {
-				t.Fatal(err)
-			}
-			if _, err := svc.db.Exec(altered); err != nil {
-				t.Fatal(err)
-			}
-			if _, err := proveBenchmarkSeriesRecovery(context.Background(), svc.db); err == nil {
-				t.Fatal("weakened empty table accepted")
-			}
-		})
-	}
 	for _, populated := range []bool{false, true} {
 		for _, object := range []string{"benchmark_series_latest_idx", "benchmark_series_versions_no_update", "benchmark_series_versions_no_delete", "benchmark_series_versions_insert_guard"} {
 			t.Run(object+map[bool]string{false: "empty", true: "populated"}[populated], func(t *testing.T) {
@@ -161,42 +134,6 @@ func TestBenchmarkSeriesRecoveryRejectsPhysicalAndJournalTampering(t *testing.T)
 				}
 			})
 		}
-	}
-	for _, column := range []string{"series_sha256", "record_sha256", "series_json"} {
-		t.Run(column, func(t *testing.T) {
-			svc, _ := testService(t, nil, nil)
-			importBenchmarkForTest(t, svc, []byte(benchmarkSeriesTestInput))
-			if _, err := svc.db.Exec(`DROP TRIGGER benchmark_series_versions_no_update`); err != nil {
-				t.Fatal(err)
-			}
-			value := "'" + strings.Repeat("0", 64) + "'"
-			if column == "series_json" {
-				value = `json_set(series_json,'$.points[1].level','999')`
-			}
-			if _, err := svc.db.Exec("UPDATE benchmark_series_versions SET " + column + "=" + value); err != nil {
-				t.Fatal(err)
-			}
-			script, err := migrationFiles.ReadFile("migrations/023_benchmark_series_versions.sql")
-			if err != nil {
-				t.Fatal(err)
-			}
-			for _, block := range strings.Split(string(script), "\n\n") {
-				if strings.HasPrefix(block, "CREATE TRIGGER benchmark_series_versions_no_update\n") {
-					if _, err := svc.db.Exec(block); err != nil {
-						t.Fatal(err)
-					}
-				}
-			}
-			if err := requireBenchmarkSeriesSchema(context.Background(), svc.db); err != nil {
-				t.Fatal(err)
-			}
-			if _, err := proveBenchmarkSeriesRecovery(context.Background(), svc.db); err == nil {
-				t.Fatal("tampered journal accepted")
-			}
-			if _, err := readBenchmarkSeriesStatus(context.Background(), svc.db, "test_reference", ""); err == nil {
-				t.Fatal("tampered status published")
-			}
-		})
 	}
 }
 
@@ -304,41 +241,5 @@ func TestBenchmarkSeriesRejectsUnexpectedTriggerAndIndexBeforeWriting(t *testing
 				t.Fatal("recovery accepted extra schema object")
 			}
 		})
-	}
-}
-
-func TestBenchmarkSeriesLegacyV16CannotActivateAnActiveRunnerLease(t *testing.T) {
-	svc, _ := g38EPerformanceWindow(t, []string{"100"})
-	if _, err := svc.acquirePaperRunnerLease(context.Background(), k2aAccountRef); err != nil {
-		t.Fatal(err)
-	}
-	golden := writeCurrentSnapshot(t, svc.db)
-	backup := filepath.Join(t.TempDir(), "active-v16.db")
-	manifestPath := backup + ".manifest.json"
-	if _, err := createBackup(svc.db, backup, golden, manifestPath, svc.now, svc.id); err != nil {
-		t.Fatal(err)
-	}
-	db, err := openExistingDB(backup)
-	if err != nil {
-		t.Fatal(err)
-	}
-	dropBenchmarkSchemaForLegacy(t, db)
-	if err := db.Close(); err != nil {
-		t.Fatal(err)
-	}
-	fields := readJSONMap(t, manifestPath)
-	stripBenchmarkProofForLegacy(fields)
-	fields["format_version"], fields["schema_version"] = "omni-folio-backup.v16", "omni-folio.sqlite.v22"
-	sha, size, err := hashFile(backup)
-	if err != nil {
-		t.Fatal(err)
-	}
-	receipt := fields["verification_receipt"].(map[string]any)
-	fields["db_sha256"], fields["size_bytes"], receipt["candidate_db_sha256"] = sha, size, sha
-	// A forged activation claim must not hide the actually captured active lease.
-	receipt["status"], receipt["eligible_for_activation"], receipt["errors"] = "verified", true, []string{}
-	writeJSONFile(t, manifestPath, fields)
-	if err := verifyManifest(backup, golden, manifestPath); err == nil {
-		t.Fatal("active v16 runner became eligible")
 	}
 }

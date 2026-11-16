@@ -85,6 +85,8 @@ flowchart LR
 
 결정 근거는 [`docs/adr/0001-runtime-and-monorepo.md`](docs/adr/0001-runtime-and-monorepo.md), 브로커 순서와 UX 계약은 [`docs/broker-priority-and-ux.md`](docs/broker-priority-and-ux.md)를 따릅니다.
 
+Go core는 업무·데이터 소유권을 나눈 모듈형 단일 서비스입니다. 각 모듈의 domain이 업무 규칙을, application이 유스케이스 조율을 소유하고, SQLite·HTTP·CLI·브로커 연결은 private adapter가 구현합니다. composition이 작은 공개 계약으로 연결하며 모듈 순환·계층 위반·다른 소유자의 SQL 접근은 자동 검사합니다. 현재 구현과 검증 상태는 [모듈형 구현 계획](docs/architecture/modular-implementation-plan.md)을 따릅니다.
+
 <a id="quick-start"></a>
 
 ## 빠른 시작

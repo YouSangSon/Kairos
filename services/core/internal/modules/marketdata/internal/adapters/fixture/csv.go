@@ -1,0 +1,138 @@
+package fixture
+
+import (
+	"bytes"
+	"context"
+	"encoding/csv"
+	"errors"
+	"fmt"
+	"io"
+	"math/big"
+	"omni-folio/services/core/internal/codec"
+	"omni-folio/services/core/internal/exact"
+	c "omni-folio/services/core/internal/modules/marketdata/contracts"
+	"os"
+	"reflect"
+	"regexp"
+	"time"
+)
+
+const (
+	maxMarketDataRows                    = 500
+	maxMarketDataBytes                   = 1 << 20
+	marketDataAdjustmentUnspecified      = "unspecified"
+	marketDataAdjustmentProviderAdjusted = "provider_adjusted"
+)
+
+var errMarketDataNotFound = c.ErrMarketDataNotFound
+var currencyCodePattern = regexp.MustCompile(`^[A-Z]{3}$`)
+
+type MarketDataPort = c.CandleSource
+type MarketDataSeries = c.MarketDataSeries
+type MarketDataBar = c.MarketDataBar
+
+type marketDataFixture struct{ series *MarketDataSeries }
+
+func (f *marketDataFixture) Candles(_ context.Context, symbol, interval string) (*MarketDataSeries, error) {
+	if f.series.Symbol != symbol || f.series.Interval != interval {
+		return nil, errMarketDataNotFound
+	}
+	return f.series, nil
+}
+
+func New(path string) (MarketDataPort, error) {
+	if path == "" {
+		return nil, nil
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("open market fixture: %w", err)
+	}
+	defer f.Close()
+	return Parse(f)
+}
+
+func Parse(source io.Reader) (MarketDataPort, error) {
+	input, err := io.ReadAll(io.LimitReader(source, maxMarketDataBytes+1))
+	if err != nil {
+		return nil, errors.New("market fixture is unreadable")
+	}
+	if len(input) > maxMarketDataBytes {
+		return nil, fmt.Errorf("market fixture must not exceed %d bytes", maxMarketDataBytes)
+	}
+	records, err := csv.NewReader(bytes.NewReader(input)).ReadAll()
+	if err != nil {
+		return nil, errors.New("market fixture must be valid CSV")
+	}
+	header := []string{"bar_at", "symbol", "venue", "timezone", "interval", "open", "high", "low", "close", "volume"}
+	identifiedHeader := append(append([]string{}, header...), "instrument_id", "currency")
+	if len(records) < 2 || (!reflect.DeepEqual(records[0], header) && !reflect.DeepEqual(records[0], identifiedHeader)) {
+		return nil, errors.New("market fixture requires the canonical header and 1 to 500 rows")
+	}
+	if len(records)-1 > maxMarketDataRows {
+		return nil, fmt.Errorf("market fixture must not contain more than %d rows", maxMarketDataRows)
+	}
+	series := &MarketDataSeries{
+		Symbol: records[1][1], Venue: records[1][2], Timezone: records[1][3], Interval: records[1][4],
+		PriceAdjustment: marketDataAdjustmentUnspecified,
+	}
+	if len(records[0]) == len(identifiedHeader) {
+		series.InstrumentID, series.Currency = &records[1][10], &records[1][11]
+		if !validMarketDataIdentity(series) {
+			return nil, errors.New("market fixture instrument_id and currency are invalid")
+		}
+	}
+	if series.Symbol == "" || series.Venue == "" || series.Timezone == "" || series.Interval == "" {
+		return nil, errors.New("market fixture symbol, venue, timezone, and interval are required")
+	}
+	var previous time.Time
+	for rowNumber, row := range records[1:] {
+		if row[1] != series.Symbol || row[2] != series.Venue || row[3] != series.Timezone || row[4] != series.Interval {
+			return nil, fmt.Errorf("market fixture row %d has inconsistent metadata", rowNumber+2)
+		}
+		if series.InstrumentID != nil && (row[10] != *series.InstrumentID || row[11] != *series.Currency) {
+			return nil, fmt.Errorf("market fixture row %d has inconsistent identity", rowNumber+2)
+		}
+		at, err := time.Parse(time.RFC3339, row[0])
+		if err != nil {
+			return nil, fmt.Errorf("market fixture row %d has invalid bar_at", rowNumber+2)
+		}
+		if !previous.IsZero() && !at.After(previous) {
+			return nil, fmt.Errorf("market fixture row %d is not strictly ordered by bar_at", rowNumber+2)
+		}
+		previous = at
+		if err := validateMarketDataValues(row[5], row[6], row[7], row[8], row[9]); err != nil {
+			return nil, fmt.Errorf("market fixture row %d: %w", rowNumber+2, err)
+		}
+		series.Bars = append(series.Bars, MarketDataBar{At: at.UTC().Format(time.RFC3339Nano), Open: row[5], High: row[6], Low: row[7], Close: row[8], Volume: row[9]})
+	}
+	return &marketDataFixture{series: series}, nil
+}
+
+func validMarketDataIdentity(series *MarketDataSeries) bool {
+	if series.InstrumentID == nil && series.Currency == nil {
+		return true
+	}
+	return series.InstrumentID != nil && series.Currency != nil &&
+		codec.SafeID(*series.InstrumentID) && currencyCodePattern.MatchString(*series.Currency)
+}
+
+func validateMarketDataValues(open, high, low, close, volume string) error {
+	prices := make([]*big.Rat, 4)
+	for index, item := range []struct{ name, raw string }{{"open", open}, {"high", high}, {"low", low}, {"close", close}} {
+		value, err := exact.ParseDecimal(item.raw)
+		if err != nil || value.Sign() <= 0 {
+			return fmt.Errorf("has invalid %s", item.name)
+		}
+		prices[index] = value
+	}
+	parsedVolume, err := exact.ParseDecimal(volume)
+	if err != nil || parsedVolume.Sign() < 0 {
+		return errors.New("has invalid volume")
+	}
+	if prices[2].Cmp(prices[0]) > 0 || prices[2].Cmp(prices[3]) > 0 ||
+		prices[0].Cmp(prices[1]) > 0 || prices[3].Cmp(prices[1]) > 0 {
+		return errors.New("has invalid OHLC range")
+	}
+	return nil
+}

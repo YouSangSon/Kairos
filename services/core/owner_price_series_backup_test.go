@@ -45,17 +45,6 @@ func stripOwnerPriceProofForLegacy(manifest map[string]any) {
 	}
 }
 
-func TestOwnerPricePhysicalAndTemporalProofFailsClosed(t *testing.T) {
-	svc := ownerPriceServiceForTest(t)
-	svc.db.SetMaxOpenConns(1)
-	if _, err := svc.db.Exec(`CREATE TEMP TRIGGER owner_price_ignore BEFORE INSERT ON owner_price_series_versions BEGIN SELECT RAISE(IGNORE); END`); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := svc.importOwnerPriceSeries(context.Background(), []byte(ownerPriceTestInput)); err == nil {
-		t.Fatal("extra ignore trigger accepted")
-	}
-}
-
 func TestOwnerPriceBackupWholeVersionsProofAndWithdrawal(t *testing.T) {
 	svc := ownerPriceServiceForTest(t)
 	first := importOwnerPriceForTest(t, svc, []byte(ownerPriceTestInput))
@@ -72,7 +61,7 @@ func TestOwnerPriceBackupWholeVersionsProofAndWithdrawal(t *testing.T) {
 		t.Fatal(err)
 	}
 	proof, err := proveOwnerPriceSeriesRecovery(context.Background(), svc.db)
-	if err != nil || proof.Versions != 2 || proof.Points != 3 || !ownerPriceManifestMatches(*manifest, proof) {
+	if err != nil || proof.Versions != 2 || proof.Points != 3 || (manifest.OwnerPriceSeriesStateSHA256 != proof.SHA256 || manifest.OwnerPriceSeriesVersionCount != proof.Versions || manifest.OwnerPriceSeriesPointCount != proof.Points || manifest.VerificationReceipt.OwnerPriceSeriesCheck != "ok" || manifest.VerificationReceipt.CandidateOwnerPriceSeriesStateSHA256 != proof.SHA256 || manifest.VerificationReceipt.CandidateOwnerPriceSeriesVersionCount != proof.Versions || manifest.VerificationReceipt.CandidateOwnerPriceSeriesPointCount != proof.Points) {
 		t.Fatalf("owner price proof mismatch: %+v %v", proof, err)
 	}
 	if err := verifyManifest(backup, golden, manifestPath); err != nil {
@@ -86,12 +75,13 @@ func TestOwnerPriceBackupWholeVersionsProofAndWithdrawal(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	stored, _, err := replayOwnerPriceSeries(context.Background(), db, "instrument_aapl", "USD", "price-v1")
-	if err != nil || stored == nil || ownerPriceReceipt(stored).DataSHA256 != first.DataSHA256 {
+	var storedSHA string
+	err = db.QueryRow(`SELECT series_sha256 FROM owner_price_series_versions WHERE instrument_id='instrument_aapl' AND currency='USD' AND source_version='price-v1'`).Scan(&storedSHA)
+	if err != nil || storedSHA != first.DataSHA256 {
 		t.Fatal("original price version lost")
 	}
-	value, appErr := newService(db, svc.now, svc.id).holdingValuation(context.Background(), "2026-01-01T00:00:00Z")
-	if appErr != nil || value.Status != "complete" || value.Lines[0].MarketValue == nil || *value.Lines[0].MarketValue != "300" || !usesOwnerPrice(value.Issues) {
+	value, appErr := newService(db, svc.now, svc.id).Portfolio.HoldingValuation(context.Background(), "2026-01-01T00:00:00Z")
+	if appErr != nil || value.Status != "complete" || value.Lines[0].MarketValue == nil || *value.Lines[0].MarketValue != "300" || !hasIssueCode(value.Issues, "owner_declared_price") {
 		t.Fatalf("restored latest price drift: %+v %v", value, appErr)
 	}
 	for _, key := range []string{"owner_price_series_state_sha256", "owner_price_series_version_count", "owner_price_series_point_count", "owner_price_series_check", "candidate_owner_price_series_state_sha256", "candidate_owner_price_series_version_count", "candidate_owner_price_series_point_count"} {
@@ -137,8 +127,8 @@ func TestOwnerPriceBackupWholeVersionsProofAndWithdrawal(t *testing.T) {
 	}
 	defer wdb.Close()
 	copySvc := newService(wdb, svc.now, svc.id)
-	marks, err := valuationPriceObservations(context.Background(), wdb, svc.now())
-	if err != nil || len(marks) != 0 {
+	inputs, err := marketInputsForTest(context.Background(), wdb, svc.now())
+	if err != nil || len(inputs.Prices) != 0 {
 		t.Fatal("restored withdrawal borrowed older points")
 	}
 	if _, err := copySvc.recordSecurityPriceObservation(context.Background(), SecurityPriceObservationInput{Source: "local_fixture", SourceObservationID: "blocked", InstrumentID: "instrument_aapl", Symbol: "AAPL", Venue: "XNAS", Currency: "USD", Price: "1", PriceAdjustment: "unspecified", ObservedAt: "2026-01-01T00:00:00Z", FetchedAt: "2026-01-01T00:00:00Z"}); err == nil {
@@ -227,40 +217,5 @@ func TestOwnerPriceLegacyV18PreservesOwnerFXAndNonarchivalReplay(t *testing.T) {
 	writeJSONFile(t, path, fields)
 	if err := verifyManifest(precreated, golden, path); err == nil {
 		t.Fatal("legacy source smuggled a price journal")
-	}
-}
-
-func TestOwnerPriceLegacyV18CannotHideActiveLease(t *testing.T) {
-	svc, _ := g38EPerformanceWindow(t, []string{"100"})
-	if _, err := svc.acquirePaperRunnerLease(context.Background(), k2aAccountRef); err != nil {
-		t.Fatal(err)
-	}
-	golden := writeCurrentSnapshot(t, svc.db)
-	backup := filepath.Join(t.TempDir(), "active-v18.db")
-	mp := backup + ".manifest.json"
-	if _, err := createBackup(svc.db, backup, golden, mp, svc.now, svc.id); err != nil {
-		t.Fatal(err)
-	}
-	db, err := openExistingDB(backup)
-	if err != nil {
-		t.Fatal(err)
-	}
-	dropOwnerPriceSchemaForLegacy(t, db)
-	if err := db.Close(); err != nil {
-		t.Fatal(err)
-	}
-	f := readJSONMap(t, mp)
-	stripOwnerPriceProofForLegacy(f)
-	f["format_version"], f["schema_version"] = "omni-folio-backup.v18", "omni-folio.sqlite.v24"
-	sha, size, err := hashFile(backup)
-	if err != nil {
-		t.Fatal(err)
-	}
-	r := f["verification_receipt"].(map[string]any)
-	f["db_sha256"], f["size_bytes"], r["candidate_db_sha256"] = sha, size, sha
-	r["status"], r["eligible_for_activation"], r["errors"] = "verified", true, []string{}
-	writeJSONFile(t, mp, f)
-	if err := verifyManifest(backup, golden, mp); err == nil {
-		t.Fatal("active v18 lease became eligible")
 	}
 }

@@ -1,0 +1,324 @@
+package sqlite
+
+import (
+	"context"
+	"crypto/sha256"
+	"database/sql"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"omni-folio/services/core/internal/modules/trading/contracts"
+	"omni-folio/services/core/internal/modules/trading/internal/application"
+	"omni-folio/services/core/internal/modules/trading/internal/domain"
+	"time"
+)
+
+const (
+	paperMarketBarSchema         = "paper-market-bar.v1"
+	capitalizedPaperSignalSchema = "paper-signal.v3"
+	canonicalPaperTimeLayout     = "2006-01-02T15:04:05.000000000Z"
+)
+
+type PaperMarketBarObservation = contracts.PaperMarketBarObservation
+
+type PaperSignalEvent = contracts.PaperSignalEvent
+
+type paperMarketRecoveryProof = application.MarketRecoveryProof
+
+func (s *Store) RecordPaperMarketBar(ctx context.Context, input PaperMarketBarObservation) (*PaperMarketBarObservation, error) {
+	if s == nil || s.db == nil {
+		return nil, errors.New("paper market data recorder is not configured")
+	}
+	return s.business().RecordPaperMarketBar(ctx, input)
+}
+
+func recordPaperMarketBarTx(ctx context.Context, tx *transaction, bar PaperMarketBarObservation) (*PaperMarketBarObservation, error) {
+	if tx == nil {
+		return nil, errors.New("paper market transaction is required")
+	}
+	return application.RecordPaperMarketBarTx(ctx, &writeScope{tx: tx}, bar)
+}
+
+func (s *Store) recordPaperSignalEventTx(ctx context.Context, tx *transaction, accountRef string, signal PaperSignal) (*PaperSignalEvent, error) {
+	if s == nil || s.db == nil || tx == nil {
+		return nil, errors.New("paper signal recorder is not configured")
+	}
+	return s.business().RecordPaperSignalEventTx(ctx, &writeScope{store: s, tx: tx}, accountRef, signal)
+}
+
+func provePaperMarketRecovery(ctx context.Context, q orderQuerier) (paperMarketRecoveryProof, error) {
+	if _, err := proveOrderRecovery(ctx, q); err != nil {
+		return paperMarketRecoveryProof{}, fmt.Errorf("paper market order recovery: %w", err)
+	}
+	if _, err := replayStrategyRegistry(ctx, q); err != nil {
+		return paperMarketRecoveryProof{}, fmt.Errorf("paper market strategy recovery: %w", err)
+	}
+	return replayPaperMarketRecovery(ctx, q)
+}
+
+func replayPaperMarketRecovery(ctx context.Context, q orderQuerier) (paperMarketRecoveryProof, error) {
+	hash := sha256.New()
+	encoder := json.NewEncoder(hash)
+	rows, err := q.QueryContext(ctx, `SELECT sequence,observation_id,schema_version,source,source_observation_id,input_data_sha256,
+		symbol,venue,currency,interval,timezone,price_adjustment,open,high,low,close,volume,open_at,close_at,source_available_at,
+		fetched_at,record_sha256,record_json,recorded_at FROM paper_market_bar_observations ORDER BY sequence`)
+	if err != nil {
+		return paperMarketRecoveryProof{}, err
+	}
+	type storedBar struct {
+		sequence              int64
+		bar                   PaperMarketBarObservation
+		recordSHA, recordJSON string
+	}
+	var bars []storedBar
+	for rows.Next() {
+		var item storedBar
+		if err := rows.Scan(&item.sequence, &item.bar.ObservationID, &item.bar.SchemaVersion, &item.bar.Source,
+			&item.bar.SourceObservationID, &item.bar.InputDataSHA256, &item.bar.Symbol, &item.bar.Venue, &item.bar.Currency,
+			&item.bar.Interval, &item.bar.Timezone, &item.bar.PriceAdjustment, &item.bar.Open, &item.bar.High, &item.bar.Low,
+			&item.bar.Close, &item.bar.Volume, &item.bar.OpenAt, &item.bar.CloseAt, &item.bar.SourceAvailableAt, &item.bar.FetchedAt,
+			&item.recordSHA, &item.recordJSON, &item.bar.RecordedAt); err != nil {
+			rows.Close()
+			return paperMarketRecoveryProof{}, err
+		}
+		bars = append(bars, item)
+	}
+	if err := closeRows(rows); err != nil {
+		return paperMarketRecoveryProof{}, err
+	}
+	for index, item := range bars {
+		if item.sequence != int64(index+1) {
+			return paperMarketRecoveryProof{}, fmt.Errorf("paper market bar sequence %d is invalid", item.sequence)
+		}
+		if err := validateStoredPaperMarketBar(item.bar, item.recordSHA, item.recordJSON); err != nil {
+			return paperMarketRecoveryProof{}, fmt.Errorf("paper market bar %q is invalid: %w", item.bar.ObservationID, err)
+		}
+		if err := encoder.Encode([]any{"paper_market_bar_observations", item.sequence, item.bar, item.recordSHA, item.recordJSON}); err != nil {
+			return paperMarketRecoveryProof{}, err
+		}
+	}
+
+	rows, err = q.QueryContext(ctx, `SELECT sequence,event_id,schema_version,account_ref,paper_accounting_session_id,
+		strategy_result_sha256,strategy_selection_event_id,execution_policy_sha256,signal_id,signal_bar_observation_id,data_sha256,
+		symbol,target_quantity,data_as_of,generated_at,expires_at,market_observation_sequence_cutoff,record_sha256,record_json,recorded_at
+		FROM paper_signal_events ORDER BY sequence`)
+	if err != nil {
+		return paperMarketRecoveryProof{}, err
+	}
+	type storedSignal struct {
+		sequence              int64
+		event                 PaperSignalEvent
+		recordSHA, recordJSON string
+	}
+	var signals []storedSignal
+	for rows.Next() {
+		var item storedSignal
+		if err := rows.Scan(&item.sequence, &item.event.EventID, &item.event.SchemaVersion, &item.event.AccountRef,
+			&item.event.PaperAccountingSessionID, &item.event.StrategyResultSHA256, &item.event.StrategySelectionEventID,
+			&item.event.ExecutionPolicySHA256, &item.event.SignalID, &item.event.SignalBarObservationID, &item.event.DataSHA256,
+			&item.event.Symbol, &item.event.TargetQuantity, &item.event.DataAsOf, &item.event.GeneratedAt, &item.event.ExpiresAt,
+			&item.event.MarketObservationSequenceCutoff, &item.recordSHA, &item.recordJSON, &item.event.RecordedAt); err != nil {
+			rows.Close()
+			return paperMarketRecoveryProof{}, err
+		}
+		signals = append(signals, item)
+	}
+	if err := closeRows(rows); err != nil {
+		return paperMarketRecoveryProof{}, err
+	}
+	for index, item := range signals {
+		if item.sequence != int64(index+1) {
+			return paperMarketRecoveryProof{}, fmt.Errorf("paper signal sequence %d is invalid", item.sequence)
+		}
+		if err := validateStoredPaperSignalEvent(ctx, q, item.event, item.recordSHA, item.recordJSON); err != nil {
+			return paperMarketRecoveryProof{}, fmt.Errorf("paper signal %q is invalid: %w", item.event.EventID, err)
+		}
+		if err := encoder.Encode([]any{"paper_signal_events", item.sequence, item.event, item.recordSHA, item.recordJSON}); err != nil {
+			return paperMarketRecoveryProof{}, err
+		}
+	}
+	return paperMarketRecoveryProof{SHA256: hex.EncodeToString(hash.Sum(nil)), Bars: len(bars), Signals: len(signals)}, nil
+}
+
+func validatePaperMarketBar(bar PaperMarketBarObservation) error {
+	return domain.ValidatePaperMarketBar(domain.PaperMarketBarObservation(bar))
+}
+
+func validateCapitalizedPaperSignal(signal PaperSignal, now time.Time) error {
+	return domain.ValidateCapitalizedPaperSignal(domain.PaperSignal(signal), now)
+}
+
+func validateCapitalizedPaperSignalShape(signal PaperSignal) error {
+	return domain.ValidateCapitalizedPaperSignalShape(domain.PaperSignal(signal))
+}
+
+func validatePaperSignalEvent(event PaperSignalEvent) error {
+	return domain.ValidatePaperSignalEvent(domain.PaperSignalEvent(event))
+}
+
+func validateStoredPaperMarketBar(bar PaperMarketBarObservation, recordSHA, recordJSON string) error {
+	if err := validatePaperMarketBar(bar); err != nil {
+		return err
+	}
+	canonical, actualSHA, err := orderJSONHash(bar)
+	if err != nil || string(canonical) != recordJSON || actualSHA != recordSHA {
+		return errors.New("paper market bar record hash mismatch")
+	}
+	return nil
+}
+
+func validateStoredPaperSignalEvent(ctx context.Context, q orderQuerier, event PaperSignalEvent, recordSHA, recordJSON string) error {
+	if err := validatePaperSignalEvent(event); err != nil {
+		return err
+	}
+	session, found, err := loadPaperAccountingSession(ctx, q, event.AccountRef)
+	if err != nil || !found || session.SessionID != event.PaperAccountingSessionID || session.ExecutionPolicySHA256 != event.ExecutionPolicySHA256 {
+		return errors.New("paper signal session binding is invalid")
+	}
+	var artifactJSON, selectedResult string
+	if err := q.QueryRowContext(ctx, `SELECT artifact_json FROM strategy_research_evidence WHERE result_sha256=?`, event.StrategyResultSHA256).Scan(&artifactJSON); err != nil {
+		return err
+	}
+	evidence, err := decodeStrategyArtifact([]byte(artifactJSON))
+	if err != nil || evidence.ResultSHA256 != event.StrategyResultSHA256 || evidence.ExecutionPolicy.SHA256 != event.ExecutionPolicySHA256 {
+		return errors.New("paper signal execution policy binding is invalid")
+	}
+	if err := q.QueryRowContext(ctx, `SELECT selected_result_sha256 FROM strategy_selection_events WHERE event_id=?`, event.StrategySelectionEventID).Scan(&selectedResult); err != nil || selectedResult != event.StrategyResultSHA256 {
+		return errors.New("paper signal selection binding is invalid")
+	}
+	if err := validatePaperPromotionSignalCutoff(ctx, q, event.StrategyResultSHA256, event.StrategySelectionEventID, event.DataAsOf); err != nil {
+		return err
+	}
+	bar, barSequence, err := loadPaperMarketBarByID(ctx, q, event.SignalBarObservationID)
+	if err != nil {
+		return err
+	}
+	generatedAt, _ := parsePaperTime(event.GeneratedAt)
+	availableAt, _ := parsePaperTime(bar.SourceAvailableAt)
+	if bar.InputDataSHA256 != event.DataSHA256 || bar.Symbol != event.Symbol || bar.CloseAt != event.DataAsOf || generatedAt.Before(availableAt) ||
+		barSequence > event.MarketObservationSequenceCutoff {
+		return errors.New("paper signal bar binding is invalid")
+	}
+	var latest, cutoffExists int64
+	if err := q.QueryRowContext(ctx, `SELECT COALESCE(MAX(sequence),0) FROM paper_market_bar_observations
+		WHERE source=? AND symbol=? AND venue=? AND interval=? AND timezone=? AND price_adjustment=? AND sequence<=?`,
+		bar.Source, bar.Symbol, bar.Venue, bar.Interval, bar.Timezone, bar.PriceAdjustment, event.MarketObservationSequenceCutoff).Scan(&latest); err != nil {
+		return err
+	}
+	if err := q.QueryRowContext(ctx, `SELECT COUNT(*) FROM paper_market_bar_observations WHERE sequence=?`, event.MarketObservationSequenceCutoff).Scan(&cutoffExists); err != nil {
+		return err
+	}
+	if latest != barSequence || cutoffExists != 1 {
+		return errors.New("paper signal cutoff binding is invalid")
+	}
+	var legacyOrders int
+	if err := q.QueryRowContext(ctx, `SELECT COUNT(*) FROM order_idempotency WHERE mode='paper' AND account_ref=?
+		AND json_extract(intent_json, '$.signal_schema_version') IN ('paper-signal.v1','paper-signal.v2')`, event.AccountRef).Scan(&legacyOrders); err != nil {
+		return err
+	}
+	if legacyOrders != 0 {
+		return errors.New("paper signal account contains a legacy paper order")
+	}
+	canonical, actualSHA, err := orderJSONHash(event)
+	if err != nil || string(canonical) != recordJSON || actualSHA != recordSHA {
+		return errors.New("paper signal record hash mismatch")
+	}
+	return nil
+}
+
+func loadPaperMarketBarBySource(ctx context.Context, q orderQuerier, source, sourceID string) (*PaperMarketBarObservation, bool, error) {
+	row := q.QueryRowContext(ctx, `SELECT observation_id,schema_version,source,source_observation_id,input_data_sha256,symbol,venue,currency,
+		interval,timezone,price_adjustment,open,high,low,close,volume,open_at,close_at,source_available_at,fetched_at,record_sha256,record_json,recorded_at
+		FROM paper_market_bar_observations WHERE source=? AND source_observation_id=?`, source, sourceID)
+	bar, _, found, err := scanPaperMarketBar(row, false)
+	return bar, found, err
+}
+
+func loadPaperMarketBarByID(ctx context.Context, q orderQuerier, observationID string) (*PaperMarketBarObservation, int64, error) {
+	row := q.QueryRowContext(ctx, `SELECT sequence,observation_id,schema_version,source,source_observation_id,input_data_sha256,symbol,venue,currency,
+		interval,timezone,price_adjustment,open,high,low,close,volume,open_at,close_at,source_available_at,fetched_at,record_sha256,record_json,recorded_at
+		FROM paper_market_bar_observations WHERE observation_id=?`, observationID)
+	bar, sequence, found, err := scanPaperMarketBar(row, true)
+	if err != nil {
+		return nil, 0, err
+	}
+	if !found {
+		return nil, 0, errors.New("paper signal bar does not exist")
+	}
+	return bar, sequence, nil
+}
+
+func scanPaperMarketBar(row rowScanner, withSequence bool) (*PaperMarketBarObservation, int64, bool, error) {
+	var bar PaperMarketBarObservation
+	var sequence int64
+	var recordSHA, recordJSON string
+	values := []any{&bar.ObservationID, &bar.SchemaVersion, &bar.Source, &bar.SourceObservationID, &bar.InputDataSHA256,
+		&bar.Symbol, &bar.Venue, &bar.Currency, &bar.Interval, &bar.Timezone, &bar.PriceAdjustment, &bar.Open, &bar.High, &bar.Low,
+		&bar.Close, &bar.Volume, &bar.OpenAt, &bar.CloseAt, &bar.SourceAvailableAt, &bar.FetchedAt, &recordSHA, &recordJSON, &bar.RecordedAt}
+	if withSequence {
+		values = append([]any{&sequence}, values...)
+	}
+	err := row.Scan(values...)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, 0, false, nil
+	}
+	if err != nil {
+		return nil, 0, false, err
+	}
+	if err := validateStoredPaperMarketBar(bar, recordSHA, recordJSON); err != nil {
+		return nil, 0, false, err
+	}
+	return &bar, sequence, true, nil
+}
+
+func loadPaperSignalEvent(ctx context.Context, q orderQuerier, accountRef, signalID string) (*PaperSignalEvent, bool, error) {
+	row := q.QueryRowContext(ctx, `SELECT event_id,schema_version,account_ref,paper_accounting_session_id,strategy_result_sha256,
+		strategy_selection_event_id,execution_policy_sha256,signal_id,signal_bar_observation_id,data_sha256,symbol,target_quantity,
+		data_as_of,generated_at,expires_at,market_observation_sequence_cutoff,record_sha256,record_json,recorded_at
+		FROM paper_signal_events WHERE account_ref=? AND signal_id=?`, accountRef, signalID)
+	var event PaperSignalEvent
+	var recordSHA, recordJSON string
+	err := row.Scan(&event.EventID, &event.SchemaVersion, &event.AccountRef, &event.PaperAccountingSessionID,
+		&event.StrategyResultSHA256, &event.StrategySelectionEventID, &event.ExecutionPolicySHA256, &event.SignalID,
+		&event.SignalBarObservationID, &event.DataSHA256, &event.Symbol, &event.TargetQuantity, &event.DataAsOf, &event.GeneratedAt,
+		&event.ExpiresAt, &event.MarketObservationSequenceCutoff, &recordSHA, &recordJSON, &event.RecordedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	if err := validateStoredPaperSignalEvent(ctx, q, event, recordSHA, recordJSON); err != nil {
+		return nil, false, err
+	}
+	return &event, true, nil
+}
+
+func samePaperMarketBarInput(left, right PaperMarketBarObservation) bool {
+	return domain.SamePaperMarketBarInput(domain.PaperMarketBarObservation(left), domain.PaperMarketBarObservation(right))
+}
+
+func samePaperSignalInput(event PaperSignalEvent, signal PaperSignal) bool {
+	return domain.SamePaperSignalInput(domain.PaperSignalEvent(event), domain.PaperSignal(signal))
+}
+
+var validPaperTargetQuantity = domain.ValidPaperTargetQuantity
+
+var canonicalPaperTime = domain.CanonicalPaperTime
+
+var parsePaperTime = domain.ParsePaperTime
+
+var canonicalPaperTimes = domain.CanonicalPaperTimes
+
+var paperMarketBarObservationID = domain.PaperMarketBarObservationID
+
+var paperSignalEventID = domain.PaperSignalEventID
+
+func closeRows(rows rowset) error {
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	return rows.Close()
+}

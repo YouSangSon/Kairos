@@ -247,10 +247,24 @@ func TestLedgerReplayLegacyV15ArchivePreservesSourceAndGolden(t *testing.T) {
 		t.Fatal(err)
 	}
 	downgradeLedgerReplayForTest(t, db)
-	legacy, err := snapshotFromPolicy(context.Background(), db, legacyFIFOCostBasisPolicy, -1)
+	legacyCandidate := filepath.Join(t.TempDir(), "legacy-replay-preview.db")
+	if err := copyFile(backup, legacyCandidate); err != nil {
+		t.Fatal(err)
+	}
+	legacyDB, err := openExistingDB(legacyCandidate)
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := migrate(legacyDB); err != nil {
+		legacyDB.Close()
+		t.Fatal(err)
+	}
+	legacyPreview, err := previewLedgerReplay(context.Background(), legacyDB)
+	closeErr := legacyDB.Close()
+	if err != nil || closeErr != nil {
+		t.Fatalf("legacy preview: %v close: %v", err, closeErr)
+	}
+	legacy := legacyPreview.LegacySnapshot
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
 	}

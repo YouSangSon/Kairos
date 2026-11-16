@@ -6,6 +6,7 @@ import (
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	portfolioapi "omni-folio/services/core/internal/modules/portfolio/contracts"
 	"os"
 	"reflect"
 	"strings"
@@ -45,7 +46,7 @@ func TestPortfolioXIRRUsesRecordedExternalCashFlows(t *testing.T) {
 	}
 }
 
-func xirrHTTPReport(t *testing.T, svc *Service) *PortfolioXIRR {
+func xirrHTTPReport(t *testing.T, svc *Service) *portfolioapi.PortfolioXIRR {
 	t.Helper()
 	w := httptest.NewRecorder()
 	svc.routes().ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/v1/portfolio/xirr", nil))
@@ -60,7 +61,7 @@ func xirrHTTPReport(t *testing.T, svc *Service) *PortfolioXIRR {
 			t.Fatalf("private field leaked: %s", private)
 		}
 	}
-	var report PortfolioXIRR
+	var report portfolioapi.PortfolioXIRR
 	if err := json.Unmarshal(w.Body.Bytes(), &report); err != nil {
 		t.Fatal(err)
 	}

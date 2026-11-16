@@ -1,0 +1,14 @@
+{
+ "internal/exact/exact.go": {
+  "FIFOAllocation": "5df290699dd8b2efab620f3c04cce2638e86545cdea0fe4608a694a2e11481e8",
+  "FormatDecimal": "04fd2bec7dc72dc64c5856fcffdb4fe1136493e908cbf985914c707bd29f581d",
+  "ParseDecimal": "f7853de024ac0799f89f52db93b3b7258bdbdf5de10959ba2d216ef8539aafe5",
+  "QuantizeHalfEven": "f38840bd104063138fc088138f566f63465498164041d692a158674186738900",
+  "import..\"errors\"": "2af1a21f27599575cfde83c5270782de287338d14ee3677f2f1417a16a128847",
+  "import..\"fmt\"": "4a829123137dd0f0247cac32033fcb516bf9b5581044a790840864e46c03e136",
+  "import..\"math/big\"": "6f603dc07f421aa91fbaeb6ffc3c196dbbf29612e0e9dd1993a2255cacb64f62",
+  "import..\"regexp\"": "302548a259b6e9cd1c81ec8a8974928f34c6ac1e568f012eac5b7832a9bf8dc3",
+  "import..\"strings\"": "ae55c5b4b4d3f34c5c2eb943366eb54cb73698f321759e1346aae68b414ebee8",
+  "var.decimalPattern": "a430a9d44d4133535528ca126b4149cdbb4538358d86f1dea1b0e9efec8a56b1"
+ }
+}

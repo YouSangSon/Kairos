@@ -1,0 +1,28 @@
+package sqlite
+
+import marketcodec "omni-folio/services/core/internal/modules/marketdata/internal/adapters/codec"
+
+var validateFXObservationInput = marketcodec.ValidateFXObservationInput
+var validateFXObservation = marketcodec.ValidateFXObservation
+var fxObservationSHA = marketcodec.FxObservationSHA
+var validateFXObservationQuery = marketcodec.ValidateFXObservationQuery
+var validSecurityPriceObservationSource = marketcodec.ValidSecurityPriceObservationSource
+var kiwoomSecurityPriceObservationSource = marketcodec.KiwoomSecurityPriceObservationSource
+var validateSecurityPriceObservationInput = marketcodec.ValidateSecurityPriceObservationInput
+var validateSecurityPriceObservation = marketcodec.ValidateSecurityPriceObservation
+var securityPriceObservationSHA = marketcodec.SecurityPriceObservationSHA
+var validateSecurityPriceObservationQuery = marketcodec.ValidateSecurityPriceObservationQuery
+var kiwoomLatestTradeObservationID = marketcodec.KiwoomLatestTradeObservationID
+var validateInstrumentListingInput = marketcodec.ValidateInstrumentListingInput
+var validateInstrumentListingEvent = marketcodec.ValidateInstrumentListingEvent
+var instrumentListingEventSHA = marketcodec.InstrumentListingEventSHA
+var instrumentListingKey = marketcodec.InstrumentListingKey
+var decodeOwnerFXSeries = marketcodec.DecodeOwnerFXSeries
+var ownerFXRecordSHA = marketcodec.OwnerFXRecordSHA
+var decodeOwnerPriceSeries = marketcodec.DecodeOwnerPriceSeries
+var ownerPriceRecordSHA = marketcodec.OwnerPriceRecordSHA
+var benchmarkObject = marketcodec.BenchmarkObject
+var closedJSONObject = marketcodec.ClosedJSONObject
+var decodeBenchmarkSeries = marketcodec.DecodeBenchmarkSeries
+var sameBenchmarkDefinition = marketcodec.SameBenchmarkDefinition
+var benchmarkRecordSHA = marketcodec.BenchmarkRecordSHA

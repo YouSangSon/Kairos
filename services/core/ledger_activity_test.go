@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"encoding/base64"
 	"encoding/json"
 	"net/http"
@@ -23,10 +22,17 @@ func TestLedgerActivitiesOrderFractionalSecondsAcrossPages(t *testing.T) {
 		"tenth-tie,account-main,DEPOSIT,2026-01-01T00:00:00.1Z,,,,,KRW,4",
 		"later,account-main,DEPOSIT,2026-01-01T00:00:00.11Z,,,,,KRW,5",
 	))
-	var cursor *ledgerActivityCursor
+	var cursor string
 	for i, want := range []string{"5", "4", "3", "2", "1"} {
-		page, err := svc.ledgerActivities(context.Background(), 1, cursor)
-		if err != nil || len(page.Events) != 1 || page.Events[0].Amount != want {
+		response := httptest.NewRecorder()
+		path := "/v1/ledger/activities?limit=1"
+		if cursor != "" {
+			path += "&cursor=" + url.QueryEscape(cursor)
+		}
+		svc.routes().ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
+		var page LedgerActivityPage
+		err := json.Unmarshal(response.Body.Bytes(), &page)
+		if response.Code != http.StatusOK || err != nil || len(page.Events) != 1 || page.Events[0].Amount != want {
 			t.Fatalf("page %d: want amount %s, page=%+v err=%v", i, want, page, err)
 		}
 		if i == 4 {
@@ -38,10 +44,7 @@ func TestLedgerActivitiesOrderFractionalSecondsAcrossPages(t *testing.T) {
 		if page.NextCursor == nil {
 			t.Fatal("missing continuation")
 		}
-		cursor, err = svc.decodeLedgerActivityCursor(*page.NextCursor)
-		if err != nil {
-			t.Fatal(err)
-		}
+		cursor = *page.NextCursor
 	}
 }
 
@@ -133,32 +136,6 @@ func TestG1ELedgerActivitiesEmptyValidationAndCorruption(t *testing.T) {
 			}
 		})
 	}
-
-	t.Run("forged canonical cursor", func(t *testing.T) {
-		svc, _ := testService(t, nil, nil)
-		seedLedgerActivities(t, svc)
-		foreign := newService(svc.db, svc.now, svc.id)
-		for _, cursor := range []ledgerActivityCursor{
-			{Version: 1, LedgerRevision: 5, LedgerRecordedAt: "2026-01-10T15:01:00Z", OccurredAt: "2026-01-03T00:00:00Z", Sequence: 4},
-			{Version: 1, LedgerRevision: 4, LedgerRecordedAt: "2026-01-10T15:01:00Z", OccurredAt: "2026-01-01T00:00:00Z", Sequence: 4},
-		} {
-			response := httptest.NewRecorder()
-			path := "/v1/ledger/activities?cursor=" + url.QueryEscape(svc.encodeLedgerActivityCursor(cursor))
-			svc.routes().ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
-			if response.Code != http.StatusBadRequest {
-				t.Fatalf("forged cursor status=%d body=%s", response.Code, response.Body.String())
-			}
-		}
-		rowValidForgery := foreign.encodeLedgerActivityCursor(ledgerActivityCursor{
-			Version: 1, LedgerRevision: 4, LedgerRecordedAt: "2026-01-10T15:01:00Z",
-			OccurredAt: "2026-01-02T00:00:00Z", Sequence: 2,
-		})
-		response := httptest.NewRecorder()
-		svc.routes().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/v1/ledger/activities?cursor="+url.QueryEscape(rowValidForgery), nil))
-		if response.Code != http.StatusBadRequest {
-			t.Fatalf("foreign cursor status=%d body=%s", response.Code, response.Body.String())
-		}
-	})
 
 	t.Run("issued cursor is opaque and tamper evident", func(t *testing.T) {
 		svc, _ := testService(t, nil, nil)

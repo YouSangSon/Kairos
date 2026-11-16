@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	portfolioapi "omni-folio/services/core/internal/modules/portfolio/contracts"
 	"os"
 	"reflect"
 	"strings"
@@ -26,7 +27,7 @@ func benchmarkPortfolioForTest(t *testing.T) *Service {
 	return svc
 }
 
-func benchmarkHTTPReport(t *testing.T, svc *Service) *PortfolioBenchmarks {
+func benchmarkHTTPReport(t *testing.T, svc *Service) *portfolioapi.PortfolioBenchmarks {
 	t.Helper()
 	w := httptest.NewRecorder()
 	svc.routes().ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/v1/portfolio/benchmarks", nil))
@@ -41,14 +42,14 @@ func benchmarkHTTPReport(t *testing.T, svc *Service) *PortfolioBenchmarks {
 			t.Fatalf("private field leaked: %s", private)
 		}
 	}
-	var report PortfolioBenchmarks
+	var report portfolioapi.PortfolioBenchmarks
 	if err := json.Unmarshal(w.Body.Bytes(), &report); err != nil {
 		t.Fatal(err)
 	}
 	return &report
 }
 
-func assertBenchmarkGoldenState(t *testing.T, name string, report *PortfolioBenchmarks) {
+func assertBenchmarkGoldenState(t *testing.T, name string, report *portfolioapi.PortfolioBenchmarks) {
 	t.Helper()
 	var states struct {
 		Reports map[string]json.RawMessage `json:"reports"`
@@ -87,7 +88,7 @@ func TestPortfolioBenchmarksComparesKRWAndUSDWithOneTWRObservation(t *testing.T)
 		t.Fatalf("same-period benchmark comparison unavailable: HTTP %d %s", w.Code, w.Body.String())
 	}
 	var report struct {
-		Portfolio  PortfolioTWR `json:"portfolio"`
+		Portfolio  portfolioapi.PortfolioTWR `json:"portfolio"`
 		Benchmarks []struct {
 			Series struct {
 				Currency string `json:"currency"`
@@ -271,7 +272,7 @@ func TestPortfolioBenchmarksAbsenceQueryCancellationAndUnavailableIntegrity(t *t
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, appErr := svc.portfolioBenchmarks(ctx); appErr == nil {
+	if _, appErr := svc.Portfolio.Benchmarks(ctx); appErr == nil {
 		t.Fatal("cancellation returned a financial report")
 	}
 	for _, state := range []string{"empty", "unavailable"} {
@@ -358,7 +359,7 @@ func TestPortfolioBenchmarksOpenAPIContractMatchesRuntimeShapes(t *testing.T) {
 		t.Fatal(err)
 	}
 	schemas := api["components"].(map[string]any)["schemas"].(map[string]any)
-	for name, value := range map[string]any{"PortfolioBenchmarks": PortfolioBenchmarks{}, "PortfolioBenchmark": PortfolioBenchmark{}, "BenchmarkSeriesSummary": BenchmarkSeriesReceipt{}, "BenchmarkIndexMark": BenchmarkIndexPoint{}, "BenchmarkFXMark": BenchmarkFXMark{}, "BenchmarkRateResult": BenchmarkRateResult{}} {
+	for name, value := range map[string]any{"PortfolioBenchmarks": portfolioapi.PortfolioBenchmarks{}, "PortfolioBenchmark": portfolioapi.PortfolioBenchmark{}, "BenchmarkSeriesSummary": BenchmarkSeriesReceipt{}, "BenchmarkIndexMark": BenchmarkIndexPoint{}, "BenchmarkFXMark": portfolioapi.BenchmarkFXMark{}, "BenchmarkRateResult": portfolioapi.BenchmarkRateResult{}} {
 		runtime, err := json.Marshal(value)
 		if err != nil {
 			t.Fatal(err)

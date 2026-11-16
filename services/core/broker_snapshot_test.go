@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -376,15 +378,13 @@ func TestG4HLatestRejectsReconciliationMetadataMismatch(t *testing.T) {
 	if err := svc.db.QueryRow(`SELECT record_json FROM broker_snapshot_reconciliations WHERE reconciliation_id=?`, stored.ReconciliationID).Scan(&raw); err != nil {
 		t.Fatal(err)
 	}
-	var record brokerReconciliationRecord
-	if err := json.Unmarshal([]byte(raw), &record); err != nil {
-		t.Fatal(err)
+	binding := `"snapshot_id":"` + stored.SnapshotID + `"`
+	if strings.Count(raw, binding) != 1 {
+		t.Fatal("snapshot binding fixture is missing or ambiguous")
 	}
-	record.SnapshotID = "broker_snapshot_different"
-	encoded, hash, err := orderJSONHash(&record)
-	if err != nil {
-		t.Fatal(err)
-	}
+	encoded := []byte(strings.Replace(raw, binding, `"snapshot_id":"broker_snapshot_different"`, 1))
+	digest := sha256.Sum256(encoded)
+	hash := hex.EncodeToString(digest[:])
 	if _, err := svc.db.Exec(`UPDATE broker_snapshot_reconciliations SET record_sha256=?,record_json=? WHERE reconciliation_id=?`, hash, string(encoded), stored.ReconciliationID); err != nil {
 		t.Fatal(err)
 	}

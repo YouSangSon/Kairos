@@ -85,6 +85,8 @@ flowchart LR
 
 决策依据见 [`docs/adr/0001-runtime-and-monorepo.md`](docs/adr/0001-runtime-and-monorepo.md)，券商接入顺序和 UX 契约遵循 [`docs/broker-priority-and-ux.md`](docs/broker-priority-and-ux.md)。
 
+Go core 采用模块化单体架构，按业务责任和数据所有权划分模块。各模块的 domain 负责业务规则，application 协调用例，private adapter 实现 SQLite、HTTP、CLI 和 broker 连接。composition 通过小型公开契约连接模块，自动检查拒绝模块循环、层次违规和跨所有者的 SQL 访问。实现及验证状态见[模块化实现计划](docs/architecture/modular-implementation-plan.md)。
+
 <a id="quick-start"></a>
 
 ## 快速开始

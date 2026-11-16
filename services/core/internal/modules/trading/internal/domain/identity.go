@@ -1,0 +1,64 @@
+package domain
+
+import (
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"regexp"
+	"strings"
+	"time"
+	"unicode"
+	"unicode/utf8"
+)
+
+func SafeOrderID(raw string) bool {
+	if raw == "" || len(raw) > 128 || !utf8.ValidString(raw) {
+		return false
+	}
+	for _, r := range raw {
+		if unicode.IsControl(r) || unicode.IsSpace(r) {
+			return false
+		}
+	}
+	return true
+}
+
+func OrderAlias(raw, kind string) bool {
+	return orderAliasPattern.MatchString(raw) && strings.HasPrefix(raw, "kiwoom_"+kind+"_")
+}
+
+func CanonicalUTCTime(raw string) (time.Time, bool) {
+	value, err := time.Parse(time.RFC3339Nano, raw)
+	return value, err == nil && value.Location() == time.UTC && value.Format(time.RFC3339Nano) == raw
+}
+
+func PaperEventID(kind string, parts ...string) string {
+	hash := sha256.Sum256([]byte(strings.Join(parts, "\x00")))
+	return "paper_" + kind + "_" + hex.EncodeToString(hash[:16])
+}
+
+func PaperProviderAlias(kind string, parts ...string) string {
+	hash := sha256.Sum256([]byte(strings.Join(parts, "\x00")))
+	return "kiwoom_" + kind + "_" + base64.RawURLEncoding.EncodeToString(hash[:18])
+}
+
+var orderAliasPattern = regexp.MustCompile(`^kiwoom_(account|order|execution)_[A-Za-z0-9_-]{24}$`)
+
+func AccountingSessionID(accountRef, resultSHA256, selectionEventID, policySHA256 string) string {
+	hash := sha256.Sum256([]byte(strings.Join([]string{accountRef, resultSHA256, selectionEventID, policySHA256}, "\x00")))
+	return "paper_accounting_session_" + hex.EncodeToString(hash[:16])
+}
+
+func JSONHash(value any) ([]byte, string, error) {
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return nil, "", err
+	}
+	hash := sha256.Sum256(raw)
+	return raw, hex.EncodeToString(hash[:]), nil
+}
+func CanonicalUTCString(raw string) bool {
+	value, err := time.Parse(time.RFC3339Nano, raw)
+	return err == nil && value.UTC().Format(time.RFC3339Nano) == raw
+}

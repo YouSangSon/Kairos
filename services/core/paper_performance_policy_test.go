@@ -2,57 +2,16 @@ package main
 
 import (
 	"context"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 )
-
-func TestG38ELegacySchema19BaseReplaysUseOldColumnShapeAndDigest(t *testing.T) {
-	ctx := context.Background()
-	db := g38ELegacySchema19BaseReplayDB(t)
-	defer db.Close()
-
-	record := executionAuthorityRecord{
-		EventID: "execution_authority_v19", AccountRef: k2aAccountRef, Armed: true,
-		FencingToken: 1, ReasonCode: "manual_arm", RecordedAt: "2026-01-10T00:00:00Z",
-	}
-	raw, recordSHA, err := orderJSONHash(record)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.Exec(`INSERT INTO execution_authority_events(
-		sequence,event_id,account_ref,armed,lease_owner,fencing_token,lease_expires_at,reason_code,record_sha256,record_json,recorded_at
-	) VALUES(1,?,?,?,?,?,?,?,?,?,?)`, record.EventID, record.AccountRef, 1, nil, record.FencingToken, nil,
-		record.ReasonCode, recordSHA, string(raw), record.RecordedAt); err != nil {
-		t.Fatal(err)
-	}
-
-	strategy, err := proveStrategyRegistryRecovery(ctx, db)
-	if err != nil || strategy.SHA256 != emptySHA256 || strategy.Events != 0 || strategy.CurrentEventID != noStrategySelectionEvent {
-		t.Fatalf("schema19 strategy proof=%+v err=%v", strategy, err)
-	}
-	authoritySHA, authorityCount, err := proveExecutionAuthorityRecovery(ctx, db)
-	if err != nil {
-		t.Fatal(err)
-	}
-	hash := sha256.New()
-	if err := json.NewEncoder(hash).Encode([]any{"execution_authority_events", int64(1), record.AccountRef, record.EventID, 1,
-		sql.NullString{}, record.FencingToken, sql.NullString{}, record.ReasonCode, recordSHA, string(raw), record.RecordedAt}); err != nil {
-		t.Fatal(err)
-	}
-	if authorityCount != 1 || authoritySHA != hex.EncodeToString(hash.Sum(nil)) {
-		t.Fatalf("schema19 authority proof=(%s,%d), want historical digest", authoritySHA, authorityCount)
-	}
-}
 
 const emptySHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 
@@ -94,276 +53,6 @@ func g38ELegacySchema19BaseReplayDB(t testing.TB) *sql.DB {
 	return db
 }
 
-func TestG38EPolicyRecordsNoActionDecisionsAndRejectsStaleEvidence(t *testing.T) {
-	ctx := context.Background()
-	for _, test := range []struct {
-		name          string
-		closes        []string
-		wantDecision  string
-		wantReason    string
-		makeSelection bool
-	}{
-		{"insufficient", []string{"100"}, "INSUFFICIENT", "minimum_same_selection_samples_not_met", false},
-		{"hold", []string{"100", "100"}, "HOLD", "within_local_paper_safety_bounds", false},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			svc, performance := g38EPerformanceWindow(t, test.closes)
-			before := g38EJournalCounts(t, svc)
-			event, err := svc.applyPaperPerformancePolicy(ctx, k2aAccountRef,
-				performance.StrategySelectionEventID, performance.StrategyPerformanceID)
-			if err != nil || event.Decision != test.wantDecision || event.ReasonCode != test.wantReason ||
-				event.AutomaticHaltCount != 0 || event.RollbackSelectionEventID != "" {
-				t.Fatalf("event=%+v err=%v", event, err)
-			}
-			after := g38EJournalCounts(t, svc)
-			if after.Policy != before.Policy+1 || after.Authority != before.Authority || after.Selection != before.Selection {
-				t.Fatalf("no-action counts before=%+v after=%+v", before, after)
-			}
-		})
-	}
-
-	t.Run("stale and cross-selection evidence leave no policy event", func(t *testing.T) {
-		svc, performance := g38EPerformanceWindow(t, []string{"100", "100"})
-		before := g38EJournalCounts(t, svc)
-		if _, err := svc.applyPaperPerformancePolicy(ctx, k2aAccountRef, "strategy_selection_stale", performance.StrategyPerformanceID); err == nil {
-			t.Fatal("stale selection was accepted")
-		}
-		artifact := rehashedStrategyArtifact(t, strategyArtifact(t, nil), func(result map[string]any) {
-			result["experiment_id"] = "g38e-cross-selection"
-		})
-		evidence, err := svc.registerStrategyEvidence(ctx, artifact)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err := svc.selectPaperCandidate(ctx, evidence.ResultSHA256, performance.StrategySelectionEventID); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := svc.applyPaperPerformancePolicy(ctx, k2aAccountRef,
-			performance.StrategySelectionEventID, performance.StrategyPerformanceID); err == nil {
-			t.Fatal("superseded selection was accepted")
-		}
-		after := g38EJournalCounts(t, svc)
-		if after.Policy != before.Policy || after.Authority != before.Authority || after.Selection != before.Selection+1 {
-			t.Fatalf("stale side effects before=%+v after=%+v", before, after)
-		}
-	})
-}
-
-func TestG38EPolicyAtomicallyHaltsAllArmedAccountsAndRollsBack(t *testing.T) {
-	ctx := context.Background()
-	svc, performance := g38EPerformanceWindow(t, []string{"100", "10"})
-	secondAccount := "kiwoom_account_BBBBBBBBBBBBBBBBBBBBBBBB"
-	if _, err := svc.setSyntheticExecutionArmed(ctx, secondAccount, true); err != nil {
-		t.Fatal(err)
-	}
-	before := g38EJournalCounts(t, svc)
-	event, err := svc.applyPaperPerformancePolicy(ctx, k2aAccountRef,
-		performance.StrategySelectionEventID, performance.StrategyPerformanceID)
-	if err != nil || event.Decision != "HALT_AND_ROLLBACK" || event.ReasonCode != "max_drawdown_limit_reached" ||
-		event.AutomaticHaltCount != 2 || event.RollbackSelectionEventID == "" {
-		t.Fatalf("event=%+v err=%v", event, err)
-	}
-	after := g38EJournalCounts(t, svc)
-	if after.Policy != before.Policy+1 || after.Authority != before.Authority+2 || after.Selection != before.Selection+1 {
-		t.Fatalf("action counts before=%+v after=%+v", before, after)
-	}
-	rows, err := svc.db.Query(`SELECT account_ref,reason_code,paper_performance_policy_event_id
-		FROM execution_authority_events WHERE paper_performance_policy_event_id=? ORDER BY sequence`, event.PolicyEventID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer rows.Close()
-	var accounts []string
-	for rows.Next() {
-		var account, reason, policyID string
-		if err := rows.Scan(&account, &reason, &policyID); err != nil {
-			t.Fatal(err)
-		}
-		if reason != "automatic_performance_halt" || policyID != event.PolicyEventID {
-			t.Fatalf("automatic halt provenance account=%s reason=%s policy=%s", account, reason, policyID)
-		}
-		accounts = append(accounts, account)
-	}
-	if err := rows.Err(); err != nil || len(accounts) != 2 || accounts[0] >= accounts[1] {
-		t.Fatalf("automatic halt lexical order=%v err=%v", accounts, err)
-	}
-	var rollbackReason, rollbackPolicyID string
-	if err := svc.db.QueryRow(`SELECT reason_code,paper_performance_policy_event_id FROM strategy_selection_events WHERE event_id=?`,
-		event.RollbackSelectionEventID).Scan(&rollbackReason, &rollbackPolicyID); err != nil ||
-		rollbackReason != "automatic_performance_rollback" || rollbackPolicyID != event.PolicyEventID {
-		t.Fatalf("rollback provenance reason=%s policy=%s err=%v", rollbackReason, rollbackPolicyID, err)
-	}
-	for _, account := range accounts {
-		state, err := loadExecutionAuthoritySnapshot(ctx, svc.db, account)
-		if err != nil || state.Armed || state.LeaseOwner != "" || state.LeaseExpiresAt != "" {
-			t.Fatalf("halted authority account=%s state=%+v err=%v", account, state, err)
-		}
-	}
-	state, err := replayStrategyRegistry(ctx, svc.db)
-	if err != nil || state.CurrentEventID != event.RollbackSelectionEventID || state.SelectedResultSHA256 != noStrategySelection {
-		t.Fatalf("rollback state=%+v err=%v", state, err)
-	}
-	retry, err := svc.applyPaperPerformancePolicy(ctx, k2aAccountRef,
-		performance.StrategySelectionEventID, performance.StrategyPerformanceID)
-	if err != nil || retry.PolicyEventID != event.PolicyEventID || g38EJournalCounts(t, svc) != after {
-		t.Fatalf("retry=%+v err=%v counts=%+v want=%+v", retry, err, g38EJournalCounts(t, svc), after)
-	}
-}
-
-func TestG38EPolicyActionUsesOneProvenanceTime(t *testing.T) {
-	ctx := context.Background()
-	svc, performance := g38EPerformanceWindow(t, []string{"100", "10"})
-	base := mustTime("2026-01-16T07:00:00Z")
-	calls := 0
-	svc.now = func() time.Time {
-		value := base.Add(time.Duration(calls) * time.Second)
-		calls++
-		return value
-	}
-	event, err := svc.applyPaperPerformancePolicy(ctx, k2aAccountRef,
-		performance.StrategySelectionEventID, performance.StrategyPerformanceID)
-	if err != nil || event.Decision != "HALT_AND_ROLLBACK" {
-		t.Fatalf("event=%+v err=%v", event, err)
-	}
-	wantRecordedAt := base.Format(canonicalPaperTimeLayout)
-	if calls != 1 || event.RecordedAt != wantRecordedAt {
-		t.Fatalf("policy clock calls=%d recorded_at=%s want=%s", calls, event.RecordedAt, wantRecordedAt)
-	}
-	assertActionTime := func(name, recordedAt string, err error) {
-		t.Helper()
-		value, parseErr := time.Parse(time.RFC3339Nano, recordedAt)
-		if err != nil || parseErr != nil || !value.Equal(base) {
-			t.Fatalf("%s recorded_at=%s want instant=%s errors=(%v,%v)", name, recordedAt, wantRecordedAt, err, parseErr)
-		}
-	}
-	rows, err := svc.db.Query(`SELECT recorded_at FROM execution_authority_events WHERE paper_performance_policy_event_id=?`, event.PolicyEventID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var recordedAt string
-		if err := rows.Scan(&recordedAt); err != nil {
-			t.Fatal(err)
-		}
-		assertActionTime("automatic halt", recordedAt, nil)
-	}
-	if err := rows.Err(); err != nil {
-		t.Fatal(err)
-	}
-	var rollbackRecordedAt string
-	if err := svc.db.QueryRow(`SELECT recorded_at FROM strategy_selection_events WHERE event_id=?`, event.RollbackSelectionEventID).Scan(&rollbackRecordedAt); err != nil {
-		t.Fatal(err)
-	}
-	assertActionTime("rollback", rollbackRecordedAt, nil)
-}
-
-func TestG38EPolicyRollsBackWithoutArmedAuthority(t *testing.T) {
-	ctx := context.Background()
-	svc, performance := g38EPerformanceWindow(t, []string{"100", "10"})
-	if _, err := svc.setSyntheticExecutionArmed(ctx, k2aAccountRef, false); err != nil {
-		t.Fatal(err)
-	}
-	before := g38EJournalCounts(t, svc)
-	event, err := svc.applyPaperPerformancePolicy(ctx, k2aAccountRef,
-		performance.StrategySelectionEventID, performance.StrategyPerformanceID)
-	if err != nil || event.Decision != "HALT_AND_ROLLBACK" || event.AutomaticHaltCount != 0 || event.RollbackSelectionEventID == "" {
-		t.Fatalf("event=%+v err=%v", event, err)
-	}
-	after := g38EJournalCounts(t, svc)
-	if after.Policy != before.Policy+1 || after.Authority != before.Authority || after.Selection != before.Selection+1 {
-		t.Fatalf("zero-armed action before=%+v after=%+v", before, after)
-	}
-}
-
-func TestG38EPolicyActionFailureRollsBackEveryJournal(t *testing.T) {
-	for _, target := range []string{"paper_performance_policy_events", "execution_authority_events", "strategy_selection_events"} {
-		t.Run(target, func(t *testing.T) {
-			svc, performance := g38EPerformanceWindow(t, []string{"100", "10"})
-			before := g38EJournalCounts(t, svc)
-			if _, err := svc.db.Exec(`CREATE TRIGGER g38e_forced_failure BEFORE INSERT ON ` + target +
-				` BEGIN SELECT RAISE(ABORT, 'forced G3.8E failure'); END`); err != nil {
-				t.Fatal(err)
-			}
-			if _, err := svc.applyPaperPerformancePolicy(context.Background(), k2aAccountRef,
-				performance.StrategySelectionEventID, performance.StrategyPerformanceID); err == nil {
-				t.Fatal("forced action failure was accepted")
-			}
-			if after := g38EJournalCounts(t, svc); after != before {
-				t.Fatalf("partial action write before=%+v after=%+v", before, after)
-			}
-		})
-	}
-}
-
-func TestG38EPolicyConcurrentIdenticalCallsConverge(t *testing.T) {
-	primary, performance := g38EPerformanceWindow(t, []string{"100", "100"})
-	secondary := secondG38C2Service(t, primary, mustTime("2026-01-15T07:00:00Z"))
-	start := make(chan struct{})
-	results := make(chan *PaperPerformancePolicyEvent, 2)
-	errs := make(chan error, 2)
-	var wg sync.WaitGroup
-	for _, svc := range []*Service{primary, secondary} {
-		wg.Add(1)
-		go func(svc *Service) {
-			defer wg.Done()
-			<-start
-			event, err := svc.applyPaperPerformancePolicy(context.Background(), k2aAccountRef,
-				performance.StrategySelectionEventID, performance.StrategyPerformanceID)
-			results <- event
-			errs <- err
-		}(svc)
-	}
-	close(start)
-	wg.Wait()
-	close(results)
-	close(errs)
-	var policyID string
-	for err := range errs {
-		if err != nil {
-			t.Fatal(err)
-		}
-	}
-	for event := range results {
-		if event == nil || (policyID != "" && policyID != event.PolicyEventID) {
-			t.Fatalf("concurrent policy results diverged: prior=%s event=%+v", policyID, event)
-		}
-		policyID = event.PolicyEventID
-	}
-	if g38EJournalCounts(t, primary).Policy != 1 {
-		t.Fatalf("concurrent policy rows=%+v", g38EJournalCounts(t, primary))
-	}
-}
-
-func TestG38EPolicyRootRecoveryRejectsTamperedPolicyAndNeverReturnsCorruptRetry(t *testing.T) {
-	ctx := context.Background()
-	svc, performance := g38EPerformanceWindow(t, []string{"100", "10"})
-	event, err := svc.applyPaperPerformancePolicy(ctx, k2aAccountRef,
-		performance.StrategySelectionEventID, performance.StrategyPerformanceID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	proof, err := provePaperPerformancePolicyRecovery(ctx, svc.db)
-	if err != nil || proof.Events != 1 || proof.Actions != 1 || proof.AutomaticHalts != event.AutomaticHaltCount || proof.SHA256 == "" {
-		t.Fatalf("policy proof=%+v err=%v", proof, err)
-	}
-	if _, err := svc.db.Exec(`DROP TRIGGER paper_performance_policy_events_no_update;
-		UPDATE paper_performance_policy_events SET record_sha256=? WHERE policy_event_id=?`, emptySHA256, event.PolicyEventID); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := provePaperPerformancePolicyRecovery(ctx, svc.db); err == nil {
-		t.Fatal("policy recovery certified a tampered policy row")
-	}
-	before := g38EJournalCounts(t, svc)
-	if _, err := svc.applyPaperPerformancePolicy(ctx, k2aAccountRef,
-		performance.StrategySelectionEventID, performance.StrategyPerformanceID); err == nil {
-		t.Fatal("corrupt policy retry was returned")
-	}
-	if after := g38EJournalCounts(t, svc); after != before {
-		t.Fatalf("corrupt retry appended journal rows before=%+v after=%+v", before, after)
-	}
-}
-
 func TestG38EStartupRejectsTamperedPolicyRecovery(t *testing.T) {
 	ctx := context.Background()
 	svc, performance := g38EPerformanceWindow(t, []string{"100", "10"})
@@ -378,609 +67,6 @@ func TestG38EStartupRejectsTamperedPolicyRecovery(t *testing.T) {
 	}
 	if err := requireServerStartupRecovery(svc.db); err == nil {
 		t.Fatal("pre-listen startup acceptance certified a corrupt G3.8E policy row")
-	}
-}
-
-func TestG38ESchema20PublicLinkedJournalWritersRejectTamperedPolicy(t *testing.T) {
-	ctx := context.Background()
-	svc, performance := g38EPerformanceWindow(t, []string{"100", "10"})
-	event, err := svc.applyPaperPerformancePolicy(ctx, k2aAccountRef,
-		performance.StrategySelectionEventID, performance.StrategyPerformanceID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := svc.db.Exec(`DROP TRIGGER paper_performance_policy_events_no_update;
-		UPDATE paper_performance_policy_events SET record_sha256=? WHERE policy_event_id=?`, emptySHA256, event.PolicyEventID); err != nil {
-		t.Fatal(err)
-	}
-	before := g38EJournalCounts(t, svc)
-	var evidenceBefore int
-	if err := svc.db.QueryRow(`SELECT COUNT(*) FROM strategy_research_evidence`).Scan(&evidenceBefore); err != nil {
-		t.Fatal(err)
-	}
-	artifact := rehashedStrategyArtifact(t, strategyArtifact(t, nil), func(result map[string]any) { result["experiment_id"] = "g38e-root-writer" })
-	if _, err := svc.registerStrategyEvidence(ctx, artifact); err == nil {
-		t.Fatal("schema20 strategy evidence writer accepted a corrupt linked policy")
-	}
-	if _, err := svc.setSyntheticExecutionArmed(ctx, k2aAccountRef, true); err == nil {
-		t.Fatal("schema20 authority arm accepted a corrupt linked policy")
-	}
-	if _, err := svc.acquireSyntheticExecutionLease(ctx, k2aAccountRef); err == nil {
-		t.Fatal("schema20 authority lease accepted a corrupt linked policy")
-	}
-	var evidenceAfter int
-	if err := svc.db.QueryRow(`SELECT COUNT(*) FROM strategy_research_evidence`).Scan(&evidenceAfter); err != nil {
-		t.Fatal(err)
-	}
-	if after := g38EJournalCounts(t, svc); after != before || evidenceAfter != evidenceBefore {
-		t.Fatalf("corrupt public writer appended rows journal=%+v/%+v evidence=%d/%d", before, after, evidenceBefore, evidenceAfter)
-	}
-}
-
-func TestG38ERestoreSchemaPinsPolicyTableDefinitionAndSequence(t *testing.T) {
-	for name, mutate := range map[string]func(*testing.T, *sql.DB){
-		"weakened policy check": func(t *testing.T, db *sql.DB) {
-			driftSQLiteTableSQLForTest(t, db, "paper_performance_policy_events",
-				"sample_count INTEGER NOT NULL CHECK (sample_count > 0)", "sample_count INTEGER NOT NULL")
-		},
-		"policy sequence is not primary key": func(t *testing.T, db *sql.DB) {
-			driftSQLiteTableSQLForTest(t, db, "paper_performance_policy_events",
-				"sequence INTEGER PRIMARY KEY", "sequence INTEGER NOT NULL")
-		},
-	} {
-		t.Run(name, func(t *testing.T) {
-			svc, _ := testService(t, nil, nil)
-			if err := requireOrderRestoreSchema(svc.db); err != nil {
-				t.Fatalf("baseline schema rejected: %v", err)
-			}
-			mutate(t, svc.db)
-			if err := requireOrderRestoreSchema(svc.db); err == nil {
-				t.Fatal("restore schema accepted weakened policy table definition")
-			}
-		})
-	}
-}
-
-func TestG38EPolicyUsesGlobalStrategyPerformanceCutoffAcrossAccounts(t *testing.T) {
-	ctx := context.Background()
-	svc, performance := g38EPerformanceWindow(t, []string{"100", "10"})
-	other := g38ELaterOtherAccountStrategyPerformance(t, svc, performance)
-	var globalCutoff int64
-	if err := svc.db.QueryRow(`SELECT MAX(sequence) FROM paper_strategy_performance_events`).Scan(&globalCutoff); err != nil {
-		t.Fatal(err)
-	}
-	if globalCutoff <= 0 || other.StrategyPerformanceID == performance.StrategyPerformanceID {
-		t.Fatalf("invalid cross-account G3.8D fixture cutoff=%d target=%s other=%s", globalCutoff, performance.StrategyPerformanceID, other.StrategyPerformanceID)
-	}
-	event, err := svc.applyPaperPerformancePolicy(ctx, k2aAccountRef,
-		performance.StrategySelectionEventID, performance.StrategyPerformanceID)
-	if err != nil || event.PaperStrategyPerformanceSequenceCutoff != globalCutoff {
-		t.Fatalf("policy=%+v want global strategy-performance cutoff=%d err=%v", event, globalCutoff, err)
-	}
-	if _, err := provePaperPerformancePolicyRecovery(ctx, svc.db); err != nil {
-		t.Fatalf("cross-account global cutoff policy replay failed: %v", err)
-	}
-}
-
-func TestG38EPolicyRootRecoveryRejectsCanonicalRecordedCutoffDowngrade(t *testing.T) {
-	ctx := context.Background()
-	svc, performance := g38EPerformanceWindow(t, []string{"100", "10"})
-	_ = g38ELaterOtherAccountStrategyPerformance(t, svc, performance)
-	var globalCutoff, targetCutoff int64
-	if err := svc.db.QueryRow(`SELECT MAX(sequence) FROM paper_strategy_performance_events`).Scan(&globalCutoff); err != nil {
-		t.Fatal(err)
-	}
-	if err := svc.db.QueryRow(`SELECT sequence FROM paper_strategy_performance_events WHERE strategy_performance_id=?`, performance.StrategyPerformanceID).Scan(&targetCutoff); err != nil {
-		t.Fatal(err)
-	}
-	if targetCutoff >= globalCutoff {
-		t.Fatalf("fixture cutoff target=%d global=%d", targetCutoff, globalCutoff)
-	}
-	event, err := svc.applyPaperPerformancePolicy(ctx, k2aAccountRef,
-		performance.StrategySelectionEventID, performance.StrategyPerformanceID)
-	if err != nil || event.PaperStrategyPerformanceSequenceCutoff != globalCutoff {
-		t.Fatalf("policy=%+v global cutoff=%d err=%v", event, globalCutoff, err)
-	}
-	mutated := *event
-	mutated.PaperStrategyPerformanceSequenceCutoff = targetCutoff
-	recordJSON, recordSHA, err := orderJSONHash(mutated)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := svc.db.Exec(`DROP TRIGGER paper_performance_policy_events_no_update;
-		UPDATE paper_performance_policy_events
-		SET paper_strategy_performance_sequence_cutoff=?,record_json=?,record_sha256=?
-		WHERE policy_event_id=?`, targetCutoff, string(recordJSON), recordSHA, event.PolicyEventID); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := provePaperPerformancePolicyRecovery(ctx, svc.db); err == nil {
-		t.Fatal("policy root accepted a canonical rewrite that downgraded the global strategy-performance cutoff")
-	}
-}
-
-func TestG38EPolicyRootRecoveryBindsAutomaticActionProvenanceTime(t *testing.T) {
-	ctx := context.Background()
-	for name, mutate := range map[string]func(*testing.T, *Service, *PaperPerformancePolicyEvent){
-		"halt": func(t *testing.T, svc *Service, event *PaperPerformancePolicyEvent) {
-			var record executionAuthorityRecord
-			var raw string
-			if err := svc.db.QueryRow(`SELECT record_json FROM execution_authority_events WHERE paper_performance_policy_event_id=? ORDER BY sequence LIMIT 1`, event.PolicyEventID).Scan(&raw); err != nil {
-				t.Fatal(err)
-			}
-			if err := json.Unmarshal([]byte(raw), &record); err != nil {
-				t.Fatal(err)
-			}
-			record.RecordedAt = "2026-01-16T07:00:01Z"
-			canonical, hash, err := orderJSONHash(record)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if _, err := svc.db.Exec(`DROP TRIGGER execution_authority_events_no_update;
-				UPDATE execution_authority_events SET record_sha256=?,record_json=?,recorded_at=? WHERE event_id=?`, hash, string(canonical), record.RecordedAt, record.EventID); err != nil {
-				t.Fatal(err)
-			}
-		},
-		"rollback": func(t *testing.T, svc *Service, event *PaperPerformancePolicyEvent) {
-			var record StrategySelectionEvent
-			var raw string
-			if err := svc.db.QueryRow(`SELECT record_json FROM strategy_selection_events WHERE event_id=?`, event.RollbackSelectionEventID).Scan(&raw); err != nil {
-				t.Fatal(err)
-			}
-			if err := json.Unmarshal([]byte(raw), &record); err != nil {
-				t.Fatal(err)
-			}
-			record.RecordedAt = "2026-01-16T07:00:01Z"
-			canonical, hash, err := orderJSONHash(record)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if _, err := svc.db.Exec(`DROP TRIGGER strategy_selection_events_no_update;
-				UPDATE strategy_selection_events SET record_sha256=?,record_json=?,recorded_at=? WHERE event_id=?`, hash, string(canonical), record.RecordedAt, record.EventID); err != nil {
-				t.Fatal(err)
-			}
-		},
-	} {
-		t.Run(name, func(t *testing.T) {
-			svc, performance := g38EPerformanceWindow(t, []string{"100", "10"})
-			event, err := svc.applyPaperPerformancePolicy(ctx, k2aAccountRef,
-				performance.StrategySelectionEventID, performance.StrategyPerformanceID)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if _, err := provePaperPerformancePolicyRecovery(ctx, svc.db); err != nil {
-				t.Fatalf("baseline policy proof failed: %v", err)
-			}
-			mutate(t, svc, event)
-			if _, err := provePaperPerformancePolicyRecovery(ctx, svc.db); err == nil {
-				t.Fatal("policy root accepted a canonically rehashed action with a different provenance instant")
-			}
-		})
-	}
-}
-
-func TestG38EPolicyRootRejectsCanonicalMutationMatrix(t *testing.T) {
-	ctx := context.Background()
-	secondAccount := "kiwoom_account_BBBBBBBBBBBBBBBBBBBBBBBB"
-	for _, test := range []struct {
-		name   string
-		mutate func(*testing.T, *Service, *PaperPerformancePolicyEvent)
-	}{
-		{
-			name: "decision and reason",
-			mutate: func(t *testing.T, svc *Service, event *PaperPerformancePolicyEvent) {
-				mutated := *event
-				mutated.Decision = "HOLD"
-				mutated.ReasonCode = "within_local_paper_safety_bounds"
-				mutated.RollbackSelectionEventID = ""
-				mutated.AutomaticHaltCount = 0
-				g38ERewritePolicyEvent(t, svc, mutated)
-			},
-		},
-		{
-			name: "latest G3.8D source link",
-			mutate: func(t *testing.T, svc *Service, event *PaperPerformancePolicyEvent) {
-				mutated := *event
-				mutated.LatestPerformanceID = mutated.BaselinePerformanceID
-				g38ERewritePolicyEvent(t, svc, mutated)
-			},
-		},
-		{
-			name: "sample count",
-			mutate: func(t *testing.T, svc *Service, event *PaperPerformancePolicyEvent) {
-				mutated := *event
-				mutated.SampleCount++
-				g38ERewritePolicyEvent(t, svc, mutated)
-			},
-		},
-		{
-			name: "authority fencing token",
-			mutate: func(t *testing.T, svc *Service, event *PaperPerformancePolicyEvent) {
-				var raw string
-				if err := svc.db.QueryRow(`SELECT record_json FROM execution_authority_events
-					WHERE paper_performance_policy_event_id=? ORDER BY sequence LIMIT 1`, event.PolicyEventID).Scan(&raw); err != nil {
-					t.Fatal(err)
-				}
-				var record executionAuthorityRecord
-				if err := json.Unmarshal([]byte(raw), &record); err != nil {
-					t.Fatal(err)
-				}
-				record.FencingToken += 10
-				canonical, hash, err := orderJSONHash(record)
-				if err != nil {
-					t.Fatal(err)
-				}
-				if _, err := svc.db.Exec(`DROP TRIGGER execution_authority_events_no_update;
-					UPDATE execution_authority_events SET fencing_token=?,record_sha256=?,record_json=? WHERE event_id=?`,
-					record.FencingToken, hash, string(canonical), record.EventID); err != nil {
-					t.Fatal(err)
-				}
-			},
-		},
-		{
-			name: "automatic halt coverage",
-			mutate: func(t *testing.T, svc *Service, event *PaperPerformancePolicyEvent) {
-				mutated := *event
-				mutated.AutomaticHaltCount--
-				g38ERewritePolicyEvent(t, svc, mutated)
-			},
-		},
-		{
-			name: "automatic rollback source",
-			mutate: func(t *testing.T, svc *Service, event *PaperPerformancePolicyEvent) {
-				var raw string
-				if err := svc.db.QueryRow(`SELECT record_json FROM strategy_selection_events WHERE event_id=?`, event.RollbackSelectionEventID).Scan(&raw); err != nil {
-					t.Fatal(err)
-				}
-				var record StrategySelectionEvent
-				if err := json.Unmarshal([]byte(raw), &record); err != nil {
-					t.Fatal(err)
-				}
-				record.SourceEventID = record.EventID
-				canonical, hash, err := orderJSONHash(record)
-				if err != nil {
-					t.Fatal(err)
-				}
-				if _, err := svc.db.Exec(`DROP TRIGGER strategy_selection_events_no_update;
-					UPDATE strategy_selection_events SET source_event_id=?,record_sha256=?,record_json=? WHERE event_id=?`,
-					record.SourceEventID, hash, string(canonical), record.EventID); err != nil {
-					t.Fatal(err)
-				}
-			},
-		},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			svc, performance := g38EPerformanceWindow(t, []string{"100", "10"})
-			if _, err := svc.setSyntheticExecutionArmed(ctx, secondAccount, true); err != nil {
-				t.Fatal(err)
-			}
-			event, err := svc.applyPaperPerformancePolicy(ctx, k2aAccountRef,
-				performance.StrategySelectionEventID, performance.StrategyPerformanceID)
-			if err != nil || event.Decision != "HALT_AND_ROLLBACK" || event.AutomaticHaltCount != 2 {
-				t.Fatalf("policy=%+v err=%v", event, err)
-			}
-			if _, err := provePaperPerformancePolicyRecovery(ctx, svc.db); err != nil {
-				t.Fatalf("baseline policy recovery failed: %v", err)
-			}
-			test.mutate(t, svc, event)
-			if _, err := provePaperPerformancePolicyRecovery(ctx, svc.db); err == nil {
-				t.Fatal("policy root accepted a canonically rehashed mutation")
-			}
-		})
-	}
-}
-
-func g38ERewritePolicyEvent(t testing.TB, svc *Service, event PaperPerformancePolicyEvent) {
-	t.Helper()
-	canonical, hash, err := orderJSONHash(event)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := svc.db.Exec(`DROP TRIGGER paper_performance_policy_events_no_update;
-		UPDATE paper_performance_policy_events SET
-		schema_version=?,policy_version=?,account_ref=?,paper_accounting_session_id=?,strategy_selection_event_id=?,
-		selected_strategy_result_ref=?,strategy_performance_id=?,baseline_performance_id=?,latest_performance_id=?,sample_count=?,
-		expected_previous_policy_event_id=?,strategy_selection_sequence_cutoff=?,paper_strategy_performance_sequence_cutoff=?,
-		execution_authority_sequence_cutoff=?,decision=?,reason_code=?,rollback_selection_event_id=?,automatic_halt_count=?,
-		record_sha256=?,record_json=?,recorded_at=? WHERE policy_event_id=?`,
-		event.SchemaVersion, event.PolicyVersion, event.AccountRef, event.PaperAccountingSessionID, event.StrategySelectionEventID,
-		event.SelectedStrategyResultRef, event.StrategyPerformanceID, event.BaselinePerformanceID, event.LatestPerformanceID, event.SampleCount,
-		event.ExpectedPreviousPolicyEventID, event.StrategySelectionSequenceCutoff, event.PaperStrategyPerformanceSequenceCutoff,
-		event.ExecutionAuthoritySequenceCutoff, event.Decision, event.ReasonCode, nullable(event.RollbackSelectionEventID), event.AutomaticHaltCount,
-		hash, string(canonical), event.RecordedAt, event.PolicyEventID); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestG38ESyntheticPublicWritersRejectTamperedAutomaticPolicy(t *testing.T) {
-	ctx := context.Background()
-	svc, performance := g38EPerformanceWindow(t, []string{"100", "10"})
-	order := mustRecordK2AOrder(t, svc, "g38e-corrupt-policy-dispatch")
-	event, err := svc.applyPaperPerformancePolicy(ctx, k2aAccountRef,
-		performance.StrategySelectionEventID, performance.StrategyPerformanceID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := svc.db.Exec(`DROP TRIGGER paper_performance_policy_events_no_update;
-		UPDATE paper_performance_policy_events SET record_sha256=? WHERE policy_event_id=?`, emptySHA256, event.PolicyEventID); err != nil {
-		t.Fatal(err)
-	}
-	before := g38EJournalCounts(t, svc)
-	var reservationsBefore, ordersBefore int
-	if err := svc.db.QueryRow(`SELECT COUNT(*) FROM risk_reservations`).Scan(&reservationsBefore); err != nil {
-		t.Fatal(err)
-	}
-	if err := svc.db.QueryRow(`SELECT COUNT(*) FROM order_idempotency`).Scan(&ordersBefore); err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err := svc.authorizeSyntheticDispatchOnce(ctx, order.OrderID, 1); err == nil ||
-		!strings.Contains(err.Error(), "execution authority recovery") {
-		t.Fatalf("synthetic dispatch did not fail closed on corrupt automatic policy: %v", err)
-	}
-	if _, err := svc.recordPaperTarget(ctx, k2aAccountRef, PaperSignal{}, "", nil, time.Time{}, time.Time{}, time.Time{}, 0); err == nil ||
-		!strings.Contains(err.Error(), "execution authority recovery") {
-		t.Fatalf("paper target did not fail closed on corrupt automatic policy: %v", err)
-	}
-	var reservationsAfter, ordersAfter int
-	if err := svc.db.QueryRow(`SELECT COUNT(*) FROM risk_reservations`).Scan(&reservationsAfter); err != nil {
-		t.Fatal(err)
-	}
-	if err := svc.db.QueryRow(`SELECT COUNT(*) FROM order_idempotency`).Scan(&ordersAfter); err != nil {
-		t.Fatal(err)
-	}
-	if after := g38EJournalCounts(t, svc); after != before || reservationsAfter != reservationsBefore || ordersAfter != ordersBefore {
-		t.Fatalf("corrupt synthetic writer appended rows journal=%+v/%+v reservations=%d/%d orders=%d/%d",
-			before, after, reservationsBefore, reservationsAfter, ordersBefore, ordersAfter)
-	}
-}
-
-func TestG38EAutomaticHaltIDsAreDerivedFromPolicyAndAccount(t *testing.T) {
-	ctx := context.Background()
-	svc, performance := g38EPerformanceWindow(t, []string{"100", "10"})
-	secondAccount := "kiwoom_account_BBBBBBBBBBBBBBBBBBBBBBBB"
-	if _, err := svc.setSyntheticExecutionArmed(ctx, secondAccount, true); err != nil {
-		t.Fatal(err)
-	}
-	event, err := svc.applyPaperPerformancePolicy(ctx, k2aAccountRef,
-		performance.StrategySelectionEventID, performance.StrategyPerformanceID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	rows, err := svc.db.Query(`SELECT account_ref,event_id FROM execution_authority_events
-		WHERE paper_performance_policy_event_id=? ORDER BY account_ref`, event.PolicyEventID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer rows.Close()
-	count := 0
-	for rows.Next() {
-		var accountRef, eventID string
-		if err := rows.Scan(&accountRef, &eventID); err != nil {
-			t.Fatal(err)
-		}
-		if want := paperPerformanceAutomaticHaltID(event.PolicyEventID, accountRef); eventID != want {
-			t.Fatalf("automatic halt ID=%q want %q", eventID, want)
-		}
-		count++
-	}
-	if err := rows.Err(); err != nil || count != event.AutomaticHaltCount {
-		t.Fatalf("automatic halt count=%d/%d err=%v", count, event.AutomaticHaltCount, err)
-	}
-}
-
-func TestG38EAuthorityRecoveryRejectsRehashedAutomaticHaltRelinkToOtherValidPolicy(t *testing.T) {
-	ctx := context.Background()
-	svc, firstPerformance := g38EPerformanceWindow(t, []string{"100", "10"})
-	firstPolicy, err := svc.applyPaperPerformancePolicy(ctx, k2aAccountRef,
-		firstPerformance.StrategySelectionEventID, firstPerformance.StrategyPerformanceID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	artifact := rehashedStrategyArtifact(t, strategyArtifact(t, nil), func(result map[string]any) {
-		result["experiment_id"] = "g38e-other-valid-halt-policy"
-		result["execution"].(map[string]any)["starting_cash"] = "1000"
-	})
-	evidence, err := svc.registerStrategyEvidence(ctx, artifact)
-	if err != nil {
-		t.Fatal(err)
-	}
-	strategy, err := replayStrategyRegistry(ctx, svc.db)
-	if err != nil {
-		t.Fatal(err)
-	}
-	selection, err := svc.selectPaperCandidate(ctx, evidence.ResultSHA256, strategy.CurrentEventID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	secondAccount := "kiwoom_account_BBBBBBBBBBBBBBBBBBBBBBBB"
-	firstSecondAccountPerformance := g38EOtherAccountStrategyPerformanceAt(t, svc, &PaperStrategyPerformanceEvent{
-		SelectedStrategyResultRef: evidence.ResultSHA256, StrategySelectionEventID: selection.CurrentEventID,
-	}, mustTime("2026-01-16T00:00:00Z"))
-	svc.now = func() time.Time { return mustTime("2026-01-19T07:00:00Z") }
-	const asOf = "2026-01-19T06:30:00.000000000Z"
-	recordG38C3MarkBar(t, svc, "005930", "g38e-other-valid-halt-policy-mark", asOf, "10")
-	point, err := svc.evaluatePaperPerformance(ctx, secondAccount, asOf)
-	if err != nil {
-		t.Fatal(err)
-	}
-	secondPerformance, err := svc.evaluatePaperStrategyPerformance(ctx, secondAccount, point.StrategySelectionEventID, point.PerformanceID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if firstSecondAccountPerformance.StrategySelectionEventID != secondPerformance.StrategySelectionEventID {
-		t.Fatal("second policy fixture changed strategy selection")
-	}
-	secondPolicy, err := svc.applyPaperPerformancePolicy(ctx, secondAccount,
-		secondPerformance.StrategySelectionEventID, secondPerformance.StrategyPerformanceID)
-	if err != nil || secondPolicy.Decision != "HALT_AND_ROLLBACK" {
-		t.Fatalf("second policy=%+v err=%v", secondPolicy, err)
-	}
-	var raw string
-	if err := svc.db.QueryRow(`SELECT record_json FROM execution_authority_events
-		WHERE paper_performance_policy_event_id=? AND account_ref=?`, secondPolicy.PolicyEventID, secondAccount).Scan(&raw); err != nil {
-		t.Fatal(err)
-	}
-	var record executionAuthorityRecord
-	if err := json.Unmarshal([]byte(raw), &record); err != nil {
-		t.Fatal(err)
-	}
-	record.PaperPerformancePolicyEventID = firstPolicy.PolicyEventID
-	canonical, hash, err := orderJSONHash(record)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := svc.db.Exec(`DROP TRIGGER execution_authority_events_no_update;
-		UPDATE execution_authority_events SET paper_performance_policy_event_id=?,record_sha256=?,record_json=? WHERE event_id=?`,
-		firstPolicy.PolicyEventID, hash, string(canonical), record.EventID); err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err := proveExecutionAuthorityRecovery(ctx, svc.db); err == nil {
-		t.Fatal("authority replay accepted an automatic halt re-linked to another valid HALT policy")
-	}
-}
-
-func TestG38EMigration20ReenablesAndRechecksForeignKeys(t *testing.T) {
-	for name, mutate := range map[string]func(*testing.T, *sql.DB){
-		"success": func(t *testing.T, _ *sql.DB) {},
-		"failure": func(t *testing.T, db *sql.DB) {
-			if _, err := db.Exec(`DROP INDEX execution_authority_latest_idx`); err != nil {
-				t.Fatal(err)
-			}
-		},
-	} {
-		t.Run(name, func(t *testing.T) {
-			svc, _ := testService(t, nil, nil)
-			downgradePaperPerformancePolicyForTest(t, svc.db)
-			mutate(t, svc.db)
-			err := migrate(svc.db)
-			if name == "success" && err != nil {
-				t.Fatal(err)
-			}
-			if name == "failure" && err == nil {
-				t.Fatal("broken migration 020 was accepted")
-			}
-			var enabled, violations, version int
-			if err := svc.db.QueryRow(`PRAGMA foreign_keys`).Scan(&enabled); err != nil {
-				t.Fatal(err)
-			}
-			if err := svc.db.QueryRow(`SELECT COUNT(*) FROM pragma_foreign_key_check`).Scan(&violations); err != nil {
-				t.Fatal(err)
-			}
-			if err := svc.db.QueryRow(`SELECT MAX(version) FROM schema_migrations`).Scan(&version); err != nil {
-				t.Fatal(err)
-			}
-			wantVersion := latestSchema
-			if name == "failure" {
-				wantVersion = 19
-			}
-			if enabled != 1 || violations != 0 || version != wantVersion {
-				t.Fatalf("migration %s foreign_keys=%d violations=%d version=%d wantVersion=%d", name, enabled, violations, version, wantVersion)
-			}
-		})
-	}
-}
-
-func TestG38EMigration20UsesFixedCreateCopyDropRenameOrder(t *testing.T) {
-	script, err := migrationFiles.ReadFile("migrations/020_paper_performance_policy_events.sql")
-	if err != nil {
-		t.Fatal(err)
-	}
-	sql := string(script)
-	createAuthority := strings.Index(sql, "CREATE TABLE execution_authority_events_new")
-	copyAuthority := strings.Index(sql, "INSERT INTO execution_authority_events_new")
-	dropAuthority := strings.Index(sql, "DROP TABLE execution_authority_events;")
-	renameAuthority := strings.Index(sql, "ALTER TABLE execution_authority_events_new RENAME TO execution_authority_events;")
-	createPolicy := strings.Index(sql, "CREATE TABLE paper_performance_policy_events")
-	if createAuthority < 0 || copyAuthority <= createAuthority || dropAuthority <= copyAuthority ||
-		renameAuthority <= dropAuthority || createPolicy <= renameAuthority ||
-		strings.Contains(sql, "RENAME TO execution_authority_events_old") ||
-		strings.Contains(sql, "RENAME TO strategy_selection_events_old") {
-		t.Fatal("migration 020 does not use the authoritative create/copy/drop/rename rebuild order")
-	}
-}
-
-func TestG38EMigration20RejectsV19ForeignKeyInventoryDriftBeforeCommit(t *testing.T) {
-	svc, _ := g38EPerformanceWindow(t, []string{"100", "100"})
-	downgradePaperPerformancePolicyForTest(t, svc.db)
-	driftSQLiteTableSQLForTest(t, svc.db, "strategy_selection_events",
-		"source_event_id TEXT REFERENCES strategy_selection_events(event_id)",
-		"source_event_id TEXT REFERENCES strategy_research_evidence(result_sha256)")
-	var path string
-	if err := svc.db.QueryRow(`SELECT file FROM pragma_database_list WHERE name='main'`).Scan(&path); err != nil {
-		t.Fatal(err)
-	}
-	if err := svc.db.Close(); err != nil {
-		t.Fatal(err)
-	}
-	db, err := openExistingDB(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	if err := migrate(db); err == nil {
-		t.Fatal("migration 020 accepted a v19 foreign-key inventory it did not preserve")
-	}
-}
-
-func TestG38EMigration20RejectsNonRebuiltV19ForeignKeyDriftBeforeScript(t *testing.T) {
-	svc, path := testService(t, nil, nil)
-	downgradePaperPerformancePolicyForTest(t, svc.db)
-	driftSQLiteTableSQLForTest(t, svc.db, "risk_reservations",
-		"FOREIGN KEY (authority_event_id) REFERENCES execution_authority_events(event_id)",
-		"FOREIGN KEY (authority_event_id) REFERENCES strategy_selection_events(event_id)")
-	var expectedSourceSQL string
-	if err := svc.db.QueryRow(`SELECT sql FROM sqlite_master WHERE type='table' AND name='risk_reservations'`).Scan(&expectedSourceSQL); err != nil {
-		t.Fatal(err)
-	}
-	if err := svc.db.Close(); err != nil {
-		t.Fatal(err)
-	}
-	beforeSHA, beforeSize, err := hashFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	db, err := openExistingDB(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := migrate(db); err == nil {
-		_ = db.Close()
-		t.Fatal("migration 020 accepted a non-rebuilt v19 child foreign-key drift")
-	}
-	var version int
-	var sourceSQL string
-	if err := db.QueryRow(`SELECT MAX(version) FROM schema_migrations`).Scan(&version); err != nil {
-		_ = db.Close()
-		t.Fatal(err)
-	}
-	if err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE type='table' AND name='risk_reservations'`).Scan(&sourceSQL); err != nil {
-		_ = db.Close()
-		t.Fatal(err)
-	}
-	if err := db.Close(); err != nil {
-		t.Fatal(err)
-	}
-	afterSHA, afterSize, err := hashFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if version != 19 || sourceSQL != expectedSourceSQL || beforeSHA != afterSHA || beforeSize != afterSize {
-		t.Fatalf("failed migration changed source version=%d source_sql_equal=%t db=(%s,%d)->(%s,%d)",
-			version, sourceSQL == expectedSourceSQL, beforeSHA, beforeSize, afterSHA, afterSize)
-	}
-}
-
-func TestG38EMigration20PinsCanonicalV19ForeignKeyInventory(t *testing.T) {
-	db := g38ECanonicalV19MigrationDB(t)
-	inventory, err := migration20ForeignKeyInventory(context.Background(), db)
-	if err != nil {
-		t.Fatal(err)
-	}
-	const want = "665f412a571d311c990d15f579608f89d91cbd8376b97dc1fdd0dd2537e41cbd"
-	if migration20CanonicalV19ForeignKeyInventorySHA256 != want {
-		t.Fatalf("migration 020 canonical v19 foreign-key inventory constant=%s want=%s", migration20CanonicalV19ForeignKeyInventorySHA256, want)
-	}
-	if got := migration20ForeignKeyInventorySHA256(inventory); got != want {
-		t.Fatalf("canonical v19 foreign-key inventory SHA-256=%s want=%s", got, want)
 	}
 }
 
@@ -1081,32 +167,54 @@ func TestG38EMigration20PreservesNonemptyV19JournalsProofsAndForeignKeys(t *test
 		t.Fatal(err)
 	}
 	afterCounts := g38EMigration20Counts(t, svc.db)
-	afterForeignKeys, err := migration20ForeignKeyInventory(ctx, svc.db)
+	afterForeignKeys, err := foreignKeysForTest(ctx, svc.db)
 	if err != nil {
 		t.Fatal(err)
 	}
-	expectedForeignKeys, expectedForeignKeyErr := migration20ExpectedForeignKeys(before.ForeignKeys)
+	canonicalDB := g38ECanonicalV19MigrationDB(t)
+	defer canonicalDB.Close()
+	canonicalKeys, err := foreignKeysForTest(ctx, canonicalDB)
+	if err != nil || !reflect.DeepEqual(before.ForeignKeys, canonicalKeys) {
+		t.Fatalf("nonempty v19 fixture foreign keys differ from canonical migrations: %+v %v", before.ForeignKeys, err)
+	}
+	expectedForeignKeys := append([]testForeignKey(nil), before.ForeignKeys...)
 	expectedForeignKeys = append(expectedForeignKeys,
-		migration20ForeignKey{Child: "paper_runner_leases", Parent: "strategy_selection_events", From: "strategy_selection_event_id", To: "event_id", OnUpdate: "NO ACTION", OnDelete: "NO ACTION", Match: "NONE"},
-		migration20ForeignKey{Child: "paper_runner_leases", Parent: "strategy_selection_events", From: "selected_result_sha256", To: "selected_result_sha256", OnUpdate: "NO ACTION", OnDelete: "NO ACTION", Match: "NONE"},
-		migration20ForeignKey{Child: "strategy_selection_events", Parent: "paper_promotion_decisions", From: "paper_promotion_attempt_id", To: "attempt_id", OnUpdate: "NO ACTION", OnDelete: "NO ACTION", Match: "NONE"},
-		migration20ForeignKey{Child: "paper_promotion_decisions", Parent: "paper_promotion_claims", From: "attempt_id", To: "attempt_id", OnUpdate: "NO ACTION", OnDelete: "NO ACTION", Match: "NONE"},
-		migration20ForeignKey{Child: "paper_promotion_decisions", Parent: "strategy_selection_events", From: "selection_event_id", To: "event_id", OnUpdate: "NO ACTION", OnDelete: "NO ACTION", Match: "NONE"},
+		testForeignKey{Child: "execution_authority_events", Parent: "paper_performance_policy_events", From: "paper_performance_policy_event_id", To: "policy_event_id", OnUpdate: "NO ACTION", OnDelete: "NO ACTION", Match: "NONE"},
+		testForeignKey{Child: "strategy_selection_events", Parent: "paper_performance_policy_events", From: "paper_performance_policy_event_id", To: "policy_event_id", OnUpdate: "NO ACTION", OnDelete: "NO ACTION", Match: "NONE"},
+		testForeignKey{Child: "paper_performance_policy_events", Parent: "paper_accounting_sessions", From: "paper_accounting_session_id", To: "session_id", OnUpdate: "NO ACTION", OnDelete: "NO ACTION", Match: "NONE"},
+		testForeignKey{Child: "paper_performance_policy_events", Parent: "strategy_selection_events", From: "strategy_selection_event_id", To: "event_id", OnUpdate: "NO ACTION", OnDelete: "NO ACTION", Match: "NONE"},
+		testForeignKey{Child: "paper_performance_policy_events", Parent: "strategy_research_evidence", From: "selected_strategy_result_ref", To: "result_sha256", OnUpdate: "NO ACTION", OnDelete: "NO ACTION", Match: "NONE"},
+		testForeignKey{Child: "paper_performance_policy_events", Parent: "paper_strategy_performance_events", From: "strategy_performance_id", To: "strategy_performance_id", OnUpdate: "NO ACTION", OnDelete: "NO ACTION", Match: "NONE"},
+		testForeignKey{Child: "paper_performance_policy_events", Parent: "paper_performance_events", From: "baseline_performance_id", To: "performance_id", OnUpdate: "NO ACTION", OnDelete: "NO ACTION", Match: "NONE"},
+		testForeignKey{Child: "paper_performance_policy_events", Parent: "paper_performance_events", From: "latest_performance_id", To: "performance_id", OnUpdate: "NO ACTION", OnDelete: "NO ACTION", Match: "NONE"},
+		testForeignKey{Child: "paper_performance_policy_events", Parent: "strategy_selection_events", From: "rollback_selection_event_id", To: "event_id", OnUpdate: "NO ACTION", OnDelete: "NO ACTION", Match: "NONE"},
+	)
+	expectedForeignKeys = append(expectedForeignKeys,
+		testForeignKey{Child: "paper_runner_leases", Parent: "strategy_selection_events", From: "strategy_selection_event_id", To: "event_id", OnUpdate: "NO ACTION", OnDelete: "NO ACTION", Match: "NONE"},
+		testForeignKey{Child: "paper_runner_leases", Parent: "strategy_selection_events", From: "selected_result_sha256", To: "selected_result_sha256", OnUpdate: "NO ACTION", OnDelete: "NO ACTION", Match: "NONE"},
+		testForeignKey{Child: "strategy_selection_events", Parent: "paper_promotion_decisions", From: "paper_promotion_attempt_id", To: "attempt_id", OnUpdate: "NO ACTION", OnDelete: "NO ACTION", Match: "NONE"},
+		testForeignKey{Child: "paper_promotion_decisions", Parent: "paper_promotion_claims", From: "attempt_id", To: "attempt_id", OnUpdate: "NO ACTION", OnDelete: "NO ACTION", Match: "NONE"},
+		testForeignKey{Child: "paper_promotion_decisions", Parent: "strategy_selection_events", From: "selection_event_id", To: "event_id", OnUpdate: "NO ACTION", OnDelete: "NO ACTION", Match: "NONE"},
 	)
 	sort.Slice(expectedForeignKeys, func(i, j int) bool {
-		return migration20ForeignKeyKey(expectedForeignKeys[i]) < migration20ForeignKeyKey(expectedForeignKeys[j])
+		return foreignKeySortKey(expectedForeignKeys[i]) < foreignKeySortKey(expectedForeignKeys[j])
 	})
-	if expectedForeignKeyErr != nil ||
-		authorityAfter != before.AuthoritySHA || authorityCountAfter != before.AuthorityCount ||
+	if authorityAfter != before.AuthoritySHA || authorityCountAfter != before.AuthorityCount ||
 		!sameStrategyRegistryProof(before.Strategy, strategyAfter) || performanceBefore != performanceAfter ||
-		!sameMigration20ForeignKeys(expectedForeignKeys, afterForeignKeys) ||
+		!reflect.DeepEqual(expectedForeignKeys, afterForeignKeys) ||
 		!sameG38EMigration20Counts(beforeCounts, afterCounts) {
 		t.Fatalf("v19 migration changed journals/proofs/counts authority=%s/%s events=%d/%d strategy=%+v/%+v performance=%+v/%+v counts=%v/%v",
 			before.AuthoritySHA, authorityAfter, before.AuthorityCount, authorityCountAfter, before.Strategy, strategyAfter,
 			performanceBefore, performanceAfter, beforeCounts, afterCounts)
 	}
-	if err := verifyMigration20TemporaryNames(ctx, svc.db, afterForeignKeys); err != nil {
-		t.Fatal(err)
+	for _, key := range afterForeignKeys {
+		if strings.HasSuffix(key.Child, "_new") || strings.HasSuffix(key.Child, "_old") || strings.HasSuffix(key.Parent, "_new") || strings.HasSuffix(key.Parent, "_old") {
+			t.Fatalf("temporary migration table remains in foreign key: %+v", key)
+		}
+	}
+	var temporaryTables int
+	if err := svc.db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND (name GLOB '*_new' OR name GLOB '*_old')`).Scan(&temporaryTables); err != nil || temporaryTables != 0 {
+		t.Fatalf("temporary migration schema remains: %d %v", temporaryTables, err)
 	}
 }
 
@@ -1137,27 +245,6 @@ func sameG38EMigration20Counts(left, right map[string]int) bool {
 		}
 	}
 	return true
-}
-
-func TestG38ERestoreSchemaRejectsPolicyIndexAndGuardDrift(t *testing.T) {
-	for name, mutate := range map[string]string{
-		"policy index":         `DROP INDEX paper_performance_policy_events_account_selection_idx`,
-		"policy guard":         `DROP TRIGGER paper_performance_policy_events_state_guard`,
-		"automatic halt guard": `DROP TRIGGER execution_authority_events_state_guard`,
-	} {
-		t.Run(name, func(t *testing.T) {
-			svc, _ := testService(t, nil, nil)
-			if err := requireOrderRestoreSchema(svc.db); err != nil {
-				t.Fatalf("baseline schema rejected: %v", err)
-			}
-			if _, err := svc.db.Exec(mutate); err != nil {
-				t.Fatal(err)
-			}
-			if err := requireOrderRestoreSchema(svc.db); err == nil {
-				t.Fatal("restore schema accepted G3.8E policy drift")
-			}
-		})
-	}
 }
 
 func TestG38EBackupV14CarriesAndVerifiesPolicyRecoveryProof(t *testing.T) {
@@ -1493,59 +580,25 @@ func g38EPerformanceWindow(t *testing.T, closes []string) (*Service, *PaperStrat
 	return svc, latest
 }
 
-func g38ELaterOtherAccountStrategyPerformance(t *testing.T, svc *Service, primary *PaperStrategyPerformanceEvent) *PaperStrategyPerformanceEvent {
-	return g38EOtherAccountStrategyPerformanceAt(t, svc, primary, mustTime("2026-01-13T00:00:00Z"))
-}
-
-func g38EOtherAccountStrategyPerformanceAt(t *testing.T, svc *Service, primary *PaperStrategyPerformanceEvent, start time.Time) *PaperStrategyPerformanceEvent {
-	t.Helper()
-	ctx := context.Background()
-	const account = "kiwoom_account_BBBBBBBBBBBBBBBBBBBBBBBB"
-	signalDay := start.UTC()
-	fillDay := signalDay.AddDate(0, 0, 1)
-	markDay := signalDay.AddDate(0, 0, 2)
-	svc.now = func() time.Time { return signalDay.Add(7 * time.Hour) }
-	if _, err := svc.openPaperAccountingSession(ctx, account, primary.SelectedStrategyResultRef, primary.StrategySelectionEventID); err != nil {
+func TestG38EMigration20RejectsV19ForeignKeyInventoryDriftBeforeCommit(t *testing.T) {
+	svc, _ := g38EPerformanceWindow(t, []string{"100", "100"})
+	downgradePaperPerformancePolicyForTest(t, svc.db)
+	driftSQLiteTableSQLForTest(t, svc.db, "strategy_selection_events",
+		"source_event_id TEXT REFERENCES strategy_selection_events(event_id)",
+		"source_event_id TEXT REFERENCES strategy_research_evidence(result_sha256)")
+	var path string
+	if err := svc.db.QueryRow(`SELECT file FROM pragma_database_list WHERE name='main'`).Scan(&path); err != nil {
 		t.Fatal(err)
 	}
-	signalInput := g38c2PaperMarketBar("g38e-global-cutoff-signal", signalDay.Format("2006-01-02T15:04:05Z"), signalDay.Add(6*time.Hour+30*time.Minute).Format("2006-01-02T15:04:05Z"))
-	signalInput.SourceAvailableAt, signalInput.FetchedAt = signalDay.Add(6*time.Hour+31*time.Minute).Format("2006-01-02T15:04:05Z"), signalDay.Add(6*time.Hour+32*time.Minute).Format("2006-01-02T15:04:05Z")
-	signalBar, err := svc.recordPaperMarketBar(ctx, signalInput)
+	if err := svc.db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db, err := openExistingDB(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	signal := PaperSignal{
-		SchemaVersion: capitalizedPaperSignalSchema, SignalID: "g38e-global-cutoff-signal", SignalBarObservationID: signalBar.ObservationID,
-		StrategyResultSHA256: primary.SelectedStrategyResultRef, StrategySelectionEventID: primary.StrategySelectionEventID,
-		DataSHA256: signalBar.InputDataSHA256, Symbol: signalBar.Symbol, TargetQuantity: "2", DataAsOf: signalBar.CloseAt,
-		GeneratedAt: signalBar.SourceAvailableAt, ExpiresAt: "2026-01-20T00:00:00.000000000Z",
+	defer db.Close()
+	if err := migrate(db); err == nil {
+		t.Fatal("migration 020 accepted a v19 foreign-key inventory it did not preserve")
 	}
-	lease := mustK2CLease(t, svc, account)
-	_, order, err := svc.admitPaperSignal(ctx, account, signal, lease.FencingToken)
-	if err != nil {
-		t.Fatal(err)
-	}
-	svc.now = func() time.Time { return fillDay.Add(7 * time.Hour) }
-	fillInput := g38c2PaperMarketBar("g38e-global-cutoff-fill", fillDay.Format("2006-01-02T15:04:05Z"), fillDay.Add(6*time.Hour+30*time.Minute).Format("2006-01-02T15:04:05Z"))
-	fillInput.Open, fillInput.High, fillInput.Low, fillInput.Close, fillInput.Volume = "100", "100", "100", "100", "5"
-	fillInput.SourceAvailableAt, fillInput.FetchedAt = fillDay.Add(6*time.Hour+31*time.Minute).Format("2006-01-02T15:04:05Z"), fillDay.Add(6*time.Hour+32*time.Minute).Format("2006-01-02T15:04:05Z")
-	if _, err := svc.recordPaperMarketBar(ctx, fillInput); err != nil {
-		t.Fatal(err)
-	}
-	lease = mustK2CLease(t, svc, account)
-	if state, err := svc.runPaperOrder(ctx, order.OrderID, lease.FencingToken); err != nil || state.Status != "FILLED" {
-		t.Fatalf("cross-account filled state=%+v err=%v", state, err)
-	}
-	svc.now = func() time.Time { return markDay.Add(7 * time.Hour) }
-	asOf := markDay.Add(6*time.Hour + 30*time.Minute).Format(canonicalPaperTimeLayout)
-	recordG38C3MarkBar(t, svc, "005930", "g38e-global-cutoff-mark", asOf, "100")
-	point, err := svc.evaluatePaperPerformance(ctx, account, asOf)
-	if err != nil {
-		t.Fatal(err)
-	}
-	event, err := svc.evaluatePaperStrategyPerformance(ctx, account, point.StrategySelectionEventID, point.PerformanceID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return event
 }

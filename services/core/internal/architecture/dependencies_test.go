@@ -37,7 +37,7 @@ func TestDomainDependencies(t *testing.T) {
 		t.Error(violation)
 	}
 	for _, domain := range []string{"exact", "orderdomain", "paperdomain", "riskdomain", "strategydomain", "researchdomain"} {
-		if !seen[domain] {
+		if !seen[domain] && !(domain != "exact" && seen["trading/domain"]) {
 			t.Errorf("%s has no production source", domain)
 		}
 	}
@@ -45,8 +45,11 @@ func TestDomainDependencies(t *testing.T) {
 
 func inspectDependencies(root string) ([]string, map[string]bool, error) {
 	var violations []string
+	_, rootErr := os.Stat(filepath.Join(root, "go.mod"))
+	coreRoot := rootErr == nil
 	seen := map[string]bool{}
 	methods := map[string]map[string]bool{}
+	graph := map[string]map[string]bool{}
 	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -59,8 +62,23 @@ func inspectDependencies(root string) ([]string, map[string]bool, error) {
 			return err
 		}
 		relative = filepath.ToSlash(relative)
+		physicalRelative := relative
+		if coreRoot {
+			if strings.HasPrefix(relative, "internal/") {
+				relative = strings.TrimPrefix(relative, "internal/")
+			} else {
+				relative = "root/" + relative
+			}
+		}
 		scope := strings.Split(relative, "/")[0]
 		seen[scope] = true
+		owner, layer := modulePath(relative)
+		if owner != "" {
+			seen["module:"+owner] = true
+			if layer == "domain" {
+				seen[owner+"/domain"] = true
+			}
+		}
 		file, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
 		if err != nil {
 			return err
@@ -85,6 +103,13 @@ func inspectDependencies(root string) ([]string, map[string]bool, error) {
 			methods[key][function.Name.Name] = true
 		}
 		imports := map[string]string{}
+		packagePath := internalPrefix + filepath.ToSlash(filepath.Dir(relative))
+		if coreRoot {
+			packagePath = strings.TrimSuffix(internalPrefix, "internal/") + filepath.ToSlash(filepath.Dir(physicalRelative))
+		}
+		if graph[packagePath] == nil {
+			graph[packagePath] = map[string]bool{}
+		}
 		for _, imp := range file.Imports {
 			name, err := strconv.Unquote(imp.Path.Value)
 			if err != nil {
@@ -98,26 +123,106 @@ func inspectDependencies(root string) ([]string, map[string]bool, error) {
 				}
 			}
 			imports[alias] = name
-			if !allowedImport(scope, name) {
+			if strings.HasPrefix(name, internalPrefix) {
+				graph[packagePath][name] = true
+			}
+			if reason := moduleImportViolation(relative, name); reason != "" {
+				violations = append(violations, relative+" "+reason)
+			} else if !strings.HasPrefix(relative, "modules/") && !allowedImport(scope, name) {
 				violations = append(violations, fmt.Sprintf("%s imports forbidden %s", relative, name))
 			}
 		}
+		if relative == "root/main.go" && sourceImport(file, "composition") == internalPrefix+"composition" {
+			for _, violation := range thinMainViolations(file) {
+				violations = append(violations, relative+" "+violation)
+			}
+		}
+		if relative == "modules/trading/internal/application/scheduled.go" {
+			for _, violation := range tradingTimeoutDeclarations(file) {
+				violations = append(violations, relative+" "+violation)
+			}
+		}
+		violations = append(violations, inspectModuleDeclarations(relative, file, imports)...)
+		directCalls := map[*ast.SelectorExpr]bool{}
 		ast.Inspect(file, func(node ast.Node) bool {
+			if call, ok := node.(*ast.CallExpr); ok {
+				if selector, ok := call.Fun.(*ast.SelectorExpr); ok {
+					directCalls[selector] = true
+				}
+			}
+			return true
+		})
+		factoryDefinitions := map[*ast.Ident]bool{}
+		for _, decl := range file.Decls {
+			if function, ok := decl.(*ast.FuncDecl); ok {
+				factoryDefinitions[function.Name] = true
+			}
+		}
+		ast.Inspect(file, func(node ast.Node) bool {
+			if name, ok := node.(*ast.Ident); ok && name.Name == "NewMockDispatch" && !factoryDefinitions[name] && strings.HasPrefix(relative, "modules/trading/internal/adapters/kiwoom/") && !approvedDispatchFactory(relative, file, name.Pos()) {
+				violations = append(violations, relative+" constructs dispatch outside approved adapter factory")
+			}
 			selector, ok := node.(*ast.SelectorExpr)
 			if !ok {
 				return true
+			}
+			isMigrationType := false
+			if pkg, ok := selector.X.(*ast.Ident); ok && imports[pkg.Name] == internalPrefix+"storage/observation" {
+				isMigrationType = true
+			}
+			if selector.Sel.Name == "MigrationStarter" && !isMigrationType && !approvedMigrationConstruction(relative, file, selector.Pos()) {
+				violations = append(violations, relative+" obtains migration authority outside maintenance")
+			}
+			if pkg, ok := selector.X.(*ast.Ident); ok && imports[pkg.Name] == internalPrefix+"providers/kiwoom" {
+				switch selector.Sel.Name {
+				case "NewMockReadPacer", "WaitMockRead":
+					if !strings.HasPrefix(relative, "composition/") {
+						violations = append(violations, relative+" references mock read pacer outside process composition")
+					}
+				case "ReadMockSecret", "DecodeMockCredentials", "NewMockSnapshot", "NewMockCandles":
+					if !approvedSDKRead(relative) {
+						violations = append(violations, relative+" references mock read SDK outside private provider/CLI or composition")
+					}
+				}
+			}
+			if selector.Sel.Name == "NewMockOrders" || selector.Sel.Name == "SubmitMockLimitOrder" {
+				if !approvedSDKDispatch(relative, file, selector.Pos(), selector.Sel.Name) || !directCalls[selector] {
+					violations = append(violations, relative+" references mock order SDK outside sealed dispatch adapter")
+				}
 			}
 			pkg, ok := selector.X.(*ast.Ident)
 			if !ok {
 				return true
 			}
-			if _, domain := domainDependencies[scope]; domain && imports[pkg.Name] == "time" {
+			_, legacyDomain := domainDependencies[scope]
+			pureLayer := legacyDomain || strings.HasPrefix(relative, "codec/") || moduleLayer(relative) == "construction" || moduleLayer(relative) == "domain" || moduleLayer(relative) == "application" || moduleLayer(relative) == "contracts"
+			if pureLayer && imports[pkg.Name] == "context" {
 				switch selector.Sel.Name {
-				case "Now", "Since", "Until", "After", "AfterFunc", "NewTimer", "NewTicker", "Tick", "Sleep", "LoadLocation":
+				case "WithTimeout", "WithTimeoutCause", "WithDeadline", "WithDeadlineCause", "AfterFunc":
+					if !approvedPromotionCompletion(relative, file, imports, selector) && !approvedTradingTimeout(relative, file, selector) {
+						violations = append(violations, relative+" creates clock through context."+selector.Sel.Name)
+					}
+				}
+			}
+			if pureLayer && imports[pkg.Name] == "io" && !approvedJSONEOF(relative, file, selector) {
+				violations = append(violations, relative+" exposes IO beyond the in-memory JSON EOF sentinel")
+			}
+			if pureLayer && imports[pkg.Name] == "fmt" {
+				switch selector.Sel.Name {
+				case "Print", "Printf", "Println":
+					violations = append(violations, relative+" uses impure fmt."+selector.Sel.Name)
+				}
+			}
+			if (legacyDomain || strings.HasPrefix(relative, "codec/") || moduleLayer(relative) == "construction" || moduleLayer(relative) == "domain" || moduleLayer(relative) == "application" || moduleLayer(relative) == "contracts") && imports[pkg.Name] == "time" {
+				switch selector.Sel.Name {
+				case "Local", "Now", "Since", "Until", "After", "AfterFunc", "NewTimer", "NewTicker", "Tick", "Sleep", "LoadLocation":
 					violations = append(violations, relative+" uses impure time."+selector.Sel.Name)
 				}
 			}
-			if imports[pkg.Name] == internalPrefix+"adapters/kiwoom" && selector.Sel.Name == "NewMockDispatch" && scope != "bootstrap" {
+			if strings.HasPrefix(relative, "modules/") && selector.Sel.Name == "NewMockDispatch" && !directCalls[selector] {
+				violations = append(violations, relative+" uses dispatch constructor callback")
+			}
+			if strings.HasSuffix(imports[pkg.Name], "/adapters/kiwoom") && selector.Sel.Name == "NewMockDispatch" && !approvedDispatchFactory(relative, file, selector.Pos()) {
 				violations = append(violations, relative+" constructs dispatch outside bootstrap")
 			}
 			return true
@@ -125,10 +230,12 @@ func inspectDependencies(root string) ([]string, map[string]bool, error) {
 		return nil
 	})
 	for receiver, methodSet := range methods {
-		if methodSet["Provider"] && methodSet["Mode"] && methodSet["Preflight"] && methodSet["SubmitLimitOrder"] && !strings.HasPrefix(receiver, "adapters/kiwoom/") {
+		if methodSet["Provider"] && methodSet["Mode"] && methodSet["Preflight"] && methodSet["SubmitLimitOrder"] && !strings.HasPrefix(receiver, "adapters/kiwoom/") && !strings.HasPrefix(receiver, "modules/trading/internal/adapters/kiwoom/") {
 			violations = append(violations, receiver+" implements production dispatch outside kiwoom adapter")
 		}
 	}
+	violations = append(violations, importCycles(graph)...)
+	violations = append(violations, moduleCycles(graph)...)
 	return violations, seen, err
 }
 
@@ -210,4 +317,58 @@ func TestDependencyGateAllowsInwardComposition(t *testing.T) {
 	if len(violations) != 0 {
 		t.Fatalf("inward composition rejected: %v", violations)
 	}
+}
+
+func TestAllProductionPackageDependencies(t *testing.T) {
+	violations, _, err := inspectDependencies("../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, violation := range violations {
+		t.Error(violation)
+	}
+}
+
+func approvedSDKDispatch(path string, file *ast.File, pos token.Pos, symbol string) bool {
+	if path != "modules/trading/internal/adapters/kiwoom/dispatch.go" {
+		return false
+	}
+	for _, decl := range file.Decls {
+		function, ok := decl.(*ast.FuncDecl)
+		if !ok || pos < function.Pos() || pos > function.End() {
+			continue
+		}
+		if symbol == "NewMockOrders" {
+			return function.Name.Name == "NewMockDispatch" && function.Recv == nil
+		}
+		return function.Name.Name == "SubmitLimitOrder" && function.Recv != nil
+	}
+	return false
+}
+
+func approvedMigrationConstruction(path string, file *ast.File, pos token.Pos) bool {
+	if strings.HasPrefix(path, "storage/observation/") {
+		return true
+	}
+	if strings.HasPrefix(path, "modules/maintenance/internal/adapters/sqlite/") {
+		return true
+	}
+	if path != "modules/maintenance/compose.go" {
+		return false
+	}
+	for _, decl := range file.Decls {
+		function, ok := decl.(*ast.FuncDecl)
+		if ok && function.Name.Name == "Compose" && pos >= function.Pos() && pos <= function.End() {
+			return true
+		}
+	}
+	return false
+}
+
+func approvedSDKRead(path string) bool {
+	if strings.HasPrefix(path, "composition/") {
+		return true
+	}
+	owner, layer := modulePath(path)
+	return (owner == "ledger" || owner == "marketdata") && layer == "adapters" && (strings.Contains(path, "/internal/adapters/provider/") || strings.Contains(path, "/internal/adapters/cli/"))
 }

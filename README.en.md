@@ -85,6 +85,8 @@ flowchart LR
 
 Decision rationale follows [`docs/adr/0001-runtime-and-monorepo.md`](docs/adr/0001-runtime-and-monorepo.md); broker priority and UX contracts follow [`docs/broker-priority-and-ux.md`](docs/broker-priority-and-ux.md).
 
+The Go core is a modular monolith with explicit business responsibilities and data ownership. Each module keeps business rules in its domain and coordinates use cases in application. Private adapters implement SQLite, HTTP, CLI, and broker access. Composition connects small public contracts, while automated checks reject module cycles, layer violations, and SQL access across owners. See the [modular implementation plan](docs/architecture/modular-implementation-plan.md) for implementation and verification status.
+
 <a id="quick-start"></a>
 
 ## Quick start
