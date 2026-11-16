@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"omni-folio/services/core/internal/modules/trading/contracts"
 	"omni-folio/services/core/internal/modules/trading/internal/application"
+	"omni-folio/services/core/internal/modules/trading/internal/domain"
 	riskdomain "omni-folio/services/core/internal/modules/trading/internal/domain/risk"
 	"sort"
 )
@@ -63,34 +64,7 @@ func insertPaperPerformancePolicyEvent(ctx context.Context, tx *transaction, eve
 }
 
 func validatePaperPerformancePolicyEvent(event PaperPerformancePolicyEvent) error {
-	if !safeOrderID(event.PolicyEventID) || event.SchemaVersion != paperPerformancePolicySchema ||
-		event.PolicyVersion != riskdomain.PaperPerformancePolicyVersion || !orderAlias(event.AccountRef, "account") ||
-		!safeOrderID(event.PaperAccountingSessionID) || !safeOrderID(event.StrategySelectionEventID) ||
-		!strategySHA256Pattern.MatchString(event.SelectedStrategyResultRef) || !safeOrderID(event.StrategyPerformanceID) ||
-		!safeOrderID(event.BaselinePerformanceID) || !safeOrderID(event.LatestPerformanceID) || event.SampleCount <= 0 ||
-		!safeOrderID(event.ExpectedPreviousPolicyEventID) || event.StrategySelectionSequenceCutoff < 0 ||
-		event.PaperStrategyPerformanceSequenceCutoff <= 0 || event.ExecutionAuthoritySequenceCutoff < 0 ||
-		!canonicalPaperTimes(event.RecordedAt) || event.PolicyEventID != paperPerformancePolicyID(event) {
-		return errors.New("paper performance policy event is invalid")
-	}
-	switch event.Decision {
-	case "INSUFFICIENT":
-		if event.ReasonCode != "minimum_same_selection_samples_not_met" || event.RollbackSelectionEventID != "" || event.AutomaticHaltCount != 0 {
-			return errors.New("paper performance insufficient policy event is invalid")
-		}
-	case "HOLD":
-		if event.ReasonCode != "within_local_paper_safety_bounds" || event.RollbackSelectionEventID != "" || event.AutomaticHaltCount != 0 {
-			return errors.New("paper performance hold policy event is invalid")
-		}
-	case "HALT_AND_ROLLBACK":
-		if (event.ReasonCode != "max_drawdown_limit_reached" && event.ReasonCode != "cumulative_return_floor_reached") ||
-			!safeOrderID(event.RollbackSelectionEventID) || event.AutomaticHaltCount < 0 {
-			return errors.New("paper performance action policy event is invalid")
-		}
-	default:
-		return errors.New("paper performance policy decision is invalid")
-	}
-	return nil
+	return domain.ValidatePaperPerformancePolicyEvent(domain.PaperPerformancePolicyEvent(event))
 }
 
 func loadPaperStrategyPerformanceByID(ctx context.Context, q orderQuerier, id string) (PaperStrategyPerformanceEvent, int64, error) {

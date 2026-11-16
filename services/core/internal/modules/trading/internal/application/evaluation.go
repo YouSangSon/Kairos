@@ -42,16 +42,7 @@ func ValidatePaperEvaluationEvent(event PaperEvaluationEvent) error {
 var PaperPerformanceID = domain.PaperPerformanceID
 
 func ValidatePaperPerformanceWindow(session PaperAccountingSession, asOf, recordedAt string) error {
-	if !canonicalPaperTimes(asOf, recordedAt) || !canonicalUTCString(session.RecordedAt) {
-		return errors.New("paper performance time window is invalid")
-	}
-	sessionTime, _ := parsePaperTime(session.RecordedAt)
-	asOfTime, _ := parsePaperTime(asOf)
-	recordedTime, _ := parsePaperTime(recordedAt)
-	if !sessionTime.Before(asOfTime) || asOfTime.After(recordedTime) {
-		return errors.New("paper performance requires session.RecordedAt < as_of <= event.RecordedAt")
-	}
-	return nil
+	return domain.ValidatePaperPerformanceWindow(session.RecordedAt, asOf, recordedAt)
 }
 
 func PaperStrategyPerformanceID(event PaperStrategyPerformanceEvent) string {

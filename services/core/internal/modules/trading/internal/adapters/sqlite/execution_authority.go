@@ -11,6 +11,8 @@ import (
 	"math/big"
 	"omni-folio/services/core/internal/modules/trading/contracts"
 	"omni-folio/services/core/internal/modules/trading/internal/application"
+	"omni-folio/services/core/internal/modules/trading/internal/domain"
+	orderdomain "omni-folio/services/core/internal/modules/trading/internal/domain/order"
 	"time"
 )
 
@@ -125,15 +127,7 @@ func activeReservedNotional(ctx context.Context, q orderQuerier, accountRef stri
 }
 
 func reservationIsActive(state *OrderState) bool {
-	if state.PendingAction != "" {
-		return true
-	}
-	switch state.Status {
-	case "SUBMIT_UNKNOWN", "OPEN", "PARTIALLY_FILLED", "CANCEL_UNKNOWN":
-		return true
-	default:
-		return false
-	}
+	return domain.ReservationIsActive((*orderdomain.State)(state))
 }
 
 func validateAuthorizedReservation(ctx context.Context, q orderQuerier, reservation riskReservationRecord) (*OrderState, error) {
@@ -360,14 +354,7 @@ func loadRiskReservationByOrder(ctx context.Context, q orderQuerier, orderID str
 }
 
 func validateRiskReservationRecord(record riskReservationRecord) error {
-	_, reservedOK := canonicalUTCTime(record.ReservedAt)
-	if !safeOrderID(record.ReservationID) || !safeOrderID(record.OrderID) || !orderAlias(record.AccountRef, "account") ||
-		record.PolicyVersion != syntheticRiskPolicyVersion || !safeOrderID(record.AuthorityEventID) || record.FencingToken <= 0 ||
-		!validOrderInteger(record.Quantity) || !positiveCanonicalDecimal(record.LimitPrice) || !positiveCanonicalDecimal(record.LimitNotional) ||
-		!safeOrderID(record.RiskEventID) || !safeOrderID(record.DispatchEventID) || record.RiskEventID == record.DispatchEventID || !reservedOK {
-		return errors.New("risk reservation is invalid")
-	}
-	return nil
+	return domain.ValidateRiskReservationRecord(record)
 }
 
 func loadAuthorizedOrderEvent(ctx context.Context, q orderQuerier, eventID string) (int64, OrderEvent, error) {

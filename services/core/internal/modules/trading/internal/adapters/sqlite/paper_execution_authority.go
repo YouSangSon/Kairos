@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"omni-folio/services/core/internal/modules/trading/internal/application"
+	"omni-folio/services/core/internal/modules/trading/internal/domain"
 )
 
 const (
@@ -96,17 +97,7 @@ func loadPaperExecutionAuthorizationByOrder(ctx context.Context, q orderQuerier,
 }
 
 func validatePaperExecutionAuthorizationRecord(authorization paperExecutionAuthorization) error {
-	_, timeOK := canonicalUTCTime(authorization.AuthorizedAt)
-	if !safeOrderID(authorization.AuthorizationID) || authorization.SchemaVersion != paperExecutionAuthorizationSchema ||
-		!safeOrderID(authorization.OrderID) || !orderAlias(authorization.AccountRef, "account") ||
-		!safeOrderID(authorization.PaperAccountingSessionID) || !strategySHA256Pattern.MatchString(authorization.ExecutionPolicySHA256) ||
-		authorization.PolicyVersion != paperAccountingPolicyVersion || (authorization.Side != "BUY" && authorization.Side != "SELL") ||
-		!validOrderInteger(authorization.Quantity) || !safeOrderID(authorization.AuthorityEventID) || authorization.FencingToken <= 0 ||
-		!safeOrderID(authorization.RiskEventID) || !safeOrderID(authorization.DispatchEventID) ||
-		authorization.RiskEventID == authorization.DispatchEventID || !timeOK {
-		return errors.New("paper execution authorization is invalid")
-	}
-	return nil
+	return domain.ValidatePaperExecutionAuthorizationRecord(authorization)
 }
 
 func validatePaperExecutionAuthorization(ctx context.Context, q orderQuerier, authorization paperExecutionAuthorization) (*OrderState, error) {

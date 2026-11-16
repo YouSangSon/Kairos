@@ -710,10 +710,5 @@ func (s *UseCases) RequireCurrentSyntheticExecutionLease(ctx context.Context, tx
 }
 
 func (s *UseCases) ValidateOwnedExecutionLease(authority ExecutionAuthorityState, fencingToken int64, now time.Time) error {
-	expires, expiryOK := canonicalUTCTime(authority.LeaseExpiresAt)
-	if !authority.Armed || authority.LeaseOwner != s.executionOwner || authority.FencingToken != fencingToken ||
-		!expiryOK || !now.Before(expires) {
-		return errors.New("execution authority is halted, stale, expired, or owned by another process")
-	}
-	return nil
+	return domain.ValidateOwnedExecutionLease(domain.ExecutionAuthorityState(authority), s.executionOwner, fencingToken, now)
 }

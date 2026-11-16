@@ -239,18 +239,11 @@ func validateStoredPaperRunnerLease(ctx context.Context, q orderQuerier, row sto
 		row.record.Scope != paperRunnerLeaseScope || row.record.FencingToken < 0 {
 		return errors.New("paper runner lease canonical record mismatch")
 	}
-	active := row.record.OwnerID != ""
-	if !active {
-		if row.record.AccountRef != "" || row.record.HeartbeatAtNS != 0 || row.record.ExpiresAtNS != 0 ||
-			row.record.StrategySelectionEventID != "" || row.record.SelectedResultSHA256 != "" {
-			return errors.New("paper runner released lease tuple is invalid")
-		}
-		return nil
+	if err := domain.ValidateRunnerLeaseTuple(row.record); err != nil {
+		return err
 	}
-	if row.record.FencingToken <= 0 || !safeOrderID(row.record.OwnerID) || !orderAlias(row.record.AccountRef, "account") ||
-		row.record.HeartbeatAtNS <= 0 || row.record.ExpiresAtNS-row.record.HeartbeatAtNS != int64(paperRunnerLeaseTTL) ||
-		!safeOrderID(row.record.StrategySelectionEventID) || !strategySHA256Pattern.MatchString(row.record.SelectedResultSHA256) {
-		return errors.New("paper runner active lease tuple is invalid")
+	if row.record.OwnerID == "" {
+		return nil
 	}
 	var selected string
 	if err := q.QueryRowContext(ctx, `SELECT selected_result_sha256 FROM strategy_selection_events WHERE event_id=?`, row.record.StrategySelectionEventID).Scan(&selected); err != nil || selected != row.record.SelectedResultSHA256 {
