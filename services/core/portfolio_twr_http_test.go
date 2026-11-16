@@ -331,7 +331,7 @@ func TestPortfolioTWRProofAndCutoff(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := svc.portfolio.TWR(ctx); err == nil {
+	if _, err := svc.Portfolio.TWR(ctx); err == nil {
 		t.Fatal("canceled request continued")
 	}
 }

@@ -24,7 +24,7 @@ func dropPaperPromotionSchemaForLegacy(t testing.TB, db *sql.DB) {
 		(SELECT COUNT(*) FROM strategy_selection_events WHERE paper_promotion_attempt_id IS NOT NULL)`).Scan(&count); err != nil || count != 0 {
 		t.Fatal("legacy fixture cannot discard paper promotion history", err)
 	}
-	_, indexes, triggers, err := migration27SchemaInventory(context.Background(), db)
+	_, indexes, triggers, err := schemaObjectsForTest(context.Background(), db)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,8 +61,10 @@ func dropPaperPromotionSchemaForLegacy(t testing.TB, db *sql.DB) {
 		t.Fatal(err)
 	}
 	defer tx.Rollback()
-	if err := dropMigration20DependentTriggers(tx, triggers); err != nil {
-		t.Fatal(err)
+	for _, trigger := range triggers {
+		if _, err := tx.Exec(`DROP TRIGGER "` + strings.ReplaceAll(trigger.Name, `"`, `""`) + `"`); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if _, err := tx.Exec("CREATE TABLE strategy_selection_events_new" + table); err != nil {
 		t.Fatal(err)
@@ -93,8 +95,10 @@ func dropPaperPromotionSchemaForLegacy(t testing.TB, db *sql.DB) {
 			t.Fatal(err)
 		}
 	}
-	if err := restoreMigration20DependentTriggers(tx, triggers); err != nil {
-		t.Fatal(err)
+	for _, trigger := range triggers {
+		if _, err := tx.Exec(trigger.SQL); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		t.Fatal(err)
@@ -134,7 +138,7 @@ func TestPaperPromotionMigration27PreservesJournalsAndPerformanceRollback(t *tes
 			if err != nil || !sameStrategyRegistryProof(strategy, before.Strategy) {
 				t.Fatal("migration changed registry", err)
 			}
-			objects, indexes, triggers, err := migration27SchemaInventory(ctx, svc.db)
+			objects, indexes, triggers, err := schemaObjectsForTest(ctx, svc.db)
 			if err != nil || !sameMigration27SchemaObjects(before.SchemaObjects, objects) || !sameMigration27SchemaObjects(before.SelectionIndexes, indexes) || !sameMigration20Triggers(before.DependentTriggers, triggers) {
 				t.Fatal("migration changed existing schema or dependent triggers", err)
 			}
@@ -167,14 +171,14 @@ func TestPaperPromotionMigration27FailureRestoresTriggersAndForeignKeys(t *testi
 	if _, err := svc.db.Exec(`CREATE TABLE paper_promotion_claims(blocked INTEGER) STRICT`); err != nil {
 		t.Fatal(err)
 	}
-	before, _, triggers, err := migration27SchemaInventory(context.Background(), svc.db)
+	before, _, triggers, err := schemaObjectsForTest(context.Background(), svc.db)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := migrate(svc.db); err == nil {
 		t.Fatal("colliding promotion schema was accepted")
 	}
-	after, _, restored, err := migration27SchemaInventory(context.Background(), svc.db)
+	after, _, restored, err := schemaObjectsForTest(context.Background(), svc.db)
 	if err != nil || !sameMigration27SchemaObjects(before, after) || !sameMigration20Triggers(triggers, restored) {
 		t.Fatal("failed migration did not restore existing schema", err)
 	}
@@ -209,7 +213,8 @@ func TestPaperPromotionMigration27RejectsUnknownSelectionTriggerBeforeDDL(t *tes
 	if err := svc.db.QueryRow(`SELECT sql FROM sqlite_master WHERE type='trigger' AND name=?`, triggerName).Scan(&afterSQL); err != nil || afterSQL != beforeSQL {
 		t.Fatal("rejected migration changed user trigger", err)
 	}
-	if err := requireSchemaVersionContext(context.Background(), svc.db, 26); err != nil {
+	var first, latest, count int
+	if err := svc.db.QueryRow(`SELECT MIN(version),MAX(version),COUNT(*) FROM schema_migrations`).Scan(&first, &latest, &count); err != nil || first != 1 || latest != 26 || count != 26 {
 		t.Fatal("rejected migration changed schema history", err)
 	}
 	var foreignKeys, promotionTables, newColumn int
@@ -310,7 +315,7 @@ func TestPaperPromotionBackupV21BindsProofAndRejectsMissingNullOrForgedFields(t 
 		t.Fatal(err)
 	}
 	proof, err := provePaperPromotionRecovery(context.Background(), svc.db)
-	if err != nil || manifest.FormatVersion != "omni-folio-backup.v21" || manifest.SchemaVersion != "omni-folio.sqlite.v27" || !paperPromotionManifestMatches(*manifest, proof) {
+	if err != nil || manifest.FormatVersion != "omni-folio-backup.v21" || manifest.SchemaVersion != "omni-folio.sqlite.v27" || (manifest.PaperPromotionStateSHA256 != proof.SHA256 || manifest.PaperPromotionClaimCount != proof.Claims || manifest.PaperPromotionDecisionCount != proof.Decisions || manifest.VerificationReceipt.CandidatePaperPromotionStateSHA256 != proof.SHA256) {
 		t.Fatal("v21 manifest omitted promotion proof", err)
 	}
 	if err := verifyManifest(backup, golden, manifestPath); err != nil {

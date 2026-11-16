@@ -26,7 +26,7 @@ func TestCurrentPortfolioValuationFractionalLedgerCutoff(t *testing.T) {
 		t.Fatalf("future fractional event was valued: status=%d body=%s", response.Code, response.Body.String())
 	}
 	svc.now = func() time.Time { return mustTime("2026-01-11T00:00:01Z") }
-	valuation, appErr := svc.portfolio.CurrentValuation(context.Background())
+	valuation, appErr := svc.Portfolio.CurrentValuation(context.Background())
 	if appErr != nil || valuation.LedgerAsOf != "2026-01-11T00:00:00.9Z" || valuation.TotalValue == nil || valuation.TotalValue.Amount != "3" {
 		t.Fatalf("latest exact ledger timestamp lost: valuation=%+v err=%v", valuation, appErr)
 	}
@@ -43,7 +43,7 @@ func TestCurrentPortfolioValuationUsesOneExactKRWCutoff(t *testing.T) {
 	recordHoldingValuationPrice(t, svc, "aapl-xnas", "XNAS", "15", "2026-01-11T13:00:00Z", "2026-01-11T13:00:01Z", "2026-01-11T13:00:02Z")
 	svc.now = func() time.Time { return mustTime(currentPortfolioValuationAsOf) }
 
-	valuation, appErr := svc.portfolio.CurrentValuation(context.Background())
+	valuation, appErr := svc.Portfolio.CurrentValuation(context.Background())
 	if appErr != nil {
 		t.Fatal(appErr)
 	}
@@ -100,7 +100,7 @@ func TestCurrentPortfolioValuationIsAllOrNone(t *testing.T) {
 			}
 			svc.now = func() time.Time { return mustTime(currentPortfolioValuationAsOf) }
 
-			valuation, appErr := svc.portfolio.CurrentValuation(context.Background())
+			valuation, appErr := svc.Portfolio.CurrentValuation(context.Background())
 			if appErr != nil {
 				t.Fatal(appErr)
 			}
@@ -126,7 +126,7 @@ func TestCurrentPortfolioValuationCallsServerClockOnce(t *testing.T) {
 		calls++
 		return mustTime(currentPortfolioValuationAsOf)
 	}
-	valuation, appErr := svc.portfolio.CurrentValuation(context.Background())
+	valuation, appErr := svc.Portfolio.CurrentValuation(context.Background())
 	if appErr != nil || valuation == nil || calls != 1 {
 		t.Fatalf("server cutoff was not read exactly once: calls=%d valuation=%+v err=%v", calls, valuation, appErr)
 	}
@@ -143,7 +143,7 @@ func TestCurrentPortfolioValuationAcceptsExact24HourBoundary(t *testing.T) {
 	recordHoldingValuationPrice(t, svc, "aapl-xnas", "XNAS", "15", "2026-01-10T14:00:00Z", "2026-01-10T14:00:00Z", "2026-01-11T13:00:02Z")
 	svc.now = func() time.Time { return mustTime(currentPortfolioValuationAsOf) }
 
-	valuation, appErr := svc.portfolio.CurrentValuation(context.Background())
+	valuation, appErr := svc.Portfolio.CurrentValuation(context.Background())
 	if appErr != nil || valuation.Status != "stale_sample" || valuation.TotalValue == nil || valuation.TotalValue.Amount != "62650" {
 		t.Fatalf("exact freshness boundary was excluded: valuation=%+v err=%v", valuation, appErr)
 	}
@@ -152,7 +152,7 @@ func TestCurrentPortfolioValuationAcceptsExact24HourBoundary(t *testing.T) {
 func TestCurrentPortfolioValuationEmptyAndKRWCashOnly(t *testing.T) {
 	empty, _ := testService(t, nil, nil)
 	empty.now = func() time.Time { return mustTime(currentPortfolioValuationAsOf) }
-	valuation, appErr := empty.portfolio.CurrentValuation(context.Background())
+	valuation, appErr := empty.Portfolio.CurrentValuation(context.Background())
 	if appErr != nil || valuation.Status != "empty" || valuation.Sample || valuation.TotalValue != nil || len(valuation.Issues) != 0 {
 		t.Fatalf("empty portfolio drifted: valuation=%+v err=%v", valuation, appErr)
 	}
@@ -160,7 +160,7 @@ func TestCurrentPortfolioValuationEmptyAndKRWCashOnly(t *testing.T) {
 	krw, _ := testService(t, nil, nil)
 	applyTestCSV(t, krw, "krw-only", testCSV("krw,account-main,DEPOSIT,2026-01-10T09:00:00Z,,,,,KRW,1000"))
 	krw.now = func() time.Time { return mustTime(currentPortfolioValuationAsOf) }
-	valuation, appErr = krw.portfolio.CurrentValuation(context.Background())
+	valuation, appErr = krw.Portfolio.CurrentValuation(context.Background())
 	if appErr != nil || valuation.Status != "complete" || valuation.Sample ||
 		valuation.CashValue == nil || valuation.CashValue.Amount != "1000" ||
 		valuation.HoldingsValue == nil || valuation.HoldingsValue.Amount != "0" ||

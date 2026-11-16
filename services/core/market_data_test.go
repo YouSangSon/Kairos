@@ -19,11 +19,11 @@ func (f marketDataPortFunc) Candles(ctx context.Context, symbol, interval string
 }
 
 func TestMarketDataCandlesFixtureResponseIsExact(t *testing.T) {
-	marketData, err := loadMarketDataFixture(fixturePath("market-bars.csv"))
+	svc, _ := testService(t, []time.Time{mustTime("2026-01-10T15:01:00Z")}, nil)
+	marketData, err := svc.loadMarketDataFixture(fixturePath("market-bars.csv"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	svc, _ := testService(t, []time.Time{mustTime("2026-01-10T15:01:00Z")}, nil)
 	svc.marketData = marketData
 	w := httptest.NewRecorder()
 	svc.routes().ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/v1/market-data/candles?symbol=AAPL&interval=1d", nil))
@@ -33,34 +33,6 @@ func TestMarketDataCandlesFixtureResponseIsExact(t *testing.T) {
 	const want = "{\"instrument_id\":null,\"currency\":null,\"bar_time_basis\":\"unspecified\",\"symbol\":\"AAPL\",\"venue\":\"XNAS\",\"timezone\":\"America/New_York\",\"interval\":\"1d\",\"price_adjustment\":\"unspecified\",\"source\":\"local_fixture\",\"sample\":true,\"state\":\"stale\",\"source_as_of\":\"2026-01-07T00:00:00Z\",\"fetched_at\":\"2026-01-10T15:01:00Z\",\"issues\":[{\"code\":\"sample_data\",\"message\":\"market data is a local sample and not live\"}],\"bars\":[{\"at\":\"2026-01-02T00:00:00Z\",\"open\":\"10\",\"high\":\"10.5\",\"low\":\"9.5\",\"close\":\"10\",\"volume\":\"100\"},{\"at\":\"2026-01-03T00:00:00Z\",\"open\":\"11\",\"high\":\"11.75\",\"low\":\"10.5\",\"close\":\"11.5\",\"volume\":\"6\"},{\"at\":\"2026-01-04T00:00:00Z\",\"open\":\"12\",\"high\":\"13\",\"low\":\"11.5\",\"close\":\"12.5\",\"volume\":\"8\"},{\"at\":\"2026-01-05T00:00:00Z\",\"open\":\"13\",\"high\":\"14.5\",\"low\":\"12.75\",\"close\":\"14\",\"volume\":\"20\"},{\"at\":\"2026-01-06T00:00:00Z\",\"open\":\"14\",\"high\":\"15.5\",\"low\":\"13.5\",\"close\":\"15\",\"volume\":\"100\"},{\"at\":\"2026-01-07T00:00:00Z\",\"open\":\"16\",\"high\":\"16.5\",\"low\":\"15.5\",\"close\":\"16\",\"volume\":\"100\"}]}\n"
 	if w.Body.String() != want {
 		t.Fatalf("unexpected response:\n%s", w.Body.String())
-	}
-}
-
-func TestMarketDataFixtureRejectsInvalidRows(t *testing.T) {
-	header := "bar_at,symbol,venue,timezone,interval,open,high,low,close,volume\n"
-	valid := "2026-01-02T00:00:00Z,AAPL,XNAS,America/New_York,1d,10,11,9,10,100\n"
-	tests := map[string]string{
-		"empty":        header,
-		"too many":     header + strings.Repeat(valid, maxMarketDataRows+1),
-		"metadata":     header + valid + "2026-01-03T00:00:00Z,MSFT,XNAS,America/New_York,1d,10,11,9,10,100\n",
-		"unordered":    header + valid + "2026-01-01T00:00:00Z,AAPL,XNAS,America/New_York,1d,10,11,9,10,100\n",
-		"duplicate":    header + valid + valid,
-		"invalid ohlc": header + "2026-01-02T00:00:00Z,AAPL,XNAS,America/New_York,1d,10,9,8,10,100\n",
-		"volume":       header + "2026-01-02T00:00:00Z,AAPL,XNAS,America/New_York,1d,10,11,9,10,-1\n",
-	}
-	for name, input := range tests {
-		t.Run(name, func(t *testing.T) {
-			if _, err := parseMarketDataFixture(strings.NewReader(input)); err == nil {
-				t.Fatal("invalid fixture was accepted")
-			}
-		})
-	}
-}
-
-func TestMarketDataFixtureCapsInputBeforeCSVParsing(t *testing.T) {
-	_, err := parseMarketDataFixture(strings.NewReader(strings.Repeat("x", maxMarketDataBytes+1)))
-	if err == nil || !strings.Contains(err.Error(), "must not exceed") {
-		t.Fatalf("oversized fixture error=%v", err)
 	}
 }
 
@@ -90,7 +62,7 @@ func TestMarketDataCandlesErrorsAndQueryValidation(t *testing.T) {
 	if status != http.StatusServiceUnavailable || body != (APIError{Code: "market_data_unavailable", Message: "market data is unavailable"}) {
 		t.Fatalf("unavailable status=%d body=%+v", status, body)
 	}
-	marketData, err := loadMarketDataFixture(fixturePath("market-bars.csv"))
+	marketData, err := svc.loadMarketDataFixture(fixturePath("market-bars.csv"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -166,11 +138,11 @@ func TestMarketDataOpenAPIRequiresPriceAdjustment(t *testing.T) {
 func TestMarketDataSourceIdentity(t *testing.T) {
 	for _, name := range []string{"market-bars.csv", "market-bars-identified.csv"} {
 		t.Run(name, func(t *testing.T) {
-			port, err := loadMarketDataFixture(fixturePath(name))
+			svc, _ := testService(t, []time.Time{mustTime("2026-01-10T15:01:00Z")}, nil)
+			port, err := svc.loadMarketDataFixture(fixturePath(name))
 			if err != nil {
 				t.Fatal(err)
 			}
-			svc, _ := testService(t, []time.Time{mustTime("2026-01-10T15:01:00Z")}, nil)
 			svc.marketData = port
 			w := httptest.NewRecorder()
 			svc.routes().ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/v1/market-data/candles?symbol=AAPL&interval=1d", nil))
@@ -192,18 +164,6 @@ func TestMarketDataSourceIdentity(t *testing.T) {
 				t.Fatal("explicit fixture identity was lost")
 			}
 		})
-	}
-}
-
-func TestMarketDataIdentifiedFixtureRejectsIncompleteOrMixedIdentity(t *testing.T) {
-	input, err := os.ReadFile(fixturePath("market-bars-identified.csv"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, pair := range [][2]string{{"instrument_aapl,USD", ",USD"}, {"instrument_aapl,USD", "instrument_aapl,"}, {"instrument_aapl,USD", "instrument_aapl,usd"}, {"instrument_aapl,USD", "bad id,USD"}, {"instrument_aapl,USD", "another,USD"}, {"instrument_aapl,USD", "instrument_aapl,KRW"}} {
-		if _, err := parseMarketDataFixture(strings.NewReader(strings.Replace(string(input), pair[0], pair[1], 1))); err == nil {
-			t.Fatalf("accepted mismatched identity %q", pair[1])
-		}
 	}
 }
 

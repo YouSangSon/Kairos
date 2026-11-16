@@ -94,12 +94,13 @@ func TestPaperPromotionCLISelectsOnlyAfterFreshForwardComparison(t *testing.T) {
 		"-attempt-id", "paper_comparison_test_001", "-bars", f.barsPath}); err != nil {
 		t.Fatalf("automatic forward comparison: %v", err)
 	}
-	state, err := replayStrategyRegistry(ctx, f.svc.db)
+	state, err := f.svc.Trading.StrategyStatus(ctx)
 	if err != nil || state.SelectedResultSHA256 != f.challenger.ResultSHA256 || state.CurrentEventID == f.selection.CurrentEventID {
 		t.Fatalf("candidate was not automatically selected: %+v, %v", state, err)
 	}
-	after, found, err := loadPaperAccountingSession(ctx, f.svc.db, k2aAccountRef)
-	if err != nil || !found || after.SessionID != f.session.SessionID || after.StartingCash != f.session.StartingCash {
+	var after struct{ SessionID, StartingCash string }
+	err = f.svc.db.QueryRowContext(ctx, `SELECT session_id,starting_cash FROM paper_accounting_sessions WHERE account_ref=?`, k2aAccountRef).Scan(&after.SessionID, &after.StartingCash)
+	if err != nil || after.SessionID != f.session.SessionID || after.StartingCash != f.session.StartingCash {
 		t.Fatalf("promotion changed initial capital/session: %+v, %v", after, err)
 	}
 }

@@ -42,9 +42,21 @@ func TestLedgerChronologyBrokerReplay(t *testing.T) {
 	if _, err := svc.db.Exec(`UPDATE ledger_meta SET revision=3,recorded_at='2026-01-10T15:00:01Z' WHERE singleton=1`); err != nil {
 		t.Fatal(err)
 	}
-	_, quantities, err := ledgerKRXQuantities(context.Background(), svc.db, "account-main")
-	if err != nil || quantities["005930"] == nil || quantities["005930"].Sign() != 0 {
-		t.Fatalf("valid chronological broker replay rejected: %v %v", quantities, err)
+	record, err := svc.recordKiwoomSnapshot(context.Background(), "account-main", g4hSnapshot("2026-01-10T15:01:00Z"))
+	if err != nil {
+		t.Fatal("valid chronological broker replay rejected:", err)
+	}
+	found := false
+	for _, difference := range record.PositionDifferences {
+		if difference.Symbol == "005930" {
+			found = true
+			if difference.LedgerQuantity != "0" {
+				t.Fatalf("valid chronological broker replay changed quantity: %+v", difference)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("closed KRX position was not reconciled")
 	}
 }
 

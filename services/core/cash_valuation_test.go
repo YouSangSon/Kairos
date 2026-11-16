@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	portfolioapi "omni-folio/services/core/internal/modules/portfolio/contracts"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -33,7 +32,7 @@ func TestCashValuationExactDirectAndNoInverseCross(t *testing.T) {
 		}
 	}
 
-	valuation, appErr := svc.portfolio.portfolioapi.CashValuation(context.Background(), "KRW", "2026-01-11T14:00:00Z")
+	valuation, appErr := svc.Portfolio.CashValuation(context.Background(), "KRW", "2026-01-11T14:00:00Z")
 	if appErr != nil {
 		t.Fatal(appErr)
 	}
@@ -66,7 +65,7 @@ func TestCashValuationExactDirectAndNoInverseCross(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	valuation, appErr = missing.portfolio.portfolioapi.CashValuation(context.Background(), "KRW", "2026-01-11T14:00:00Z")
+	valuation, appErr = missing.Portfolio.CashValuation(context.Background(), "KRW", "2026-01-11T14:00:00Z")
 	if appErr != nil || valuation.Status != "unavailable" || valuation.Total != nil || valuation.Lines[0].Status != "missing" {
 		t.Fatalf("inverse/cross rate was used or missing was hidden: valuation=%+v err=%v", valuation, appErr)
 	}
@@ -85,7 +84,7 @@ func TestCashValuationSelectsLatestCanonicalInstantAndRestoresExactly(t *testing
 			t.Fatal(err)
 		}
 	}
-	want, appErr := svc.portfolio.portfolioapi.CashValuation(context.Background(), "KRW", "2026-01-11T14:00:00Z")
+	want, appErr := svc.Portfolio.CashValuation(context.Background(), "KRW", "2026-01-11T14:00:00Z")
 	if appErr != nil || want.Total == nil || want.Total.Amount != "2760" || want.Lines[0].FX.Rate != "1380" {
 		t.Fatalf("latest canonical instant was not selected: valuation=%+v err=%v", want, appErr)
 	}
@@ -104,7 +103,7 @@ func TestCashValuationSelectsLatestCanonicalInstantAndRestoresExactly(t *testing
 	}
 	t.Cleanup(func() { _ = restoredDB.Close() })
 	restored := newService(restoredDB, func() time.Time { return clock }, randomID)
-	got, appErr := restored.portfolio.portfolioapi.CashValuation(context.Background(), "KRW", "2026-01-11T14:00:00Z")
+	got, appErr := restored.Portfolio.CashValuation(context.Background(), "KRW", "2026-01-11T14:00:00Z")
 	if appErr != nil || !reflect.DeepEqual(got, want) {
 		t.Fatalf("restore changed deterministic cash valuation: got=%+v want=%+v err=%v", got, want, appErr)
 	}
@@ -125,7 +124,7 @@ func TestCashValuationAsOfFreshnessAndCoverage(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	valuation, appErr := svc.portfolio.portfolioapi.CashValuation(context.Background(), "KRW", "2026-01-11T14:00:00Z")
+	valuation, appErr := svc.Portfolio.CashValuation(context.Background(), "KRW", "2026-01-11T14:00:00Z")
 	if appErr != nil || valuation.Status != "unavailable" || valuation.Total != nil || valuation.Lines[0].Status != "stale" || valuation.Lines[1].Status != "valued" {
 		t.Fatalf("freshness boundary or all-or-none total drifted: valuation=%+v err=%v", valuation, appErr)
 	}
@@ -139,7 +138,7 @@ func TestCashValuationAsOfFreshnessAndCoverage(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	valuation, appErr = late.portfolio.portfolioapi.CashValuation(context.Background(), "KRW", "2026-01-11T13:30:00Z")
+	valuation, appErr = late.Portfolio.CashValuation(context.Background(), "KRW", "2026-01-11T13:30:00Z")
 	if appErr != nil || valuation.Status != "unavailable" || valuation.Lines[0].Status != "missing" {
 		t.Fatalf("future-recorded observation leaked into as-of valuation: valuation=%+v err=%v", valuation, appErr)
 	}
@@ -150,11 +149,11 @@ func TestCashValuationRejectsCutoffAndFailsClosed(t *testing.T) {
 	applyTestCSV(t, svc, "cutoff-seed", testCSV("usd,account-main,DEPOSIT,2026-01-10T10:00:00Z,,,,,USD,1"))
 	svc.now = func() time.Time { return mustTime("2026-01-11T14:00:00Z") }
 	for _, asOf := range []string{"bad", "2026-01-11T23:00:00+09:00", "2026-01-11T14:00:01Z"} {
-		if _, appErr := svc.portfolio.portfolioapi.CashValuation(context.Background(), "KRW", asOf); appErr == nil || portfolioError(appErr).Status != http.StatusBadRequest {
+		if _, appErr := svc.Portfolio.CashValuation(context.Background(), "KRW", asOf); appErr == nil || portfolioError(appErr).Status != http.StatusBadRequest {
 			t.Fatalf("invalid/future cutoff was accepted: as_of=%s err=%v", asOf, appErr)
 		}
 	}
-	if _, appErr := svc.portfolio.portfolioapi.CashValuation(context.Background(), "KRW", "2026-01-10T09:59:59Z"); appErr == nil || portfolioError(appErr).Status != http.StatusConflict {
+	if _, appErr := svc.Portfolio.CashValuation(context.Background(), "KRW", "2026-01-10T09:59:59Z"); appErr == nil || portfolioError(appErr).Status != http.StatusConflict {
 		t.Fatalf("cutoff before ledger state was accepted: %v", appErr)
 	}
 
@@ -170,7 +169,7 @@ func TestCashValuationRejectsCutoffAndFailsClosed(t *testing.T) {
 	if _, err := svc.db.Exec(`UPDATE fx_observations SET rate='1371'`); err != nil {
 		t.Fatal(err)
 	}
-	if _, appErr := svc.portfolio.portfolioapi.CashValuation(context.Background(), "KRW", "2026-01-11T14:00:00Z"); appErr == nil || portfolioError(appErr).Status != http.StatusInternalServerError || portfolioError(appErr).Body.Message != "internal server error" {
+	if _, appErr := svc.Portfolio.CashValuation(context.Background(), "KRW", "2026-01-11T14:00:00Z"); appErr == nil || portfolioError(appErr).Status != http.StatusInternalServerError || portfolioError(appErr).Body.Message != "internal server error" {
 		t.Fatalf("corrupt FX state did not fail closed: %v", appErr)
 	}
 }
@@ -183,7 +182,7 @@ func TestCashValuationFailsClosedWhenLedgerRevisionIsCorrupt(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if valuation, appErr := svc.portfolio.portfolioapi.CashValuation(context.Background(), "KRW", "2026-01-11T14:00:00Z"); appErr == nil || portfolioError(appErr).Status != http.StatusInternalServerError || portfolioError(appErr).Body.Message != "internal server error" || valuation != nil {
+	if valuation, appErr := svc.Portfolio.CashValuation(context.Background(), "KRW", "2026-01-11T14:00:00Z"); appErr == nil || portfolioError(appErr).Status != http.StatusInternalServerError || portfolioError(appErr).Body.Message != "internal server error" || valuation != nil {
 		t.Fatalf("corrupt ledger revision was certified: valuation=%+v err=%v", valuation, appErr)
 	}
 }
@@ -198,7 +197,7 @@ func TestFXObservationTemporalOrderFailsCashValuationClosed(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, appErr := svc.portfolio.portfolioapi.CashValuation(context.Background(), "KRW", "2026-01-11T14:00:00Z"); appErr == nil || portfolioError(appErr).Status != http.StatusInternalServerError || portfolioError(appErr).Body.Message != "internal server error" {
+	if _, appErr := svc.Portfolio.CashValuation(context.Background(), "KRW", "2026-01-11T14:00:00Z"); appErr == nil || portfolioError(appErr).Status != http.StatusInternalServerError || portfolioError(appErr).Body.Message != "internal server error" {
 		t.Fatalf("impossible FX timestamp order was certified: %v", appErr)
 	}
 }

@@ -272,7 +272,7 @@ func TestPortfolioBenchmarksAbsenceQueryCancellationAndUnavailableIntegrity(t *t
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, appErr := svc.portfolio.Benchmarks(ctx); appErr == nil {
+	if _, appErr := svc.Portfolio.Benchmarks(ctx); appErr == nil {
 		t.Fatal("cancellation returned a financial report")
 	}
 	for _, state := range []string{"empty", "unavailable"} {

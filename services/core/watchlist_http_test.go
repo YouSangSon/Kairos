@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	marketdatacontracts "omni-folio/services/core/internal/modules/marketdata/contracts"
 	watchapi "omni-folio/services/core/internal/modules/watchlist/contracts"
 	"reflect"
 	"strings"
@@ -112,7 +113,7 @@ func TestWatchlistStartsEmptyWithoutChangingTheLedger(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(before, after) {
 		t.Fatal("watchlist changed ledger", err)
 	}
-	if _, err := resolveInstrumentListing(context.Background(), svc.db, "XNAS", "AAPL", "USD"); err != errInstrumentListingNotFound {
+	if _, err := svc.Market.Observations.ResolveListing(context.Background(), "XNAS", "AAPL", "USD"); err != marketdatacontracts.ErrListingNotFound {
 		t.Fatal("watchlist granted listing authority", err)
 	}
 	if _, err := svc.importOwnerPriceSeries(context.Background(), []byte(ownerPriceTestInput)); err == nil {

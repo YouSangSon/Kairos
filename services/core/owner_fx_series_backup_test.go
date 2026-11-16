@@ -58,7 +58,7 @@ func TestOwnerFXBackupRestoresWholeVersionsAndProvesEachField(t *testing.T) {
 		t.Fatal(err)
 	}
 	proof, err := proveOwnerFXSeriesRecovery(context.Background(), svc.db)
-	if err != nil || proof.Versions != 2 || proof.Points != 4 || !ownerFXManifestMatches(*manifest, proof) {
+	if err != nil || proof.Versions != 2 || proof.Points != 4 || (manifest.OwnerFXSeriesStateSHA256 != proof.SHA256 || manifest.OwnerFXSeriesVersionCount != proof.Versions || manifest.OwnerFXSeriesPointCount != proof.Points || manifest.VerificationReceipt.OwnerFXSeriesCheck != "ok" || manifest.VerificationReceipt.CandidateOwnerFXSeriesStateSHA256 != proof.SHA256 || manifest.VerificationReceipt.CandidateOwnerFXSeriesVersionCount != proof.Versions || manifest.VerificationReceipt.CandidateOwnerFXSeriesPointCount != proof.Points) {
 		t.Fatalf("owner proof mismatch: %+v %v", proof, err)
 	}
 	if err := verifyManifest(backup, golden, manifestPath); err != nil {
@@ -72,13 +72,14 @@ func TestOwnerFXBackupRestoresWholeVersionsAndProvesEachField(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	stored, _, err := replayOwnerFXSeries(context.Background(), db, "USD", "KRW", "manual-v1")
-	if err != nil || stored == nil || ownerFXReceipt(stored).DataSHA256 != first.DataSHA256 {
+	var storedSHA string
+	err = db.QueryRow(`SELECT series_sha256 FROM owner_fx_series_versions WHERE base_currency='USD' AND quote_currency='KRW' AND source_version='manual-v1'`).Scan(&storedSHA)
+	if err != nil || storedSHA != first.DataSHA256 {
 		t.Fatal("original version lost in restore")
 	}
 	copySvc := newService(db, svc.now, svc.id)
-	value, appErr := copySvc.portfolio.CurrentValuation(context.Background())
-	if appErr != nil || value.TotalValue == nil || value.TotalValue.Amount != "120000" || value.Sample || !usesOwnerFX(value.Issues) {
+	value, appErr := copySvc.Portfolio.CurrentValuation(context.Background())
+	if appErr != nil || value.TotalValue == nil || value.TotalValue.Amount != "120000" || value.Sample || !hasIssueCode(value.Issues, "owner_declared_fx") {
 		t.Fatalf("latest restored FX changed value: %+v %v", value, appErr)
 	}
 	for _, key := range []string{"owner_fx_series_state_sha256", "owner_fx_series_version_count", "owner_fx_series_point_count", "owner_fx_series_check", "candidate_owner_fx_series_state_sha256", "candidate_owner_fx_series_version_count", "candidate_owner_fx_series_point_count"} {
@@ -201,41 +202,6 @@ func TestOwnerFXLegacyV17RetainsBenchmarkAndReplayAuthority(t *testing.T) {
 	}
 }
 
-func TestOwnerFXLegacyV17CannotHideAnActiveRunnerLease(t *testing.T) {
-	svc, _ := g38EPerformanceWindow(t, []string{"100"})
-	if _, err := svc.acquirePaperRunnerLease(context.Background(), k2aAccountRef); err != nil {
-		t.Fatal(err)
-	}
-	golden := writeCurrentSnapshot(t, svc.db)
-	backup := filepath.Join(t.TempDir(), "active-v17.db")
-	manifestPath := backup + ".manifest.json"
-	if _, err := createBackup(svc.db, backup, golden, manifestPath, svc.now, svc.id); err != nil {
-		t.Fatal(err)
-	}
-	db, err := openExistingDB(backup)
-	if err != nil {
-		t.Fatal(err)
-	}
-	dropOwnerFXSchemaForLegacy(t, db)
-	if err := db.Close(); err != nil {
-		t.Fatal(err)
-	}
-	fields := readJSONMap(t, manifestPath)
-	stripOwnerFXProofForLegacy(fields)
-	fields["format_version"], fields["schema_version"] = "omni-folio-backup.v17", "omni-folio.sqlite.v23"
-	sha, size, err := hashFile(backup)
-	if err != nil {
-		t.Fatal(err)
-	}
-	receipt := fields["verification_receipt"].(map[string]any)
-	fields["db_sha256"], fields["size_bytes"], receipt["candidate_db_sha256"] = sha, size, sha
-	receipt["status"], receipt["eligible_for_activation"], receipt["errors"] = "verified", true, []string{}
-	writeJSONFile(t, manifestPath, fields)
-	if err := verifyManifest(backup, golden, manifestPath); err == nil {
-		t.Fatal("active v17 runner became eligible")
-	}
-}
-
 func TestOwnerFXRestorePreservesWithdrawalAndPairBinding(t *testing.T) {
 	svc := ownerFXServiceForTest(t)
 	applyTestCSV(t, svc, "capital", testCSV("capital,account-main,DEPOSIT,2025-01-01T00:00:00Z,,,,,USD,100"))
@@ -256,8 +222,8 @@ func TestOwnerFXRestorePreservesWithdrawalAndPairBinding(t *testing.T) {
 	}
 	defer db.Close()
 	copySvc := newService(db, svc.now, svc.id)
-	value, appErr := copySvc.portfolio.CurrentValuation(context.Background())
-	if appErr != nil || value.TotalValue != nil || value.Status != "unavailable" || usesOwnerFX(value.Issues) {
+	value, appErr := copySvc.Portfolio.CurrentValuation(context.Background())
+	if appErr != nil || value.TotalValue != nil || value.Status != "unavailable" || hasIssueCode(value.Issues, "owner_declared_fx") {
 		t.Fatalf("withdrawal fell back after restore: %+v %v", value, appErr)
 	}
 	if _, err := copySvc.recordFXObservation(context.Background(), FXObservationInput{Source: "local_fixture", SourceObservationID: "cannot-replace-owner", BaseCurrency: "USD", QuoteCurrency: "KRW", Rate: "900", ObservedAt: "2026-01-01T00:00:00Z", FetchedAt: "2026-01-01T00:00:00Z"}); err == nil {

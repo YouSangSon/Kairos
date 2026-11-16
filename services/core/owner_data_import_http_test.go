@@ -92,11 +92,11 @@ func TestOwnerDataImportHTTPReviewApplyAndExactRetry(t *testing.T) {
 			t.Fatal("exact HTTP retry changed its receipt")
 		}
 	}
-	value, err := svc.portfolio.CurrentValuation(context.Background())
-	if err != nil || value.TotalValue == nil || value.TotalValue.Amount != "180000" || value.Sample || !usesOwnerPrice(value.Issues) || !usesOwnerFX(value.Issues) {
+	value, err := svc.Portfolio.CurrentValuation(context.Background())
+	if err != nil || value.TotalValue == nil || value.TotalValue.Amount != "180000" || value.Sample || !hasIssueCode(value.Issues, "owner_declared_price") || !hasIssueCode(value.Issues, "owner_declared_fx") {
 		t.Fatalf("HTTP input did not reach the portfolio value: %+v %v", value, err)
 	}
-	comparison, err := svc.portfolio.Benchmarks(context.Background())
+	comparison, err := svc.Portfolio.Benchmarks(context.Background())
 	if err != nil || len(comparison.Benchmarks) != 2 {
 		t.Fatalf("both benchmark currencies did not reach comparison: %+v %v", comparison, err)
 	}
@@ -289,7 +289,9 @@ func TestOwnerDataImportEmptySeriesAndEscapedResponseBound(t *testing.T) {
 	if w.Code != 200 || w.Body.Len() > ownerDataPreviewResponseLimit || w.Body.Len() <= maxBodyBytes {
 		t.Fatalf("escaped response bound: %d %d", w.Code, w.Body.Len())
 	}
-	var p OwnerDataImportPreview
+	var p struct {
+		Input string `json:"input"`
+	}
 	if json.Unmarshal(w.Body.Bytes(), &p) != nil || p.Input != string(padded) {
 		t.Fatal("full-size raw echo changed")
 	}

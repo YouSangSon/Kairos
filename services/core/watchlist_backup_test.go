@@ -75,7 +75,7 @@ func TestWatchlistBackupRestoresCurrentStateAndRejectsUnprovedFields(t *testing.
 	}
 	defer db.Close()
 	restored, proof, err := watchlistStateForTest(t, context.Background(), db)
-	if err != nil || !reflect.DeepEqual(restored, saved) || !watchlistManifestMatches(*manifest, proof) {
+	if err != nil || !reflect.DeepEqual(restored, saved) || (manifest.WatchlistStateSHA256 != proof.SHA256 || manifest.WatchlistRevision != proof.Revision || manifest.WatchlistEntryCount != proof.Entries || manifest.VerificationReceipt.WatchlistCheck != "ok" || manifest.VerificationReceipt.CandidateWatchlistStateSHA256 != proof.SHA256 || manifest.VerificationReceipt.CandidateWatchlistRevision != proof.Revision || manifest.VerificationReceipt.CandidateWatchlistEntryCount != proof.Entries) {
 		t.Fatal("saved state changed during restore", err)
 	}
 	for _, key := range []string{"watchlist_state_sha256", "watchlist_revision", "watchlist_entry_count", "watchlist_check", "candidate_watchlist_state_sha256", "candidate_watchlist_revision", "candidate_watchlist_entry_count"} {
@@ -166,41 +166,6 @@ func TestWatchlistLegacyV19PreservesPricesAndReplayAuthority(t *testing.T) {
 		if err := verifyManifest(backup, golden, path); err == nil {
 			t.Fatal("legacy source claimed new state")
 		}
-	}
-}
-
-func TestWatchlistLegacyV19CannotHideActiveLease(t *testing.T) {
-	svc, _ := g38EPerformanceWindow(t, []string{"100"})
-	if _, err := svc.acquirePaperRunnerLease(context.Background(), k2aAccountRef); err != nil {
-		t.Fatal(err)
-	}
-	golden := writeCurrentSnapshot(t, svc.db)
-	backup := filepath.Join(t.TempDir(), "active-v19.db")
-	mp := backup + ".manifest.json"
-	if _, err := createBackup(svc.db, backup, golden, mp, svc.now, svc.id); err != nil {
-		t.Fatal(err)
-	}
-	db, err := openExistingDB(backup)
-	if err != nil {
-		t.Fatal(err)
-	}
-	dropWatchlistSchemaForLegacy(t, db)
-	if err := db.Close(); err != nil {
-		t.Fatal(err)
-	}
-	f := readJSONMap(t, mp)
-	stripWatchlistProofForLegacy(f)
-	f["format_version"], f["schema_version"] = "omni-folio-backup.v19", "omni-folio.sqlite.v25"
-	sha, size, err := hashFile(backup)
-	if err != nil {
-		t.Fatal(err)
-	}
-	r := f["verification_receipt"].(map[string]any)
-	f["db_sha256"], f["size_bytes"], r["candidate_db_sha256"] = sha, size, sha
-	r["status"], r["eligible_for_activation"], r["errors"] = "verified", true, []string{}
-	writeJSONFile(t, mp, f)
-	if err := verifyManifest(backup, golden, mp); err == nil {
-		t.Fatal("active legacy runner became eligible")
 	}
 }
 

@@ -150,7 +150,7 @@ func TestOwnerFXCorrectionDoesNotBorrowRemovedPoints(t *testing.T) {
 	if r.Portfolio.Status != "unavailable" || r.Portfolio.CumulativeRate != nil || r.Benchmarks[0].StartFX != nil || r.Benchmarks[0].KRW.Rate != nil {
 		t.Fatal("removed historical point was borrowed from the prior version")
 	}
-	if r.Benchmarks[0].EndFX != nil || !usesOwnerFX(r.Portfolio.Issues) || !usesOwnerFX(r.Portfolio.Valuation.Issues) {
+	if r.Benchmarks[0].EndFX != nil || !hasIssueCode(r.Portfolio.Issues, "owner_declared_fx") || !hasIssueCode(r.Portfolio.Valuation.Issues, "owner_declared_fx") {
 		t.Fatal("unavailable comparison invented marks or lost selected valuation authority")
 	}
 }
@@ -178,7 +178,7 @@ func TestOwnerFXNonSampleRateKeepsFixtureSecuritySampleWarning(t *testing.T) {
 		for _, issue := range issues {
 			sample = sample || issue.Code == "sample_data"
 		}
-		if !sample || !usesOwnerFX(issues) {
+		if !sample || !hasIssueCode(issues, "owner_declared_fx") {
 			t.Fatal("security sample or FX authority warning lost")
 		}
 	}
