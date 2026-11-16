@@ -73,8 +73,8 @@ func (s *UseCases) AcquirePaperRunnerLease(ctx context.Context, accountRef strin
 			return nil, err
 		}
 		_, selectionEventID, selectedResult, err := tx.Evaluations().CurrentPaperPerformanceSelection(ctx)
-		if err != nil || selectedResult == noStrategySelection {
-			return nil, errors.Join(errors.New("paper runner requires a current strategy selection"), err)
+		if bindErr := domain.ValidateRunnerSelectedStrategy(err == nil, selectedResult); bindErr != nil {
+			return nil, errors.Join(bindErr, err)
 		}
 		next, changed, err := domain.AcquireRunnerLease(row, s.paperRunnerOwner, accountRef, selectionEventID, selectedResult, nowNS)
 		if err != nil {

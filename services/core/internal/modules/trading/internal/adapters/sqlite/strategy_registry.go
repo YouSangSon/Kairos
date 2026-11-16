@@ -39,7 +39,7 @@ type StrategySelectionState = contracts.StrategySelectionState
 type strategyRegistryRecoveryProof = application.StrategyRegistryProof
 
 func validateStrategyOrderSelection(ctx context.Context, q orderQuerier, intent OrderIntent) error {
-	if intent.StrategyResultSHA256 == "" && intent.StrategySelectionEventID == "" {
+	if !domain.OrderUsesStrategySelection(domain.OrderIntent(intent)) {
 		return nil
 	}
 	state, err := replayStrategyRegistry(ctx, q)

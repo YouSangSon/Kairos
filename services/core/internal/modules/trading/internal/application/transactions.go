@@ -310,8 +310,12 @@ func (s *UseCases) heartbeatInScope(ctx context.Context, tx WriteScope, claim *R
 		return nil, nil, err
 	}
 	policy, err := tx.Selections().LoadCurrentStrategyExecutionPolicy(ctx, claim.SelectedResultSHA256, claim.StrategySelectionEventID)
-	if err != nil || !found || session.ExecutionPolicySHA256 != policy.SHA256 {
-		return nil, nil, errors.New("local paper heartbeat session changed")
+	var sessionPolicy string
+	if err == nil && found {
+		sessionPolicy = session.ExecutionPolicySHA256
+	}
+	if bindErr := domain.ValidateHeartbeatSession(err == nil, found, sessionPolicy, policy.SHA256); bindErr != nil {
+		return nil, nil, bindErr
 	}
 	if err := tx.Paper().RequireIsolatedPaperAccount(ctx, claim.AccountRef); err != nil {
 		return nil, nil, err
@@ -332,8 +336,8 @@ func (s *UseCases) heartbeatInScope(ctx context.Context, tx WriteScope, claim *R
 		return nil, nil, err
 	}
 	recordedAt, _ := canonicalUTCTime(previous.RecordedAt)
-	if now.Before(recordedAt) {
-		return nil, nil, errors.New("local paper heartbeat clock regressed")
+	if err := domain.ValidateHeartbeatClock(now, recordedAt); err != nil {
+		return nil, nil, err
 	}
 	next := AuthorityRecord{
 		EventID: s.id("execution_authority"), AccountRef: claim.AccountRef, Armed: true, LeaseOwner: s.executionOwner,

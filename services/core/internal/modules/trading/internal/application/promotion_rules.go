@@ -284,13 +284,13 @@ func PromotionReceipt(claim PromotionClaim, decision *PromotionDecision) *PaperP
 }
 
 const (
-	maxBodyBytes                = 1 << 20
-	maxMarketDataBytes          = 1 << 20
-	maxMarketDataRows           = 500
-	strategyResultSchema        = "strategy-improvement-result.v1"
-	strategyEvaluationPolicy    = "sma-expanding-walk-forward.v1"
-	paperPromotionPolicyVersion = "paper-forward-comparison.v1"
-	paperPromotionClaimSchema   = "paper-promotion-claim.v1"
+	maxBodyBytes             = 1 << 20
+	maxMarketDataBytes       = 1 << 20
+	maxMarketDataRows        = 500
+	strategyResultSchema     = "strategy-improvement-result.v1"
+	strategyEvaluationPolicy = "sma-expanding-walk-forward.v1"
+
+	paperPromotionClaimSchema = "paper-promotion-claim.v1"
 )
 
 var (

@@ -17,11 +17,8 @@ import (
 )
 
 const (
-	syntheticExecutionLeaseTTL  = 30 * time.Second
-	syntheticRiskPolicyVersion  = "credential_free_buy_v1"
-	syntheticMaxOrderQuantity   = int64(10)
-	syntheticMaxOrderNotional   = int64(1_000_000)
-	syntheticMaxAccountNotional = int64(1_000_000)
+	syntheticExecutionLeaseTTL = 30 * time.Second
+	syntheticRiskPolicyVersion = "credential_free_buy_v1"
 )
 
 type ExecutionAuthorityState = contracts.ExecutionAuthorityState

@@ -378,8 +378,8 @@ func validateStoredPaperPromotionDecision(ctx context.Context, q orderQuerier, c
 		return errors.New("paper promotion decision claim binding is invalid")
 	}
 	if d.Decision == "ABORTED" {
-		if d.Reason != "explicit_abort" || d.Comparison != nil || d.SelectionEventID != "" {
-			return errors.New("paper promotion abort is invalid")
+		if err := domain.ValidatePromotionAbort(d.Reason, d.Comparison != nil, d.SelectionEventID); err != nil {
+			return err
 		}
 		return nil
 	}
@@ -389,8 +389,8 @@ func validateStoredPaperPromotionDecision(ctx context.Context, q orderQuerier, c
 	}
 	if d.Decision == "ERROR" {
 		// Cancellation is an operational failure; it does not permit a selection or reuse.
-		if d.Reason != "comparison_failed" || d.Comparison != nil || d.SelectionEventID != "" {
-			return errors.New("paper promotion failure is invalid")
+		if err := domain.ValidatePromotionFailure(d.Reason, d.Comparison != nil, d.SelectionEventID); err != nil {
+			return err
 		}
 		return nil
 	}
@@ -398,8 +398,8 @@ func validateStoredPaperPromotionDecision(ctx context.Context, q orderQuerier, c
 		return errors.New("paper promotion comparison cannot be reproduced")
 	}
 	if d.Decision == "STALE" {
-		if d.Reason != "account_or_selection_changed" || d.SelectionEventID != "" {
-			return errors.New("paper promotion stale decision is invalid")
+		if err := domain.ValidatePromotionStale(d.Reason, d.SelectionEventID); err != nil {
+			return err
 		}
 		return nil
 	}
@@ -407,13 +407,13 @@ func validateStoredPaperPromotionDecision(ctx context.Context, q orderQuerier, c
 		return errors.New("paper promotion decision differs from its recomputed policy")
 	}
 	if d.Decision == "HOLD" {
-		if d.SelectionEventID != "" {
-			return errors.New("held paper comparison changed selection")
+		if err := domain.ValidatePromotionHold(d.SelectionEventID); err != nil {
+			return err
 		}
 		return nil
 	}
-	if d.Decision != "PROMOTE" || !safeOrderID(d.SelectionEventID) {
-		return errors.New("paper promotion decision is unsupported")
+	if err := domain.ValidatePromotionSelection(d.Decision, d.SelectionEventID); err != nil {
+		return err
 	}
 	var raw, sha string
 	if err := q.QueryRowContext(ctx, `SELECT record_json,record_sha256 FROM strategy_selection_events WHERE event_id=? AND reason_code='auto_comparison' AND paper_promotion_attempt_id=?`, d.SelectionEventID, c.AttemptID).Scan(&raw, &sha); err != nil {

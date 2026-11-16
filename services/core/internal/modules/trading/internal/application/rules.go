@@ -68,11 +68,9 @@ func PaperPerformanceAutomaticHaltID(policyEventID, accountRef string) string {
 }
 
 const (
-	syntheticExecutionLeaseTTL        = 30 * time.Second
-	syntheticRiskPolicyVersion        = "credential_free_buy_v1"
-	syntheticMaxOrderQuantity         = int64(10)
-	syntheticMaxOrderNotional         = int64(1_000_000)
-	syntheticMaxAccountNotional       = int64(1_000_000)
+	syntheticExecutionLeaseTTL = 30 * time.Second
+	syntheticRiskPolicyVersion = "credential_free_buy_v1"
+
 	paperExecutionAuthorizationSchema = "paper-execution-authorization.v1"
 	paperAccountingPolicyVersion      = "paper_accounting_v1"
 	paperFillPolicyVersion            = paperdomain.FillPolicyVersion

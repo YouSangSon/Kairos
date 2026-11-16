@@ -218,8 +218,8 @@ func replayPaperAccountingWithoutRegistry(ctx context.Context, q orderQuerier, c
 			AND json_extract(intent_json, '$.signal_schema_version') IN ('paper-signal.v1','paper-signal.v2')`).Scan(&legacyOrders); err != nil {
 			return nil, err
 		}
-		if legacyOrders != 0 {
-			return nil, errors.New("bounded paper accounting cannot include a legacy paper account")
+		if err := domain.ValidateBoundedAccountingLegacyOrderCount(legacyOrders); err != nil {
+			return nil, err
 		}
 	}
 	return replayPaperAccountingStateWithCutoff(ctx, q, cutoff)

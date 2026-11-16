@@ -82,16 +82,13 @@ func (s *UseCases) SetSyntheticExecutionArmed(ctx context.Context, account strin
 		if err != nil {
 			return nil, err
 		}
-		if current.Armed == armed {
+		change, reason, nextFence := domain.ManualArmingTransition(current.Armed, armed, current.FencingToken)
+		if !change {
 			state := current.ExecutionAuthorityState
 			return &state, nil
 		}
 		now := s.now().UTC()
-		reason := "manual_halt"
-		if armed {
-			reason = "manual_arm"
-		}
-		record := AuthorityRecord{EventID: s.id("execution_authority"), AccountRef: account, Armed: armed, FencingToken: current.FencingToken + 1, ReasonCode: reason, RecordedAt: now.Format(time.RFC3339Nano)}
+		record := AuthorityRecord{EventID: s.id("execution_authority"), AccountRef: account, Armed: armed, FencingToken: nextFence, ReasonCode: reason, RecordedAt: now.Format(time.RFC3339Nano)}
 		if err := tx.Authority().InsertExecutionAuthorityRecord(ctx, record); err != nil {
 			return nil, err
 		}
@@ -267,8 +264,8 @@ func (s *UseCases) OpenPaperAccountingSessionChecked(ctx context.Context, accoun
 		if err != nil {
 			return nil, err
 		}
-		if count != 0 {
-			return nil, errors.New("paper accounting session cannot follow a paper order")
+		if err := domain.ValidateInitialPaperOrderCount(count); err != nil {
+			return nil, err
 		}
 		session := PaperAccountingSession{SchemaVersion: "paper-accounting-session.v1", AccountRef: account, StrategyResultSHA256: result, StrategySelectionEventID: selection, ExecutionPolicySHA256: policy.SHA256, ExecutionPolicyJSON: policy.CanonicalJSON, StartingCash: policy.StartingCash, Currency: "KRW", RecordedAt: s.now().UTC().Format(time.RFC3339Nano)}
 		session.SessionID = PaperAccountingSessionID(account, result, selection, policy.SHA256)
