@@ -47,54 +47,40 @@ func (s *UseCases) ReconcileKnownOrder(ctx context.Context, orderID string, look
 		if err != nil {
 			return nil, false, err
 		}
-		if lookup.Provider != intent.Provider || lookup.Mode != intent.Mode || lookup.AccountRef != intent.AccountRef {
-			return nil, false, errors.New("lookup authority does not match the order")
+		if err := domain.ValidateReconciliationAuthority(lookup.Provider, lookup.Mode, lookup.AccountRef, domain.OrderIntent(intent)); err != nil {
+			return nil, false, err
 		}
 		dispatchedAt, err := tx.Orders().DispatchTime(ctx, orderID)
 		if err != nil {
 			return nil, false, err
 		}
-		if observedAt.Before(dispatchedAt) {
-			return nil, false, errors.New("lookup observation predates dispatch")
+		if err := domain.ValidateReconciliationObservationTime(observedAt, dispatchedAt); err != nil {
+			return nil, false, err
 		}
 
 		result := &KiwoomOrderReconciliation{State: state}
-		if !lookup.Complete {
-			result.Outcome = kiwoomLookupIncomplete
+		outcome, err := domain.ReconciliationReadiness((*orderdomain.State)(state), lookup.Complete)
+		if err != nil {
+			return nil, false, err
+		}
+		if outcome != "" {
+			result.Outcome = outcome
 			return result, false, nil
 		}
-		if state.Status == "SUBMIT_UNKNOWN" && state.PendingAction == "SUBMIT" {
-			result.Outcome = kiwoomLookupUncorrelated
-			return result, false, nil
-		}
-		if len(state.ProviderOrderRefs) != 1 ||
-			(state.Status != "OPEN" && state.Status != "PARTIALLY_FILLED" && state.Status != "FILLED" &&
-				state.Status != "CANCEL_UNKNOWN" && state.Status != "CANCELED") {
-			return nil, false, errors.New("order state cannot accept lookup reconciliation")
-		}
-		var match *domain.ValidatedOrderObservation
-		for i := range observations {
-			if observations[i].Order.ProviderOrderRef == state.ProviderOrderRefs[0] {
-				match = &observations[i]
-				break
-			}
-		}
+		match := domain.FindReconciliationObservation(observations, state.ProviderOrderRefs[0])
 		if match == nil {
 			result.Outcome = kiwoomLookupNotFound
 			return result, false, nil
 		}
-		order := match.Order
-		if match.Submitted.Before(dispatchedAt) || match.Submitted.After(observedAt) || order.Symbol != intent.Symbol ||
-			order.Exchange != intent.Exchange || order.Side != intent.Side || order.OrderType != intent.OrderType ||
-			order.Currency != intent.Currency || order.Quantity != intent.Quantity || order.LimitPrice != intent.LimitPrice {
-			return nil, false, errors.New("provider order observation conflicts with the local order")
+		if err := domain.ValidateMatchedReconciliationObservation(*match, domain.OrderIntent(intent), dispatchedAt, observedAt); err != nil {
+			return nil, false, err
 		}
 		if match.Incomplete {
 			result.Outcome = kiwoomLookupIncomplete
 			return result, false, nil
 		}
 
-		events, err := domain.ReconciliationEvents(orderID, (*orderdomain.State)(state), order)
+		events, err := domain.ReconciliationEvents(orderID, (*orderdomain.State)(state), match.Order)
 		if err != nil {
 			return nil, false, err
 		}

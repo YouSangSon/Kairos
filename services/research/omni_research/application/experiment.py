@@ -7,7 +7,7 @@ from typing import Any
 
 from .. import ENGINE_VERSION
 from ..domain import paper_fill
-from ..domain.experiment import ExperimentConfig, _evaluate
+from ..domain.experiment import ExperimentConfig, _evaluate, promotion_outcome
 from ..domain.values import Bar, decimal_string
 from .artifacts import canonical_hash
 
@@ -45,7 +45,7 @@ def build_experiment(bars: list[Bar], config: ExperimentConfig, raw_config: dict
         for trade in evaluated.holdout_trades
     ]
     walk_forward_ok, holdout_ok, baseline_ok = evaluated.walk_forward_ok, evaluated.holdout_ok, evaluated.baseline_ok
-    target = "paper_candidate" if walk_forward_ok and holdout_ok and baseline_ok else "no_promotion"
+    target, failed_gates = promotion_outcome(walk_forward_ok, holdout_ok, baseline_ok)
     input_sha256 = hashlib.sha256(raw_bars).hexdigest()
     selected_parameters = {
         "quantity": decimal_string(config.quantity),
@@ -98,15 +98,7 @@ def build_experiment(bars: list[Bar], config: ExperimentConfig, raw_config: dict
             "walk_forward_gate_passed": walk_forward_ok,
             "final_holdout_gate_passed": holdout_ok,
             "baseline_gate_passed": baseline_ok,
-            "failed_gates": [
-                name
-                for name, passed in (
-                    ("walk_forward", walk_forward_ok),
-                    ("final_holdout", holdout_ok),
-                    ("buy_and_hold_baseline", baseline_ok),
-                )
-                if not passed
-            ],
+            "failed_gates": failed_gates,
         },
         "disclaimer": DISCLAIMER,
     }

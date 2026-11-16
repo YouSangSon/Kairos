@@ -9,10 +9,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math/big"
 	"omni-folio/services/core/internal/modules/trading/contracts"
 	"omni-folio/services/core/internal/modules/trading/internal/domain"
-	paperdomain "omni-folio/services/core/internal/modules/trading/internal/domain/paper"
 	researchdomain "omni-folio/services/core/internal/modules/trading/internal/domain/research"
 	"regexp"
 	"strconv"
@@ -107,8 +105,8 @@ func DecodeStrategyArtifact(artifact []byte) (*Evidence, error) {
 			return nil, errors.New("strategy failed gates are invalid")
 		}
 	}
-	if (target == "paper_candidate") != (len(expectedFailed) == 0) || (target != "paper_candidate" && target != "no_promotion") {
-		return nil, errors.New("strategy promotion target is inconsistent with its gates")
+	if err := domain.ValidateResearchPromotionTarget(target, len(expectedFailed)); err != nil {
+		return nil, err
 	}
 	delete(result, "result_sha256")
 	bodyJSON, err := StrategyCanonicalJSON(result)
@@ -138,29 +136,9 @@ func DecodeStrategyExecutionContract(value any) (strategyExecutionPolicy, error)
 		StringField(execution, "signal_price") != "bar_close" || StringField(execution, "fill_price") != "next_eligible_bar_open" {
 		return strategyExecutionPolicy{}, errors.New("strategy execution contract is invalid")
 	}
-	startingCash, err := parseDecimal(StringField(execution, "starting_cash"))
-	if err != nil || startingCash.Sign() <= 0 {
-		return strategyExecutionPolicy{}, errors.New("strategy execution contract is invalid")
-	}
-	fee, err := parseDecimal(StringField(execution, "fee"))
-	if err != nil || fee.Sign() < 0 {
-		return strategyExecutionPolicy{}, errors.New("strategy execution contract is invalid")
-	}
-	tax, err := parseDecimal(StringField(execution, "tax"))
-	if err != nil || tax.Sign() < 0 || tax.Cmp(big.NewRat(1, 1)) > 0 {
-		return strategyExecutionPolicy{}, errors.New("strategy execution contract is invalid")
-	}
-	slippage, err := parseDecimal(StringField(execution, "slippage_bps"))
-	if err != nil || slippage.Sign() < 0 || slippage.Cmp(big.NewRat(10000, 1)) >= 0 {
-		return strategyExecutionPolicy{}, errors.New("strategy execution contract is invalid")
-	}
-	delay, err := parseDecimal(StringField(execution, "delay_bars"))
-	if err != nil || delay.Sign() <= 0 || !delay.IsInt() || !delay.Num().IsInt64() {
-		return strategyExecutionPolicy{}, errors.New("strategy execution contract is invalid")
-	}
-	participation, err := parseDecimal(StringField(execution, "max_participation"))
-	if err != nil || participation.Sign() <= 0 || participation.Cmp(big.NewRat(1, 1)) > 0 {
-		return strategyExecutionPolicy{}, errors.New("strategy execution contract is invalid")
+	delay, err := domain.ValidateStrategyExecutionTerms(domain.StrategyExecutionTerms{StartingCash: StringField(execution, "starting_cash"), Fee: StringField(execution, "fee"), Tax: StringField(execution, "tax"), SlippageBPS: StringField(execution, "slippage_bps"), DelayBars: StringField(execution, "delay_bars"), MaxParticipation: StringField(execution, "max_participation")})
+	if err != nil {
+		return strategyExecutionPolicy{}, err
 	}
 	canonicalJSON, err := StrategyCanonicalJSON(execution)
 	if err != nil {
@@ -169,7 +147,7 @@ func DecodeStrategyExecutionContract(value any) (strategyExecutionPolicy, error)
 	hash := sha256.Sum256(canonicalJSON)
 	return strategyExecutionPolicy{
 		StartingCash: StringField(execution, "starting_cash"), Fee: StringField(execution, "fee"), Tax: StringField(execution, "tax"),
-		SlippageBPS: StringField(execution, "slippage_bps"), DelayBars: delay.Num().Int64(),
+		SlippageBPS: StringField(execution, "slippage_bps"), DelayBars: delay,
 		MaxParticipation: StringField(execution, "max_participation"), SignalPrice: StringField(execution, "signal_price"),
 		FillPrice: StringField(execution, "fill_price"), SHA256: hex.EncodeToString(hash[:]), CanonicalJSON: string(canonicalJSON),
 	}, nil
@@ -217,7 +195,7 @@ func StringField(value map[string]any, key string) string {
 
 func PaperPromotionStrategy(evidence Evidence) (researchdomain.Strategy, error) {
 	invalid := errors.New("paper promotion requires a bound long_only_sma_crossover 1.0.0 with capitalized shares and bounded windows")
-	if evidence.StrategyName != "long_only_sma_crossover" || evidence.StrategyVersion != "1.0.0" ||
+	if !domain.SupportedPromotionStrategy(evidence.StrategyName, evidence.StrategyVersion) ||
 		len(evidence.ArtifactJSON) == 0 || len(evidence.ArtifactJSON) > maxBodyBytes || !utf8.ValidString(evidence.ArtifactJSON) {
 		return researchdomain.Strategy{}, invalid
 	}
@@ -237,9 +215,8 @@ func PaperPromotionStrategy(evidence Evidence) (researchdomain.Strategy, error) 
 	slow, slowOK := ResearchReportInteger(parameters["slow_window"])
 	quantity := StringField(parameters, "quantity")
 	if !ExactKeys(strategy, "name", "version", "parameters", "parameter_hash") ||
-		StringField(strategy, "name") != evidence.StrategyName || StringField(strategy, "version") != evidence.StrategyVersion ||
-		!ExactKeys(parameters, "fast_window", "slow_window", "quantity") || !fastOK || !slowOK || slow <= fast || slow > 365 ||
-		!paperdomain.ValidCapitalizedQuantity(quantity, false) {
+		!domain.PromotionStrategyMatches(StringField(strategy, "name"), StringField(strategy, "version"), evidence.StrategyName, evidence.StrategyVersion) ||
+		!ExactKeys(parameters, "fast_window", "slow_window", "quantity") || !fastOK || !slowOK || !domain.ValidPromotionSMA(researchdomain.Strategy{FastWindow: fast, SlowWindow: slow, Quantity: quantity}) {
 		return researchdomain.Strategy{}, invalid
 	}
 	canonicalParameters, err := StrategyCanonicalJSON(parameters)
@@ -255,111 +232,23 @@ func PaperPromotionStrategy(evidence Evidence) (researchdomain.Strategy, error) 
 }
 
 func ComparePaperPromotion(ctx context.Context, bars []researchdomain.Bar, candidate, incumbent researchdomain.Strategy, execution researchdomain.Execution) (paperPromotionComparison, error) {
-	if err := ctx.Err(); err != nil {
-		return paperPromotionComparison{}, err
-	}
-	for _, strategy := range []researchdomain.Strategy{candidate, incumbent} {
-		if strategy.FastWindow <= 0 || strategy.SlowWindow <= strategy.FastWindow || strategy.SlowWindow > 365 || !paperdomain.ValidCapitalizedQuantity(strategy.Quantity, false) {
-			return paperPromotionComparison{}, errors.New("paper promotion strategy is outside the paper SMA bounds")
-		}
-	}
-	if candidate.Quantity != incumbent.Quantity {
-		return paperPromotionComparison{}, errors.New("paper promotion strategies must use identical quantities")
-	}
-	commonWarmup := int(max(candidate.SlowWindow, incumbent.SlowWindow))
-	if len(bars) != commonWarmup+3*30 {
-		return paperPromotionComparison{}, errors.New("paper promotion requires exactly the common SMA warmup and three 30-bar windows")
-	}
-	comparison := paperPromotionComparison{PolicyVersion: paperPromotionPolicyVersion, Windows: make([]paperPromotionWindow, 0, 3)}
-	for index := range 3 {
-		start := commonWarmup + index*30
-		windowBars, warmup := bars[start:start+30], bars[start-commonWarmup:start]
-		window := paperPromotionWindow{Start: windowBars[0].At, End: windowBars[len(windowBars)-1].At}
-		var err error
-		var metrics researchdomain.Metrics
-		metrics, _, err = researchdomain.SimulateFold(ctx, windowBars, warmup, candidate, execution, false)
-		if err != nil {
-			return paperPromotionComparison{}, fmt.Errorf("paper promotion window %d candidate: %w", index+1, err)
-		}
-		window.Candidate = contracts.PromotionMetrics(metrics)
-		metrics, _, err = researchdomain.SimulateFold(ctx, windowBars, warmup, incumbent, execution, false)
-		if err != nil {
-			return paperPromotionComparison{}, fmt.Errorf("paper promotion window %d incumbent: %w", index+1, err)
-		}
-		window.Incumbent = contracts.PromotionMetrics(metrics)
-		metrics, _, err = researchdomain.SimulateFold(ctx, windowBars, warmup, candidate, execution, true)
-		if err != nil {
-			return paperPromotionComparison{}, fmt.Errorf("paper promotion window %d buy-and-hold: %w", index+1, err)
-		}
-		window.BuyAndHold = contracts.PromotionMetrics(metrics)
-		comparison.Windows = append(comparison.Windows, window)
-	}
-	var err error
-	comparison.Decision, comparison.Reason, err = EvaluatePaperPromotionWindows(comparison.Windows)
-	if err != nil {
-		return paperPromotionComparison{}, err
-	}
-	return comparison, nil
+	comparison, err := domain.ComparePaperPromotion(ctx, bars, candidate, incumbent, execution)
+	return PromotionComparisonFromDomain(comparison), err
 }
 
 func EvaluatePaperPromotionWindows(windows []paperPromotionWindow) (string, string, error) {
-	if len(windows) != 3 {
-		return "", "", errors.New("paper promotion decision requires three windows")
+	var values []domain.PaperPromotionWindow
+	if windows != nil {
+		values = make([]domain.PaperPromotionWindow, len(windows))
 	}
-	for _, window := range windows {
-		for _, trades := range []string{window.Candidate.TradeCount, window.Incumbent.TradeCount} {
-			order, err := PaperPromotionMetricOrder(trades, "1")
-			if err != nil {
-				return "", "", err
-			}
-			if order < 0 {
-				return "HOLD", "insufficient_round_trips", nil
-			}
-		}
-		for _, gate := range []struct {
-			candidate, bound, reason string
-			rejectedOrder            int
-		}{
-			{window.Candidate.AfterCostReturn, "0", "candidate_negative_return", -1},
-			{window.Candidate.AfterCostReturn, window.Incumbent.AfterCostReturn, "candidate_return_below_incumbent", -1},
-			{window.Candidate.MaxDrawdown, window.Incumbent.MaxDrawdown, "candidate_drawdown_above_incumbent", 1},
-			{window.Candidate.Turnover, window.Incumbent.Turnover, "candidate_turnover_above_incumbent", 1},
-		} {
-			order, err := PaperPromotionMetricOrder(gate.candidate, gate.bound)
-			if err != nil {
-				return "", "", err
-			}
-			if order == gate.rejectedOrder {
-				return "HOLD", gate.reason, nil
-			}
-		}
+	for i, w := range windows {
+		values[i] = PromotionWindowToDomain(w)
 	}
-	holdout := windows[2]
-	for _, gate := range []struct{ bound, reason string }{
-		{holdout.Incumbent.AfterCostReturn, "holdout_not_better_than_incumbent"},
-		{holdout.BuyAndHold.AfterCostReturn, "holdout_not_better_than_buy_and_hold"},
-	} {
-		order, err := PaperPromotionMetricOrder(holdout.Candidate.AfterCostReturn, gate.bound)
-		if err != nil {
-			return "", "", err
-		}
-		if order <= 0 {
-			return "HOLD", gate.reason, nil
-		}
-	}
-	return "PROMOTE", "all_forward_gates_passed", nil
+	return domain.EvaluatePaperPromotionWindows(values)
 }
 
 func PaperPromotionMetricOrder(left, right string) (int, error) {
-	l, err := parseDecimal(left)
-	if err != nil {
-		return 0, err
-	}
-	r, err := parseDecimal(right)
-	if err != nil {
-		return 0, err
-	}
-	return l.Cmp(r), nil
+	return domain.PaperPromotionMetricOrder(left, right)
 }
 
 func PaperResearchWholeSecond(raw string) (time.Time, bool) {
@@ -395,13 +284,13 @@ func PromotionReceipt(claim PromotionClaim, decision *PromotionDecision) *PaperP
 }
 
 const (
-	maxBodyBytes                = 1 << 20
-	maxMarketDataBytes          = 1 << 20
-	maxMarketDataRows           = 500
-	strategyResultSchema        = "strategy-improvement-result.v1"
-	strategyEvaluationPolicy    = "sma-expanding-walk-forward.v1"
-	paperPromotionPolicyVersion = "paper-forward-comparison.v1"
-	paperPromotionClaimSchema   = "paper-promotion-claim.v1"
+	maxBodyBytes             = 1 << 20
+	maxMarketDataBytes       = 1 << 20
+	maxMarketDataRows        = 500
+	strategyResultSchema     = "strategy-improvement-result.v1"
+	strategyEvaluationPolicy = "sma-expanding-walk-forward.v1"
+
+	paperPromotionClaimSchema = "paper-promotion-claim.v1"
 )
 
 var (

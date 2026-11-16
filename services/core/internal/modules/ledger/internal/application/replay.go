@@ -53,8 +53,8 @@ func prepareReplay(ctx context.Context, reader ReplayReader) (*contracts.ReplayP
 	if err != nil {
 		return nil, err
 	}
-	if origin.Policy != ledgerdomain.LegacyFIFOCostBasisPolicy || origin.LegacyRevision <= 0 {
-		return nil, errors.New("ledger does not require a legacy replay transition")
+	if err := ledgerdomain.RequireReplayTransition(origin.Policy, origin.LegacyRevision); err != nil {
+		return nil, err
 	}
 	revision, err := reader.VerifiedLedgerRevision(ctx)
 	if err != nil {
@@ -92,7 +92,7 @@ func (s *UseCases) ActivateReplay(ctx context.Context, revision int64, eventsSHA
 			return errors.New("ledger replay preview changed; review a new preview before activation")
 		}
 		recordedAt, err := time.Parse(time.RFC3339Nano, preview.Snapshot.RecordedAt)
-		if err != nil || now.Before(recordedAt) {
+		if err != nil || !ledgerdomain.ReplayActivationTimeEligible(recordedAt, now) {
 			return errors.New("ledger replay activation precedes the captured ledger")
 		}
 		if err := journal.RecordReplayTransition(ctx, preview, now.UTC().Format(time.RFC3339Nano)); err != nil {

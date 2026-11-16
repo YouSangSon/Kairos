@@ -17,25 +17,11 @@ func recordedAt(ctx context.Context, scope interface {
 	if err != nil {
 		return "", err
 	}
-	now := clock().UTC()
-	recorded := now.Format(time.RFC3339Nano)
-	if !domain.CanonicalUTC(recorded) {
-		return "", errors.New("owner data record clock is invalid")
-	}
-	if previous != "" {
-		last, err := time.Parse(time.RFC3339Nano, previous)
-		if err != nil || !domain.CanonicalUTC(previous) || now.Before(last) {
-			return "", errors.New("owner data record clock moved backwards")
-		}
-	}
-	captured, err := time.Parse(time.RFC3339Nano, fetched)
-	if err != nil || !domain.CanonicalUTC(fetched) {
-		return "", errors.New("owner data capture time is invalid")
-	}
-	if now.Before(captured) {
+	recorded, err := domain.OwnerRecordedAt(previous, fetched, clock())
+	if errors.Is(err, domain.ErrCaptureFuture) {
 		return "", c.ErrRejected
 	}
-	return recorded, nil
+	return recorded, err
 }
 
 func (s *Service) ImportOwnerFX(ctx context.Context, raw []byte) (*c.OwnerFXSeriesReceipt, error) {
@@ -57,14 +43,14 @@ func (s *Service) ImportOwnerFX(ctx context.Context, raw []byte) (*c.OwnerFXSeri
 			return err
 		}
 		if prior != nil {
-			if prior.DataSHA256 != sha {
+			if domain.VersionConflicts(prior.DataSHA256, sha) {
 				return c.ErrConflict
 			}
 			result = OwnerFXReceipt(prior)
 			return nil
 		}
 		for _, mark := range legacy {
-			if mark.BaseCurrency == input.BaseCurrency && mark.QuoteCurrency == input.QuoteCurrency {
+			if domain.LegacyFXConflicts(input.BaseCurrency, input.QuoteCurrency, mark.BaseCurrency, mark.QuoteCurrency) {
 				return c.ErrConflict
 			}
 		}
@@ -100,7 +86,7 @@ func (s *Service) ImportBenchmark(ctx context.Context, raw []byte) (*c.Benchmark
 			return err
 		}
 		if prior != nil {
-			if prior.DataSHA256 != sha {
+			if domain.VersionConflicts(prior.DataSHA256, sha) {
 				return c.ErrConflict
 			}
 			result = BenchmarkReceipt(prior)
@@ -110,7 +96,7 @@ func (s *Service) ImportBenchmark(ctx context.Context, raw []byte) (*c.Benchmark
 		if err != nil {
 			return err
 		}
-		if definition != nil && (definition.Currency != input.Currency || definition.ReturnBasis != input.ReturnBasis || definition.SourceReference != input.SourceReference || definition.Sample != input.Sample) {
+		if definition != nil && !domain.SameBenchmarkDefinition(domain.BenchmarkDefinition{Currency: definition.Currency, ReturnBasis: definition.ReturnBasis, SourceReference: definition.SourceReference, Sample: definition.Sample}, domain.BenchmarkDefinition{Currency: input.Currency, ReturnBasis: input.ReturnBasis, SourceReference: input.SourceReference, Sample: input.Sample}) {
 			return c.ErrConflict
 		}
 		recorded, err := recordedAt(ctx, scope, "benchmark", input.FetchedAt, s.now)
@@ -175,14 +161,14 @@ func (s *ScopedImporter) ImportOwnerPriceScoped(ctx context.Context, ref storage
 			return err
 		}
 		if prior != nil {
-			if prior.DataSHA256 != sha {
+			if domain.VersionConflicts(prior.DataSHA256, sha) {
 				return c.ErrConflict
 			}
 			result = OwnerPriceReceipt(prior)
 			return nil
 		}
 		for _, mark := range legacy {
-			if mark.InstrumentID == input.InstrumentID && mark.Currency == input.Currency {
+			if domain.LegacyPriceConflicts(input.InstrumentID, input.Currency, mark.InstrumentID, mark.Currency) {
 				return c.ErrConflict
 			}
 		}

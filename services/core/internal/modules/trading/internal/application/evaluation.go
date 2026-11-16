@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"omni-folio/services/core/internal/modules/trading/internal/domain"
+	orderdomain "omni-folio/services/core/internal/modules/trading/internal/domain/order"
 	paperdomain "omni-folio/services/core/internal/modules/trading/internal/domain/paper"
 	"time"
 )
@@ -42,16 +43,7 @@ func ValidatePaperEvaluationEvent(event PaperEvaluationEvent) error {
 var PaperPerformanceID = domain.PaperPerformanceID
 
 func ValidatePaperPerformanceWindow(session PaperAccountingSession, asOf, recordedAt string) error {
-	if !canonicalPaperTimes(asOf, recordedAt) || !canonicalUTCString(session.RecordedAt) {
-		return errors.New("paper performance time window is invalid")
-	}
-	sessionTime, _ := parsePaperTime(session.RecordedAt)
-	asOfTime, _ := parsePaperTime(asOf)
-	recordedTime, _ := parsePaperTime(recordedAt)
-	if !sessionTime.Before(asOfTime) || asOfTime.After(recordedTime) {
-		return errors.New("paper performance requires session.RecordedAt < as_of <= event.RecordedAt")
-	}
-	return nil
+	return domain.ValidatePaperPerformanceWindow(session.RecordedAt, asOf, recordedAt)
 }
 
 func PaperStrategyPerformanceID(event PaperStrategyPerformanceEvent) string {
@@ -78,8 +70,8 @@ func (s *UseCases) EvaluatePaperOperations(ctx context.Context, accountRef, resu
 		if err != nil {
 			return nil, false, err
 		}
-		if registry.SelectedResultSHA256 != resultSHA256 || registry.CurrentEventID != selectionEventID {
-			return nil, false, errors.New("paper evaluation is not bound to the current strategy selection")
+		if err := domain.ValidateEvaluationSelection(registry.SelectedResultSHA256, registry.CurrentEventID, resultSHA256, selectionEventID); err != nil {
+			return nil, false, err
 		}
 		snapshot, err := tx.Evaluations().OperationalSnapshot(ctx, accountRef, resultSHA256, selectionEventID)
 		if err != nil {
@@ -276,21 +268,15 @@ func (s *UseCases) evaluatePaperStrategyPerformanceTxInScope(ctx context.Context
 	if err != nil {
 		return nil, false, err
 	}
-	if selectionEventID != expectedSelectionEventID {
-		return nil, false, errors.New("paper strategy performance selection is stale")
-	}
-	if selectedResult == noStrategySelection {
-		return nil, false, errors.New("paper strategy performance is not attributable to no_strategy")
+	if err := domain.ValidateStrategyPerformanceSelection(selectionEventID, selectedResult, expectedSelectionEventID); err != nil {
+		return nil, false, err
 	}
 	latest, latestSequence, found, err := tx.Evaluations().LoadLatestPaperPerformance(ctx, accountRef)
 	if err != nil {
 		return nil, false, err
 	}
-	if !found || latest.PerformanceID != expectedLatestPerformanceID {
-		return nil, false, errors.New("paper strategy performance latest point is stale")
-	}
-	if latest.StrategySelectionEventID != selectionEventID || latest.SelectedStrategyResultRef != selectedResult {
-		return nil, false, errors.New("paper strategy performance requires a current-selection point")
+	if err := domain.ValidateLatestStrategyPerformance(found, domain.PaperPerformanceEvent(latest), expectedLatestPerformanceID, selectionEventID, selectedResult); err != nil {
+		return nil, false, err
 	}
 	if existing, found, err := tx.Evaluations().LoadPaperStrategyPerformanceByKey(ctx, accountRef, selectionEventID, latest.PerformanceID); err != nil {
 		return nil, false, err
@@ -351,10 +337,7 @@ func (s *UseCases) EvaluatePaperStrategyPerformance(ctx context.Context, account
 }
 
 type PerformanceMark = domain.PerformanceMark
-type StrategyPerformanceWindow struct {
-	Baseline, Latest PaperPerformanceEvent
-	Equities         []string
-}
+type StrategyPerformanceWindow = domain.StrategyPerformanceWindow
 
 type OperationalOrderReads interface {
 	OperationalOrderIDs(context.Context, string) ([]string, error)
@@ -375,15 +358,15 @@ func DerivePaperOperationalSnapshot(ctx context.Context, q OperationalOrderReads
 		if err != nil {
 			return paperOperationalSnapshot{}, err
 		}
-		if intent.StrategyResultSHA256 != resultSHA256 || intent.StrategySelectionEventID != selectionEventID {
+		if !domain.OrderInStrategySelection(domain.OrderIntent(intent), resultSHA256, selectionEventID) {
 			continue
 		}
 		state, err := q.LoadOperationalState(ctx, orderID)
 		if err != nil {
 			return paperOperationalSnapshot{}, err
 		}
-		if intent.Mode != "paper" || intent.AccountRef != accountRef || state.AccountRef != accountRef {
-			return paperOperationalSnapshot{}, errors.New("paper evaluation order scope is invalid")
+		if err := domain.ValidateOperationalOrderScope(domain.OrderIntent(intent), (*orderdomain.State)(state), accountRef); err != nil {
+			return paperOperationalSnapshot{}, err
 		}
 		intentJSON, _, err := orderJSONHash(intent)
 		if err != nil {
@@ -396,15 +379,7 @@ func DerivePaperOperationalSnapshot(ctx context.Context, q OperationalOrderReads
 		if err := encoder.Encode([]any{"paper_order", orderID, string(intentJSON), string(stateJSON)}); err != nil {
 			return paperOperationalSnapshot{}, err
 		}
-		result.Orders++
-		switch {
-		case state.PendingAction != "":
-			result.Pending++
-		case state.Status == "FILLED" || state.Status == "CANCELED" || state.Status == "REJECTED" || state.Status == "RISK_REJECTED":
-			result.Terminal++
-		default:
-			result.Active++
-		}
+		domain.CountOperationalOrder(&result, (*orderdomain.State)(state))
 	}
 	result.SHA256 = hex.EncodeToString(hash.Sum(nil))
 	return result, nil

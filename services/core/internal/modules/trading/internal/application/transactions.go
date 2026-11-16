@@ -5,8 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"math/big"
 	"omni-folio/services/core/internal/modules/trading/internal/domain"
+	orderdomain "omni-folio/services/core/internal/modules/trading/internal/domain/order"
 	paperdomain "omni-folio/services/core/internal/modules/trading/internal/domain/paper"
 	riskdomain "omni-folio/services/core/internal/modules/trading/internal/domain/risk"
 
@@ -78,8 +78,8 @@ func (s *UseCases) AuthorizePaperDispatchOnceTx(ctx context.Context, tx WriteSco
 	if err != nil {
 		return nil, false, err
 	}
-	if state.Status != "RECORDED" || state.PendingAction != "" {
-		return nil, false, errors.New("paper authorization requires a recorded order")
+	if err := domain.ValidatePaperDispatchState((*orderdomain.State)(state)); err != nil {
+		return nil, false, err
 	}
 	intent, err := tx.Orders().LoadOrderIntentFrom(ctx, orderID)
 	if err != nil {
@@ -97,8 +97,8 @@ func (s *UseCases) AuthorizePaperDispatchOnceTx(ctx context.Context, tx WriteSco
 	if err != nil {
 		return nil, false, err
 	}
-	if blocked {
-		return nil, false, errors.New("account has an unresolved order command")
+	if err := domain.ValidateAccountDispatchAvailable(blocked); err != nil {
+		return nil, false, err
 	}
 	recordedAt := now.Format(time.RFC3339Nano)
 	authorization = PaperAuthorization{
@@ -195,7 +195,7 @@ func (s *UseCases) runPaperFillInScope(ctx context.Context, tx WriteScope, order
 	if err != nil {
 		return nil, err
 	}
-	if state.Status != "OPEN" && state.Status != "PARTIALLY_FILLED" {
+	if !domain.PaperOrderNeedsFill((*orderdomain.State)(state)) {
 		return state, nil
 	}
 	now := s.now().UTC()
@@ -223,21 +223,14 @@ func (s *UseCases) runPaperFillInScope(ctx context.Context, tx WriteScope, order
 	if err != nil {
 		return nil, err
 	}
-	total, _ := new(big.Int).SetString(state.Quantity, 10)
-	filled, _ := new(big.Int).SetString(state.FilledQuantity, 10)
-	remaining := new(big.Int).Sub(total, filled)
-	position := new(big.Int)
-	for _, lot := range account.Lots[intent.Symbol] {
-		quantity, ok := new(big.Int).SetString(lot.Quantity, 10)
-		if !ok {
-			return nil, errors.New("paper fill position is invalid")
-		}
-		position.Add(position, quantity)
+	remaining, position, err := domain.PaperFillQuantities((*orderdomain.State)(state), account.Lots[intent.Symbol])
+	if err != nil {
+		return nil, err
 	}
 	var bar *PaperMarketBarObservation
 	var calculated paperdomain.Fill
 	for _, candidate := range candidates {
-		if usedBars[candidate.ObservationID] || (throughClose != "" && candidate.CloseAt > throughClose) {
+		if !domain.PaperFillBarEligible(domain.PaperMarketBarObservation(*candidate), usedBars[candidate.ObservationID], throughClose) {
 			continue
 		}
 		consumed, err := tx.Paper().PaperConsumedBarCapacity(ctx, intent.AccountRef, intent.Symbol, candidate.ObservationID)
@@ -317,8 +310,12 @@ func (s *UseCases) heartbeatInScope(ctx context.Context, tx WriteScope, claim *R
 		return nil, nil, err
 	}
 	policy, err := tx.Selections().LoadCurrentStrategyExecutionPolicy(ctx, claim.SelectedResultSHA256, claim.StrategySelectionEventID)
-	if err != nil || !found || session.ExecutionPolicySHA256 != policy.SHA256 {
-		return nil, nil, errors.New("local paper heartbeat session changed")
+	var sessionPolicy string
+	if err == nil && found {
+		sessionPolicy = session.ExecutionPolicySHA256
+	}
+	if bindErr := domain.ValidateHeartbeatSession(err == nil, found, sessionPolicy, policy.SHA256); bindErr != nil {
+		return nil, nil, bindErr
 	}
 	if err := tx.Paper().RequireIsolatedPaperAccount(ctx, claim.AccountRef); err != nil {
 		return nil, nil, err
@@ -339,8 +336,8 @@ func (s *UseCases) heartbeatInScope(ctx context.Context, tx WriteScope, claim *R
 		return nil, nil, err
 	}
 	recordedAt, _ := canonicalUTCTime(previous.RecordedAt)
-	if now.Before(recordedAt) {
-		return nil, nil, errors.New("local paper heartbeat clock regressed")
+	if err := domain.ValidateHeartbeatClock(now, recordedAt); err != nil {
+		return nil, nil, err
 	}
 	next := AuthorityRecord{
 		EventID: s.id("execution_authority"), AccountRef: claim.AccountRef, Armed: true, LeaseOwner: s.executionOwner,
@@ -413,8 +410,8 @@ func (s *UseCases) applyPolicyInScope(ctx context.Context, tx WriteScope, accoun
 	if err != nil {
 		return nil, err
 	}
-	if strategy.CurrentEventID != expectedSelectionEventID || strategy.SelectedResultSHA256 == noStrategySelection {
-		return nil, errors.New("paper performance policy selection is stale or no_strategy")
+	if err := domain.ValidatePerformancePolicySelection(strategy.CurrentEventID, strategy.SelectedResultSHA256, expectedSelectionEventID); err != nil {
+		return nil, err
 	}
 	performance, _, err := tx.Policy().LoadPaperStrategyPerformanceByID(ctx, expectedStrategyPerformanceID)
 	if err != nil {
@@ -425,9 +422,8 @@ func (s *UseCases) applyPolicyInScope(ctx context.Context, tx WriteScope, accoun
 	if err != nil {
 		return nil, err
 	}
-	if latestID != expectedStrategyPerformanceID || performance.AccountRef != accountRef ||
-		performance.StrategySelectionEventID != strategy.CurrentEventID || performance.SelectedStrategyResultRef != strategy.SelectedResultSHA256 {
-		return nil, errors.New("paper performance policy strategy evidence is stale")
+	if err := domain.ValidateLatestPolicyPerformance(domain.PaperStrategyPerformanceEvent(performance), latestID, expectedStrategyPerformanceID, accountRef, strategy.CurrentEventID, strategy.SelectedResultSHA256); err != nil {
+		return nil, err
 	}
 	decision, err := riskdomain.EvaluatePaperPerformancePolicy(riskdomain.PaperPerformanceInput{
 		SampleCount: performance.SampleCount, CumulativeReturn: performance.CumulativeReturn, MaxDrawdown: performance.MaxDrawdown,
@@ -524,8 +520,8 @@ func (s *UseCases) AuthorizeSyntheticDispatchOnceTx(ctx context.Context, tx Writ
 	if err != nil {
 		return nil, false, err
 	}
-	if state.Status != "RECORDED" || state.PendingAction != "" {
-		return nil, false, errors.New("execution authorization requires a recorded order")
+	if err := domain.ValidateSyntheticDispatchState((*orderdomain.State)(state)); err != nil {
+		return nil, false, err
 	}
 	intent, err := tx.Orders().LoadOrderIntentFrom(ctx, orderID)
 	if err != nil {
@@ -547,15 +543,15 @@ func (s *UseCases) AuthorizeSyntheticDispatchOnceTx(ctx context.Context, tx Writ
 	if err != nil {
 		return nil, false, err
 	}
-	if blocked {
-		return nil, false, errors.New("account has an unresolved order command")
+	if err := domain.ValidateAccountDispatchAvailable(blocked); err != nil {
+		return nil, false, err
 	}
 	active, err := tx.Reservations().ActiveReservedNotional(ctx, intent.AccountRef)
 	if err != nil {
 		return nil, false, err
 	}
-	if active.Add(active, notionalValue).Cmp(big.NewRat(syntheticMaxAccountNotional, 1)) > 0 {
-		return nil, false, errors.New("active synthetic BUY reservations exceed the fixed account limit")
+	if err := domain.ValidateSyntheticAccountNotional(active, notionalValue); err != nil {
+		return nil, false, err
 	}
 	recordedAt := now.Format(time.RFC3339Nano)
 	reservation = RiskReservation{
@@ -608,22 +604,17 @@ func (s *UseCases) AcquireSyntheticExecutionLeaseTx(ctx context.Context, tx Writ
 	if err != nil {
 		return nil, err
 	}
-	if !current.Armed {
-		return nil, errors.New("synthetic execution is halted")
+	if err := domain.RequireSyntheticExecutionArmed(current.Armed); err != nil {
+		return nil, err
 	}
 	now := s.now().UTC()
-	if current.LeaseOwner != "" {
-		expires, ok := canonicalUTCTime(current.LeaseExpiresAt)
-		if !ok {
-			return nil, errors.New("execution lease expiry is invalid")
-		}
-		if now.Before(expires) {
-			if current.LeaseOwner != s.executionOwner {
-				return nil, errors.New("synthetic execution lease is owned by another process")
-			}
-			state := current.ExecutionAuthorityState
-			return &state, nil
-		}
+	reuse, err := domain.ReuseSyntheticExecutionLease(domain.ExecutionAuthorityState(current.ExecutionAuthorityState), s.executionOwner, now)
+	if err != nil {
+		return nil, err
+	}
+	if reuse {
+		state := current.ExecutionAuthorityState
+		return &state, nil
 	}
 	record := AuthorityRecord{
 		EventID: s.id("execution_authority"), AccountRef: accountRef, Armed: true, LeaseOwner: s.executionOwner,
@@ -637,9 +628,8 @@ func (s *UseCases) AcquireSyntheticExecutionLeaseTx(ctx context.Context, tx Writ
 }
 
 func (s *UseCases) HaltSyntheticExecutionTx(ctx context.Context, tx WriteScope, now time.Time, reasonCode, policyEventID string, accountRefs []string, automaticHaltIDs map[string]string) (int, error) {
-	if (reasonCode == "manual_halt") != (policyEventID == "") ||
-		(reasonCode != "manual_halt" && reasonCode != "automatic_performance_halt") {
-		return 0, errors.New("execution halt provenance is invalid")
+	if err := domain.ValidateExecutionHaltProvenance(reasonCode, policyEventID); err != nil {
+		return 0, err
 	}
 	recordedAt := now.Format(time.RFC3339Nano)
 	for _, accountRef := range accountRefs {
@@ -647,8 +637,8 @@ func (s *UseCases) HaltSyntheticExecutionTx(ctx context.Context, tx WriteScope, 
 		if err != nil {
 			return 0, err
 		}
-		if !current.Armed {
-			return 0, errors.New("captured execution authority is no longer armed")
+		if err := domain.ValidateCapturedArmedAuthority(current.Armed); err != nil {
+			return 0, err
 		}
 		eventID := s.id("execution_authority")
 		if reasonCode == "automatic_performance_halt" {
@@ -669,17 +659,12 @@ func (s *UseCases) HaltSyntheticExecutionTx(ctx context.Context, tx WriteScope, 
 }
 
 func (s *UseCases) RollbackPaperCandidateTx(ctx context.Context, tx WriteScope, state StrategyRegistryProof, expectedCurrentEventID, sourceEventID, reasonCode, policyEventID, eventID string, now time.Time) (*StrategySelectionState, error) {
-	if state.CurrentEventID != expectedCurrentEventID || sourceEventID != state.CurrentEventID {
-		return nil, errors.New("stale or mismatched strategy rollback source")
+	if err := domain.ValidateRollbackSource(state.CurrentEventID, expectedCurrentEventID, sourceEventID); err != nil {
+		return nil, err
 	}
-	if len(state.Stack) == 0 || (reasonCode == "manual_rollback") != (policyEventID == "") ||
-		(reasonCode != "manual_rollback" && reasonCode != "automatic_performance_rollback") || !safeOrderID(eventID) {
-		return nil, errors.New("strategy rollback transition is invalid")
-	}
-	nextStack := append([]string(nil), state.Stack[:len(state.Stack)-1]...)
-	selected := noStrategySelection
-	if len(nextStack) != 0 {
-		selected = nextStack[len(nextStack)-1]
+	selected, err := domain.RollbackPaperSelection(state.Stack, reasonCode, policyEventID, eventID)
+	if err != nil {
+		return nil, err
 	}
 	event := StrategySelectionEvent{
 		EventID: eventID, EventType: "ROLLBACK", ExpectedCurrentEventID: expectedCurrentEventID,
@@ -710,10 +695,5 @@ func (s *UseCases) RequireCurrentSyntheticExecutionLease(ctx context.Context, tx
 }
 
 func (s *UseCases) ValidateOwnedExecutionLease(authority ExecutionAuthorityState, fencingToken int64, now time.Time) error {
-	expires, expiryOK := canonicalUTCTime(authority.LeaseExpiresAt)
-	if !authority.Armed || authority.LeaseOwner != s.executionOwner || authority.FencingToken != fencingToken ||
-		!expiryOK || !now.Before(expires) {
-		return errors.New("execution authority is halted, stale, expired, or owned by another process")
-	}
-	return nil
+	return domain.ValidateOwnedExecutionLease(domain.ExecutionAuthorityState(authority), s.executionOwner, fencingToken, now)
 }

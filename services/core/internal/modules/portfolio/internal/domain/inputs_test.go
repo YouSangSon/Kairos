@@ -2,10 +2,28 @@ package domain
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestRequestedCutoffRejectsFutureKnowledgeAtNanosecondBoundary(t *testing.T) {
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	for _, offset := range []time.Duration{-time.Nanosecond, 0, time.Nanosecond} {
+		err := ValidateRequestedCutoff(now.Add(offset), now)
+		if offset <= 0 {
+			if err != nil {
+				t.Fatalf("known cutoff rejected: %v", err)
+			}
+			continue
+		}
+		var failure *Failure
+		if !errors.As(err, &failure) || failure.Code != "invalid_query" || failure.Message != "valuation as_of cannot be in the future" || failure.Field != "as_of" {
+			t.Fatalf("future cutoff rejection=%+v", err)
+		}
+	}
+}
 
 func TestFixtureAndOwnerObservationIDsKeepSeparateTimes(t *testing.T) {
 	fixtureAt := "2025-01-01T00:00:00.000000001Z"

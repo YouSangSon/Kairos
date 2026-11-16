@@ -6,8 +6,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"math/big"
-	"omni-folio/services/core/internal/exact"
 	"omni-folio/services/core/internal/modules/ledger/contracts"
 	"omni-folio/services/core/internal/modules/ledger/internal/domain"
 	"time"
@@ -87,7 +85,7 @@ func (s *UseCases) previewInScope(ctx context.Context, tx WriteScope, input cont
 	created := s.now().UTC()
 	preview := &ImportPreview{
 		PreviewID: s.id("preview"), FileSHA256: input.FileSHA256, SchemaVersion: csvSchema, MappingVersion: mappingSchema,
-		LedgerRevision: ledgerdomain.Revision(rev), CanApply: totals.ErrorRows == 0 && totals.UnresolvedRows == 0,
+		LedgerRevision: ledgerdomain.Revision(rev), CanApply: ledgerdomain.PreviewCanApply(totals.ErrorRows, totals.UnresolvedRows),
 		Rows: rows, Totals: totals,
 	}
 	preview.PreviewFingerprint = PreviewFingerprint(preview.FileSHA256, preview.SchemaVersion, preview.MappingVersion, preview.LedgerRevision)
@@ -103,7 +101,7 @@ func (s *UseCases) previewInScope(ctx context.Context, tx WriteScope, input cont
 
 func (s *UseCases) normalizeRows(ctx context.Context, q Reader, records []contracts.ImportRow) ([]PreviewRow, *contracts.Error) {
 	seen := map[string]PreviewRow{}
-	seenCorrectionTargets := map[string]bool{}
+	seenCorrectionTargets := map[string]int{}
 	result := make([]PreviewRow, 0, len(records))
 	for i, record := range records {
 		row := PreviewRow{RowNumber: i + 2}
@@ -117,7 +115,7 @@ func (s *UseCases) normalizeRows(ctx context.Context, q Reader, records []contra
 			result = append(result, row)
 			continue
 		}
-		if resolution := unresolved(tx); resolution != nil {
+		if resolution := (*Resolution)(ledgerdomain.ResolveImportTransaction(ledgerdomain.Transaction(*tx))); resolution != nil {
 			row.Status, row.Transaction, row.Resolution = "unresolved", tx, resolution
 			result = append(result, row)
 			continue
@@ -163,10 +161,10 @@ func (s *UseCases) normalizeRows(ctx context.Context, q Reader, records []contra
 					row.Status, row.Errors = "error", []APIError{*validationErr}
 				} else {
 					targetKey := tx.AccountID + "\x00" + tx.CorrectsSourceEventID
-					if seenCorrectionTargets[targetKey] {
-						row.Status, row.Errors = "error", []APIError{*invalidCorrection()}
+					if rejection := ledgerdomain.ValidateCashVoidUse(seenCorrectionTargets[targetKey]); rejection != nil {
+						row.Status, row.Errors = "error", []APIError{APIError(*rejection)}
 					} else {
-						seenCorrectionTargets[targetKey] = true
+						seenCorrectionTargets[targetKey] = 1
 						row.CorrectionTarget = target
 					}
 				}
@@ -183,12 +181,7 @@ func (s *UseCases) normalizeRows(ctx context.Context, q Reader, records []contra
 }
 
 func SameTransaction(a, b *Transaction) bool {
-	if a == nil || b == nil {
-		return false
-	}
-	left, right := *a, *b
-	left.EventID, right.EventID = "", ""
-	return left == right
+	return ledgerdomain.SameTransaction((*ledgerdomain.Transaction)(a), (*ledgerdomain.Transaction)(b))
 }
 
 func ValidateCashVoid(ctx context.Context, q Reader, correction *Transaction, requireUnused bool) (*CorrectionTarget, *APIError, error) {
@@ -199,44 +192,23 @@ func ValidateCashVoid(ctx context.Context, q Reader, correction *Transaction, re
 	if err != nil {
 		return nil, nil, err
 	}
-	eligible := target.Type == "DEPOSIT" || target.Type == "WITHDRAWAL" || target.Type == "DIVIDEND" || target.Type == "FEE" || target.Type == "TAX"
-	targetTime, targetTimeErr := time.Parse(time.RFC3339Nano, target.OccurredAt)
-	correctionTime, correctionTimeErr := time.Parse(time.RFC3339Nano, correction.OccurredAt)
-	targetAmount, targetAmountErr := exact.ParseDecimal(target.Amount)
-	correctionAmount, correctionAmountErr := exact.ParseDecimal(correction.Amount)
-	if !eligible || target.Currency != correction.Currency || targetTimeErr != nil || correctionTimeErr != nil || correctionTime.Before(targetTime) || targetAmountErr != nil || correctionAmountErr != nil || new(big.Rat).Add(targetAmount, correctionAmount).Sign() != 0 {
-		return nil, invalidCorrection(), nil
+	if rejection := ledgerdomain.ValidateCashVoidTarget(ledgerdomain.Transaction(*correction), ledgerdomain.Transaction(*target)); rejection != nil {
+		return nil, (*APIError)(rejection), nil
 	}
 	if requireUnused {
 		count, err := q.CashVoidCount(ctx, correction.AccountID, correction.CorrectsSourceEventID)
 		if err != nil {
 			return nil, nil, err
 		}
-		if count != 0 {
-			return nil, invalidCorrection(), nil
+		if rejection := ledgerdomain.ValidateCashVoidUse(count); rejection != nil {
+			return nil, (*APIError)(rejection), nil
 		}
 	}
 	return &CorrectionTarget{SourceEventID: target.SourceEventID, Type: target.Type, Currency: target.Currency, Amount: target.Amount}, nil, nil
 }
 
 func invalidCorrection() *APIError {
-	return &APIError{Code: "invalid_correction", Message: "cash void does not exactly reverse one eligible existing cash event", Field: "corrects_source_event_id"}
-}
-
-func unresolved(tx *Transaction) *Resolution {
-	if tx.AccountID != "account-main" {
-		return &Resolution{
-			Kind: "account", SourceField: "account_id", SourceValue: tx.AccountID,
-			RequiredAction: "select_account", CandidateIDs: []string{"account-main"},
-		}
-	}
-	if tx.Symbol != "" && tx.Symbol != "AAPL" {
-		return &Resolution{
-			Kind: "instrument", SourceField: "symbol", SourceValue: tx.Symbol,
-			RequiredAction: "select_instrument", CandidateIDs: []string{"instrument_aapl"},
-		}
-	}
-	return nil
+	return (*APIError)(ledgerdomain.InvalidCashVoidCorrection())
 }
 
 func PreviewFingerprint(fileSHA, schemaVersion, mappingVersion, ledgerRevision string) string {
@@ -275,19 +247,18 @@ func (s *UseCases) applyInScope(ctx context.Context, tx WriteScope, req ApplyReq
 		return nil, contracts.InternalError(err)
 	}
 	previewJSON, fileSHA, expiresAt, previewRev := stored.JSON, stored.FileSHA256, stored.ExpiresAt, stored.LedgerRevision
-	expires, err := time.Parse(time.RFC3339Nano, expiresAt)
-	if err != nil || !received.Before(expires) {
-		return nil, &contracts.Error{Kind: contracts.Conflict, Body: APIError{Code: "stale_preview", Message: "preview expired; create a new preview"}}
+	if rejection := ledgerdomain.ValidatePreviewLifetime(received, expiresAt); rejection != nil {
+		return nil, &contracts.Error{Kind: contracts.Conflict, Body: APIError(*rejection)}
 	}
-	if !stored.CanApply {
-		return nil, &contracts.Error{Kind: contracts.InvalidInput, Body: APIError{Code: "preview_has_errors", Message: "preview contains invalid rows"}}
+	if rejection := ledgerdomain.ValidateApplicablePreview(stored.CanApply); rejection != nil {
+		return nil, &contracts.Error{Kind: contracts.InvalidInput, Body: APIError(*rejection)}
 	}
 	currentRev, err := tx.CurrentRevision(ctx)
 	if err != nil {
 		return nil, contracts.InternalError(err)
 	}
-	if currentRev != previewRev {
-		return nil, &contracts.Error{Kind: contracts.Conflict, Body: APIError{Code: "stale_preview", Message: "ledger revision changed; create a new preview"}}
+	if rejection := ledgerdomain.ValidatePreviewRevision(currentRev, previewRev); rejection != nil {
+		return nil, &contracts.Error{Kind: contracts.Conflict, Body: APIError(*rejection)}
 	}
 	var preview ImportPreview
 	if err := json.Unmarshal([]byte(previewJSON), &preview); err != nil {

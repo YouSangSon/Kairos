@@ -3,11 +3,12 @@ package application
 import (
 	"context"
 	"errors"
+	"omni-folio/services/core/internal/modules/trading/internal/domain"
 	"time"
 )
 
 var errPaperRunnerNoAvailableClose = errors.New("scheduled paper runner has no available local close")
-var errPaperRunnerIncompleteMarks = errors.New("paper performance marks are incomplete")
+var errPaperRunnerIncompleteMarks = domain.ErrPaperRunnerIncompleteMarks
 var errPaperRunnerPriorSelection = ErrPaperRunnerPriorSelection
 var ErrPaperRunnerNoAvailableClose = errPaperRunnerNoAvailableClose
 var ErrPaperRunnerIncompleteMarks = errPaperRunnerIncompleteMarks
@@ -83,17 +84,17 @@ func (s *UseCases) PrepareDuePaperPerformancePolicyWithClaim(ctx context.Context
 		if err != nil {
 			return scheduledPreparation{}, err
 		}
-		if previous != "" && previous < asOf {
+		if domain.PriorPolicyNeedsInspection(previous, asOf) {
 			point, found, err := tx.Evaluations().LoadPaperPerformanceByKey(ctx, accountRef, previous)
 			if err != nil || !found {
 				return scheduledPreparation{}, errors.Join(errors.New("scheduled paper runner frontier is missing"), err)
 			}
-			if point.StrategySelectionEventID == selection {
+			if domain.PriorPolicyMatchesSelection(domain.PaperPerformanceEvent(*point), selection) {
 				if _, complete, err := tx.Evaluations().ScheduledResult(ctx, accountRef, previous); err != nil {
 					return scheduledPreparation{}, err
-				} else if !complete {
+				} else {
 					// A newer C3/D would make this committed loss policy stale.
-					asOf = previous
+					asOf = domain.ScheduledCloseAfterPriorPolicy(asOf, previous, complete)
 				}
 			}
 		}
@@ -102,8 +103,8 @@ func (s *UseCases) PrepareDuePaperPerformancePolicyWithClaim(ctx context.Context
 		} else if found {
 			return scheduledPreparation{asOf, result}, nil
 		}
-		if selectedResult == noStrategySelection {
-			return scheduledPreparation{}, errors.New("current paper strategy is missing")
+		if err := domain.ValidateScheduledStrategy(selectedResult); err != nil {
+			return scheduledPreparation{}, err
 		}
 		session, found, err := tx.Paper().LoadPaperAccountingSession(ctx, accountRef)
 		if err != nil {
@@ -293,5 +294,5 @@ func (s *UseCases) RunPaperPerformanceLoopDue(ctx context.Context, accountRef st
 		}
 		return false, err
 	}
-	return result != nil && result.Decision == "HALT_AND_ROLLBACK", nil
+	return result != nil && domain.PaperPolicyStopsExecution(result.Decision), nil
 }

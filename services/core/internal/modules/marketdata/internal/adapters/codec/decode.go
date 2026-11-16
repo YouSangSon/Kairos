@@ -9,10 +9,8 @@ import (
 	sharedcodec "omni-folio/services/core/internal/codec"
 	c "omni-folio/services/core/internal/modules/marketdata/contracts"
 	"omni-folio/services/core/internal/modules/marketdata/internal/application"
-	"regexp"
-	"strings"
+	"omni-folio/services/core/internal/modules/marketdata/internal/domain"
 	"time"
-	"unicode"
 	"unicode/utf8"
 )
 
@@ -33,12 +31,7 @@ type SecurityPriceObservation = c.SecurityPriceObservation
 type SecurityPriceObservationInput = c.SecurityPriceObservationInput
 
 const maxBodyBytes = 1 << 20
-const marketDataAdjustmentUnspecified = "unspecified"
 
-var kiwoomStockPattern = regexp.MustCompile(`^[0-9]{6}$`)
-var safeOrderID = sharedcodec.SafeID
-var canonicalUTCString = sharedcodec.CanonicalUTC
-var canonicalDecimal = sharedcodec.CanonicalDecimal
 var orderJSONHash = sharedcodec.JSONHash
 var validJSONSurrogates = sharedcodec.ValidJSONSurrogates
 var ensureJSONEOF = sharedcodec.EnsureJSONEOF
@@ -47,18 +40,9 @@ type ownerFXSeriesRecord = application.OwnerFXRecord
 type ownerPriceSeriesRecord = application.OwnerPriceRecord
 type benchmarkSeriesRecord = application.BenchmarkRecord
 
-var currencyCodePattern = regexp.MustCompile(`^[A-Z]{3}$`)
-
 var errFXObservationNotFound = errors.New("FX observation not found")
 
 var errSecurityPriceObservationNotFound = errors.New("security price observation not found")
-
-const (
-	instrumentListingDeclare   = "DECLARE"
-	instrumentListingRevoke    = "REVOKE"
-	instrumentListingAuthority = "owner_declared"
-	noInstrumentListingEvent   = "no_event"
-)
 
 var errInstrumentListingNotFound = c.ErrListingNotFound
 
@@ -72,8 +56,6 @@ const ownerPriceSeriesSchema = "owner-price-series.v1"
 
 const ownerPriceSource = "owner_declared"
 
-const ownerPriceAdjustment = "unadjusted"
-
 var errOwnerPriceInput = c.ErrOwnerPriceInput
 
 const benchmarkSeriesSchema = "benchmark-index-series.v1"
@@ -83,26 +65,11 @@ var errBenchmarkSeriesInput = c.ErrBenchmarkInput
 var errBenchmarkSeriesNotFound = c.ErrBenchmarkNotFound
 
 func ValidateFXObservationInput(input FXObservationInput) error {
-	if input.Source != "local_fixture" {
-		return errors.New("FX observation source is outside the local fixture boundary")
-	}
-	if !safeOrderID(input.SourceObservationID) {
-		return errors.New("FX source observation identifier is invalid")
-	}
-	if !currencyCodePattern.MatchString(input.BaseCurrency) || !currencyCodePattern.MatchString(input.QuoteCurrency) || input.BaseCurrency == input.QuoteCurrency {
-		return errors.New("FX observation currencies must be distinct uppercase three-letter codes")
-	}
-	if !canonicalDecimal(input.Rate, true) || input.Rate == "0" {
-		return errors.New("FX observation rate must be a positive canonical decimal")
-	}
-	if !canonicalUTCString(input.ObservedAt) || !canonicalUTCString(input.FetchedAt) {
-		return errors.New("FX observation timestamps must be canonical UTC")
-	}
-	return nil
+	return domain.ValidateFXInput(domain.FXInput(input))
 }
 
 func ValidateFXObservation(observation FXObservation) error {
-	if !safeOrderID(observation.ObservationID) || !canonicalUTCString(observation.RecordedAt) {
+	if !domain.DurableMetadataValid(observation.ObservationID, observation.RecordedAt) {
 		return errors.New("FX observation durable metadata is invalid")
 	}
 	return ValidateFXObservationInput(FXObservationInput{
@@ -118,56 +85,33 @@ func FxObservationSHA(observation FXObservation) (string, error) {
 }
 
 func ValidateFXObservationQuery(source, base, quote, asOf string) error {
-	if source != "local_fixture" || !currencyCodePattern.MatchString(base) || !currencyCodePattern.MatchString(quote) || base == quote || !canonicalUTCString(asOf) {
-		return errors.New("invalid direct FX observation query")
-	}
-	return nil
+	return domain.ValidateFXQuery(source, base, quote, asOf)
 }
 
 func ValidSecurityPriceObservationSource(source string) bool {
-	return source == "local_fixture" || source == "kiwoom_mock" || source == "kiwoom_production"
+	return domain.ValidPriceSource(source)
 }
 
 func KiwoomSecurityPriceObservationSource(source string) bool {
-	return source == "kiwoom_mock" || source == "kiwoom_production"
+	return domain.KiwoomSource(source)
 }
 
 func ValidateSecurityPriceObservationInput(input SecurityPriceObservationInput) error {
-	if !ValidSecurityPriceObservationSource(input.Source) {
-		return errors.New("security price observation source is outside the supported boundary")
-	}
-	if !safeOrderID(input.SourceObservationID) || !safeOrderID(input.InstrumentID) || !safeOrderID(input.Symbol) || !safeOrderID(input.Venue) ||
-		input.Symbol != strings.ToUpper(input.Symbol) || input.Venue != strings.ToUpper(input.Venue) {
-		return errors.New("security price observation identifier is invalid")
+	value := domain.PriceInput(input)
+	if err := domain.ValidatePriceIdentity(value); err != nil {
+		return err
 	}
 	if KiwoomSecurityPriceObservationSource(input.Source) {
-		if !kiwoomStockPattern.MatchString(input.Symbol) || input.Venue != "XKRX" || input.Currency != "KRW" {
-			return errors.New("Kiwoom price observation market identity is invalid")
-		}
 		wantID, err := KiwoomLatestTradeObservationID(input.Source, input.InstrumentID, input.Symbol, input.Venue, input.Currency, input.PriceAdjustment, input.ObservedAt)
 		if err != nil || input.SourceObservationID != wantID {
 			return errors.New("Kiwoom price observation identifier is invalid")
 		}
 	}
-	if !currencyCodePattern.MatchString(input.Currency) || !canonicalDecimal(input.Price, true) || input.Price == "0" {
-		return errors.New("security price observation price or currency is invalid")
-	}
-	if input.PriceAdjustment != marketDataAdjustmentUnspecified {
-		return errors.New("security price observation adjustment is outside the local fixture boundary")
-	}
-	if !canonicalUTCString(input.ObservedAt) || !canonicalUTCString(input.FetchedAt) {
-		return errors.New("security price observation timestamps must be canonical UTC")
-	}
-	observed, _ := time.Parse(time.RFC3339Nano, input.ObservedAt)
-	fetched, _ := time.Parse(time.RFC3339Nano, input.FetchedAt)
-	if fetched.Before(observed) {
-		return errors.New("security price observation fetched_at precedes observed_at")
-	}
-	return nil
+	return domain.ValidatePriceValues(value)
 }
 
 func ValidateSecurityPriceObservation(observation SecurityPriceObservation) error {
-	if !safeOrderID(observation.ObservationID) || !canonicalUTCString(observation.RecordedAt) {
+	if !domain.DurableMetadataValid(observation.ObservationID, observation.RecordedAt) {
 		return errors.New("security price observation durable metadata is invalid")
 	}
 	if err := ValidateSecurityPriceObservationInput(SecurityPriceObservationInput{
@@ -177,9 +121,7 @@ func ValidateSecurityPriceObservation(observation SecurityPriceObservation) erro
 	}); err != nil {
 		return err
 	}
-	fetched, _ := time.Parse(time.RFC3339Nano, observation.FetchedAt)
-	recorded, _ := time.Parse(time.RFC3339Nano, observation.RecordedAt)
-	if recorded.Before(fetched) {
+	if !domain.PriceRecordedAfterCapture(observation.FetchedAt, observation.RecordedAt) {
 		return errors.New("security price observation recorded_at precedes fetched_at")
 	}
 	return nil
@@ -191,12 +133,7 @@ func SecurityPriceObservationSHA(observation SecurityPriceObservation) (string, 
 }
 
 func ValidateSecurityPriceObservationQuery(source, instrumentID, symbol, venue, currency, adjustment, asOf string) error {
-	if source != "local_fixture" || !safeOrderID(instrumentID) || !safeOrderID(symbol) || !safeOrderID(venue) ||
-		symbol != strings.ToUpper(symbol) || venue != strings.ToUpper(venue) ||
-		!currencyCodePattern.MatchString(currency) || adjustment != marketDataAdjustmentUnspecified || !canonicalUTCString(asOf) {
-		return errors.New("invalid security price observation query")
-	}
-	return nil
+	return domain.ValidatePriceQuery(source, instrumentID, symbol, venue, currency, adjustment, asOf)
 }
 
 func KiwoomLatestTradeObservationID(source, instrumentID, symbol, venue, currency, adjustment, observedAt string) (string, error) {
@@ -208,26 +145,14 @@ func KiwoomLatestTradeObservationID(source, instrumentID, symbol, venue, currenc
 }
 
 func ValidateInstrumentListingInput(input InstrumentListingInput) error {
-	if !safeOrderID(input.InstrumentID) || !safeOrderID(input.Venue) || !safeOrderID(input.Symbol) ||
-		input.Venue != strings.ToUpper(input.Venue) || input.Symbol != strings.ToUpper(input.Symbol) ||
-		!currencyCodePattern.MatchString(input.Currency) {
-		return errors.New("instrument listing identity is invalid")
-	}
-	return nil
+	return domain.ValidateListingInput(domain.ListingInput(input))
 }
 
 func ValidateInstrumentListingEvent(event InstrumentListingEvent) error {
-	if err := ValidateInstrumentListingInput(InstrumentListingInput{
-		InstrumentID: event.InstrumentID, Venue: event.Venue, Symbol: event.Symbol, Currency: event.Currency,
-	}); err != nil {
+	if err := ValidateInstrumentListingInput(InstrumentListingInput{InstrumentID: event.InstrumentID, Venue: event.Venue, Symbol: event.Symbol, Currency: event.Currency}); err != nil {
 		return err
 	}
-	if !safeOrderID(event.EventID) || !safeOrderID(event.ExpectedPreviousEventID) ||
-		(event.EventType != instrumentListingDeclare && event.EventType != instrumentListingRevoke) ||
-		event.Authority != instrumentListingAuthority || !canonicalUTCString(event.RecordedAt) {
-		return errors.New("instrument listing event metadata is invalid")
-	}
-	return nil
+	return domain.ValidateListingMetadata(domain.ListingEvent(event))
 }
 
 func InstrumentListingEventSHA(event InstrumentListingEvent) (string, error) {
@@ -254,8 +179,7 @@ func DecodeOwnerFXSeries(ctx context.Context, raw []byte) (*OwnerFXSeriesInput, 
 	delete(fields, "points")
 	scalars, err := json.Marshal(fields)
 	var input OwnerFXSeriesInput
-	if err != nil || json.Unmarshal(scalars, &input) != nil || input.SchemaVersion != ownerFXSeriesSchema || !safeOrderID(input.SourceVersion) ||
-		!currencyCodePattern.MatchString(input.BaseCurrency) || !currencyCodePattern.MatchString(input.QuoteCurrency) || input.BaseCurrency == input.QuoteCurrency || len(input.FetchedAt) > 30 || !canonicalUTCString(input.FetchedAt) {
+	if err != nil || json.Unmarshal(scalars, &input) != nil || input.SchemaVersion != ownerFXSeriesSchema || !domain.OwnerFXIdentityValid(input.SourceVersion, input.BaseCurrency, input.QuoteCurrency, input.FetchedAt) {
 		return nil, nil, "", errOwnerFXInput
 	}
 	d := json.NewDecoder(bytes.NewReader(points))
@@ -269,7 +193,7 @@ func DecodeOwnerFXSeries(ctx context.Context, raw []byte) (*OwnerFXSeriesInput, 
 		if err := ctx.Err(); err != nil {
 			return nil, nil, "", err
 		}
-		if len(input.Points) >= 10000 {
+		if !domain.SeriesPointCountAllowed(len(input.Points)) {
 			return nil, nil, "", errOwnerFXInput
 		}
 		var rawPoint json.RawMessage
@@ -280,13 +204,10 @@ func DecodeOwnerFXSeries(ctx context.Context, raw []byte) (*OwnerFXSeriesInput, 
 			return nil, nil, "", errOwnerFXInput
 		}
 		var point OwnerFXPoint
-		if json.Unmarshal(rawPoint, &point) != nil || len(point.ObservedAt) > 30 || !canonicalUTCString(point.ObservedAt) || !canonicalDecimal(point.Rate, true) || point.Rate == "0" {
+		if json.Unmarshal(rawPoint, &point) != nil || !domain.SeriesPointAdmitted(point.Rate, point.ObservedAt, fetched, previous, len(input.Points), true) {
 			return nil, nil, "", errOwnerFXInput
 		}
 		at, _ := time.Parse(time.RFC3339Nano, point.ObservedAt)
-		if at.After(fetched) || (len(input.Points) > 0 && !at.After(previous)) {
-			return nil, nil, "", errOwnerFXInput
-		}
 		input.Points = append(input.Points, point)
 		previous = at
 	}
@@ -320,8 +241,7 @@ func DecodeOwnerPriceSeries(ctx context.Context, raw []byte, canonicalID func(st
 	delete(fields, "points")
 	scalars, err := json.Marshal(fields)
 	var input OwnerPriceSeriesInput
-	if err != nil || json.Unmarshal(scalars, &input) != nil || input.SchemaVersion != ownerPriceSeriesSchema || !safeOrderID(input.SourceVersion) ||
-		!safeOrderID(input.InstrumentID) || !safeOrderID(input.Symbol) || !safeOrderID(input.Venue) || input.Symbol != strings.ToUpper(input.Symbol) || input.Venue != strings.ToUpper(input.Venue) || canonicalID(input.Symbol) != input.InstrumentID || !currencyCodePattern.MatchString(input.Currency) || input.PriceAdjustment != ownerPriceAdjustment || len(input.FetchedAt) > 30 || !canonicalUTCString(input.FetchedAt) {
+	if err != nil || json.Unmarshal(scalars, &input) != nil || input.SchemaVersion != ownerPriceSeriesSchema || !domain.OwnerPriceIdentifiersValid(input.SourceVersion, input.InstrumentID, input.Symbol, input.Venue) || !domain.OwnerPriceCaptureValid(canonicalID(input.Symbol), input.InstrumentID, input.Currency, input.PriceAdjustment, input.FetchedAt) {
 		return nil, nil, "", errOwnerPriceInput
 	}
 	d := json.NewDecoder(bytes.NewReader(points))
@@ -335,7 +255,7 @@ func DecodeOwnerPriceSeries(ctx context.Context, raw []byte, canonicalID func(st
 		if err := ctx.Err(); err != nil {
 			return nil, nil, "", err
 		}
-		if len(input.Points) >= 10000 {
+		if !domain.SeriesPointCountAllowed(len(input.Points)) {
 			return nil, nil, "", errOwnerPriceInput
 		}
 		var rawPoint json.RawMessage
@@ -346,13 +266,10 @@ func DecodeOwnerPriceSeries(ctx context.Context, raw []byte, canonicalID func(st
 			return nil, nil, "", errOwnerPriceInput
 		}
 		var point OwnerPricePoint
-		if json.Unmarshal(rawPoint, &point) != nil || len(point.ObservedAt) > 30 || !canonicalUTCString(point.ObservedAt) || !canonicalDecimal(point.Price, true) || point.Price == "0" {
+		if json.Unmarshal(rawPoint, &point) != nil || !domain.SeriesPointAdmitted(point.Price, point.ObservedAt, fetched, previous, len(input.Points), true) {
 			return nil, nil, "", errOwnerPriceInput
 		}
 		at, _ := time.Parse(time.RFC3339Nano, point.ObservedAt)
-		if at.After(fetched) || (len(input.Points) > 0 && !at.After(previous)) {
-			return nil, nil, "", errOwnerPriceInput
-		}
 		input.Points = append(input.Points, point)
 		previous = at
 	}
@@ -420,20 +337,20 @@ func DecodeBenchmarkSeries(ctx context.Context, raw []byte) (*BenchmarkSeriesInp
 	if err != nil || json.Unmarshal(scalars, &input) != nil {
 		return nil, nil, "", errBenchmarkSeriesInput
 	}
-	if input.SchemaVersion != benchmarkSeriesSchema || !safeOrderID(input.BenchmarkID) || !safeOrderID(input.SourceVersion) ||
-		input.Label == "" || len(input.Label) > 160 || strings.TrimSpace(input.Label) != input.Label || strings.IndexFunc(input.Label, unicode.IsControl) >= 0 ||
-		(input.Currency != "KRW" && input.Currency != "USD") || len(input.FetchedAt) > 30 || !canonicalUTCString(input.FetchedAt) {
+	if input.SchemaVersion != benchmarkSeriesSchema || !domain.BenchmarkIdentityValid(input.BenchmarkID, input.SourceVersion, input.Label, input.Currency, input.FetchedAt) {
 		return nil, nil, "", errBenchmarkSeriesInput
 	}
-	switch input.ReturnBasis {
-	case "price_index", "gross_total_return", "net_total_return":
-	default:
+	if !domain.BenchmarkReturnBasisValid(input.ReturnBasis) {
 		return nil, nil, "", errBenchmarkSeriesInput
 	}
 	ref, err := url.Parse(input.SourceReference)
-	if err != nil || len(input.SourceReference) > 512 || ref.Scheme != "https" || ref.Hostname() == "" || ref.User != nil || ref.RawQuery != "" || ref.ForceQuery || ref.Fragment != "" || ref.Opaque != "" || ref.String() != input.SourceReference {
+	if err != nil || !domain.BenchmarkReferenceValid(domain.SourceReference{
+		Bytes: len(input.SourceReference), Scheme: ref.Scheme, Hostname: ref.Hostname(), HasUser: ref.User != nil,
+		RawQuery: ref.RawQuery, ForceQuery: ref.ForceQuery, Fragment: ref.Fragment, Opaque: ref.Opaque, Canonical: ref.String() == input.SourceReference,
+	}) {
 		return nil, nil, "", errBenchmarkSeriesInput
 	}
+
 	d := json.NewDecoder(bytes.NewReader(points))
 	if token, err := d.Token(); err != nil || token != json.Delim('[') {
 		return nil, nil, "", errBenchmarkSeriesInput
@@ -444,7 +361,7 @@ func DecodeBenchmarkSeries(ctx context.Context, raw []byte) (*BenchmarkSeriesInp
 		if err := ctx.Err(); err != nil {
 			return nil, nil, "", err
 		}
-		if len(input.Points) >= 10000 {
+		if !domain.SeriesPointCountAllowed(len(input.Points)) {
 			return nil, nil, "", errBenchmarkSeriesInput
 		}
 		var row json.RawMessage
@@ -455,17 +372,14 @@ func DecodeBenchmarkSeries(ctx context.Context, raw []byte) (*BenchmarkSeriesInp
 			return nil, nil, "", err
 		}
 		var point BenchmarkIndexPoint
-		if json.Unmarshal(row, &point) != nil || len(point.ObservedAt) > 30 || !canonicalUTCString(point.ObservedAt) || !canonicalDecimal(point.Level, true) {
+		if json.Unmarshal(row, &point) != nil || !domain.SeriesPointAdmitted(point.Level, point.ObservedAt, fetched, previous, len(input.Points), false) {
 			return nil, nil, "", errBenchmarkSeriesInput
 		}
 		at, _ := time.Parse(time.RFC3339Nano, point.ObservedAt)
-		if len(input.Points) > 0 && !at.After(previous) || at.After(fetched) {
-			return nil, nil, "", errBenchmarkSeriesInput
-		}
 		previous = at
 		input.Points = append(input.Points, point)
 	}
-	if token, err := d.Token(); err != nil || token != json.Delim(']') || ensureJSONEOF(d) != nil || len(input.Points) == 0 {
+	if token, err := d.Token(); err != nil || token != json.Delim(']') || ensureJSONEOF(d) != nil || !domain.SeriesContentValid(len(input.Points), true) {
 		return nil, nil, "", errBenchmarkSeriesInput
 	}
 	canonical, sha, err := orderJSONHash(input)
@@ -476,7 +390,7 @@ func DecodeBenchmarkSeries(ctx context.Context, raw []byte) (*BenchmarkSeriesInp
 }
 
 func SameBenchmarkDefinition(a, b BenchmarkSeriesInput) bool {
-	return a.Currency == b.Currency && a.ReturnBasis == b.ReturnBasis && a.SourceReference == b.SourceReference && a.Sample == b.Sample
+	return domain.SameBenchmarkDefinition(domain.BenchmarkDefinition{Currency: a.Currency, ReturnBasis: a.ReturnBasis, SourceReference: a.SourceReference, Sample: a.Sample}, domain.BenchmarkDefinition{Currency: b.Currency, ReturnBasis: b.ReturnBasis, SourceReference: b.SourceReference, Sample: b.Sample})
 }
 
 func BenchmarkRecordSHA(record benchmarkSeriesRecord) (string, error) {

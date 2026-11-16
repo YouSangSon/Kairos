@@ -2,7 +2,7 @@
 
 - 설계 기준일: 2026-11-05. 코드 기준: `add8787eaa5f348daeea97df2df5cd06de3b90a8`.
 - 범위: Go core, Flutter client, Python research, 계약·테스트·빌드·운영 도구의 연결부.
-- 상태: 승인한 15절의 모듈 구조와 호출자·테스트 이전을 구현하고 로컬 통합 검증을 마쳤다. 원격 CI와 main 반영 결과는 이 작업의 PR 기록에서 확인한다. 1–13절과 15.1–15.2절의 코드 관측은 각각 설계 기준일의 기록이다. 과거 중단 기록은 14절, 현재 구조는 15.14절, 실행·검증 범위는 [구현 계획](modular-implementation-plan.md)을 따른다.
+- 상태: 승인한 15절의 모듈 구조와 호출자·테스트 이전은 PR #80으로 반영했다. 후속 재검토에서 확인한 application·adapter의 잔여 업무 규칙도 domain으로 이전하고 특성화·집중 검사와 독립 소스 검토를 마쳤다. 1–13절과 15.1–15.2절의 코드 관측은 각각 설계 기준일의 기록이다. 과거 중단 기록은 14절, 현재 구조와 소유권 보완은 15.14–15.15절, 최종 실행·검증 범위와 결과 관리는 [구현 계획](modular-implementation-plan.md)을 따른다.
 - 상위 결정: [ADR-0002](../adr/0002-domain-module-boundaries.md). 제품 기능과 승격 권한은 [CONTEXT](../../CONTEXT.md), [GATES](../../GATES.md)가 소유한다.
 
 ## 1. 목표와 설계의 한계
@@ -700,3 +700,15 @@ Go의 실행 진입점은 `services/core/main.go`이며 인자·signal·종료 �
 경계 검사는 임의 SQL을 허용한 뒤 실행 시 검사하는 방식으로 넓히지 않는다. 고정 SQL과 인자·허용 객체를 등록하며, catalog에서 읽은 이름이나 SQL을 바꿔치기하거나 다른 DB·transaction으로 교체하는 경우도 거부한다. `legacy_symbols.json`은 변경하지 않은 순수 계산 `internal/exact/exact.go`의 기존 hash만 유지한다. 새 모듈과 이전 root 경로에는 예외가 없다.
 
 실행 환경·저장된 schema·공개 wire·금액과 hash 형식은 그대로다. 이번 변경에 Rust, 새 DB·MQ·인증 공급자, MSA 배포나 사용자 코드를 실행하는 plugin host는 포함하지 않는다. 위 표는 구현과 검사 위치의 연결이며 전체 검사·CI·배포 통과 기록은 [구현 계획](modular-implementation-plan.md)을 따른다.
+
+### 15.15 업무 규칙의 의미적 소유권 보완
+
+PR #80 이후 실제 분기와 호출자를 다시 검토한 결과, 폴더·import·SQL 소유권을 지켜도 application과 adapter에 업무 판단이 남을 수 있음을 확인했다. 이 보완에서는 허용 조건·금액 계산·상태 전이·전략 선택을 각 owner의 private domain으로 옮겼다. 원장 정정·preview 수명, 거래의 권한·예약·lease·승격·성과·목표 수량, 시장 입력의 자격과 시간, 평가 cutoff, 관심 종목 불변조건, 복구 버전·활성화 자격, Python의 입력 자격과 승격·signal 목표가 해당한다. 기존 공개 계약과 저장된 schema는 바꾸지 않았다.
+
+application은 필요한 값을 기존 순서대로 읽고 도메인 판단을 호출한다. 예를 들어 현금 정정은 대상을 조회한 뒤 대상 자격을 판정하고, 그 판정이 통과한 경우에만 사용 횟수를 조회한다. preview는 만료와 적용 가능 여부를 먼저 검사하고 revision을 읽는다. 모든 facts를 미리 모으는 최종 validator나 생성자 일괄 검증은 오류 우선순위·조회·시계 횟수를 바꾸므로 도입하지 않았다. 평가 대상에서 제외한 주문은 기존처럼 상태를 조회하지 않는다.
+
+adapter는 JSON·CSV·URL·정규식·canonical 숫자 해석, 고정 SQL, 파일·프로세스와 transaction을 구현한다. 해시·직렬화·저장 증거의 재계산 일치·행 개수와 연속성 증명도 그 위치에 남긴다. 이 검사가 업무 허용 여부를 결정하는 부분에서는 파싱한 좁은 값으로 domain 정책을 호출한다. DB 쓰기와 CAS는 adapter에서 원자적으로 실행하며 변경 허용 규칙은 domain이 소유한다. 복구 DTO나 타 모듈의 내부 저장 타입을 domain으로 복제하지 않는다.
+
+호환 범위는 입력 경로별로 보존한다. Python v1의 소수 수량 허용, v2의 정수 수량·상한, legacy proposal의 별도 허용 범위를 공통 v2 제한으로 통합하지 않는다. 여섯 decimal을 모두 파싱한 뒤 범위를 검사하는 순서, 승격 gate의 단락 평가, 부재와 null의 차이도 유지한다. 내장 공급자나 별도 저장소를 추가할 때도 이 domain 판단을 바꾸지 않고 기존 공개 계약과 adapter 연결 지점에서 확장한다. 새 인프라·범용 인터페이스·전달 계층은 추가하지 않았다.
+
+이전 전 특성화, 직접 domain 검사의 RED→GREEN, 실제 SQLite·프로세스 회귀 검사와 이전/현재 CLI 산출물 비교를 함께 사용한다. domain/application의 순환·계층 위반과 owner SQL 접근은 기존 자동 gate로 계속 검사한다. 업무 의미의 소유권은 정책 목록·실제 caller와 독립 소스 검토로 보완한다. 자동 gate가 모든 의미적 판단을 증명한다고 주장하지 않으며, 이번 조사와 검토에서 식별한 항목의 처리 근거·최종 검증 범위는 [구현 계획](modular-implementation-plan.md)에 연결한다.

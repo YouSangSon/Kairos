@@ -8,6 +8,7 @@ import (
 	"omni-folio/services/core/internal/codec"
 	c "omni-folio/services/core/internal/modules/watchlist/contracts"
 	"omni-folio/services/core/internal/modules/watchlist/internal/application"
+	"omni-folio/services/core/internal/modules/watchlist/internal/domain"
 	storage "omni-folio/services/core/internal/storage/contracts"
 	"omni-folio/services/core/internal/storage/observation"
 	"omni-folio/services/core/migrations"
@@ -114,19 +115,17 @@ func readState(ctx context.Context, q queryer) (*c.WatchlistState, c.RecoveryPro
 		return nil, proof, err
 	}
 	var state c.WatchlistState
-	if len(raw) > c.BodyLimit || json.Unmarshal([]byte(raw), &state) != nil || state.Revision != revision || revision < 0 || revision > c.RevisionLimit {
+	if len(raw) > c.BodyLimit || json.Unmarshal([]byte(raw), &state) != nil || state.Revision != revision || !domain.ValidRevision(revision) {
 		return nil, proof, errors.New("watchlist state is invalid")
 	}
-	entries, err := application.CanonicalEntries(state.Entries)
-	if err != nil || !reflect.DeepEqual(entries, state.Entries) || (revision == 0 && (state.UpdatedAt != nil || len(entries) != 0)) ||
-		(revision > 0 && (state.UpdatedAt == nil || !codec.CanonicalUTC(*state.UpdatedAt))) {
+	if !application.StateMetadataValid(state) {
 		return nil, proof, errors.New("watchlist state metadata is invalid")
 	}
 	canonical, sha, err := codec.JSONHash(state)
 	if err != nil || string(canonical) != raw || sha != hash {
 		return nil, proof, errors.New("watchlist state proof mismatch")
 	}
-	return &state, c.RecoveryProof{SHA256: sha, Revision: revision, Entries: len(entries)}, nil
+	return &state, c.RecoveryProof{SHA256: sha, Revision: revision, Entries: len(state.Entries)}, nil
 }
 
 func proveWatchlistRecovery(ctx context.Context, q queryer) (c.RecoveryProof, error) {
@@ -135,8 +134,8 @@ func proveWatchlistRecovery(ctx context.Context, q queryer) (c.RecoveryProof, er
 }
 
 func (s *Store) Replace(ctx context.Context, change c.WatchlistChange) (*c.WatchlistState, error) {
-	if _, err := application.CanonicalEntries(change.Entries); err != nil || change.ExpectedRevision < 0 || change.ExpectedRevision > c.RevisionLimit {
-		return nil, c.ErrInput
+	if err := application.ValidateChange(change); err != nil {
+		return nil, err
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {

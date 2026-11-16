@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"omni-folio/services/core/internal/modules/marketdata/internal/domain"
 	"time"
 )
 
@@ -97,22 +98,17 @@ func latestSecurityPriceObservation(ctx context.Context, q orderQuerier, source,
 	var selected *SecurityPriceObservation
 	for i := range observations {
 		observation := &observations[i]
-		if observation.Source != source || observation.InstrumentID != instrumentID || observation.Symbol != symbol || observation.Venue != venue ||
-			observation.Currency != currency || observation.PriceAdjustment != adjustment {
+		if !domain.PriceIdentityMatches(domain.PriceIdentity{Source: observation.Source, InstrumentID: observation.InstrumentID, Symbol: observation.Symbol, Venue: observation.Venue, Currency: observation.Currency, PriceAdjustment: observation.PriceAdjustment}, domain.PriceIdentity{Source: source, InstrumentID: instrumentID, Symbol: symbol, Venue: venue, Currency: currency, PriceAdjustment: adjustment}) {
 			continue
 		}
-		observed, _ := time.Parse(time.RFC3339Nano, observation.ObservedAt)
-		fetched, _ := time.Parse(time.RFC3339Nano, observation.FetchedAt)
-		recorded, _ := time.Parse(time.RFC3339Nano, observation.RecordedAt)
-		if observed.After(cutoff) || fetched.After(cutoff) || recorded.After(cutoff) {
+		if !domain.PriceKnownAt(observation.ObservedAt, observation.FetchedAt, observation.RecordedAt, cutoff) {
 			continue
 		}
 		if selected == nil {
 			selected = observation
 			continue
 		}
-		selectedObserved, _ := time.Parse(time.RFC3339Nano, selected.ObservedAt)
-		if observed.After(selectedObserved) || (observed.Equal(selectedObserved) && observation.ObservationID > selected.ObservationID) {
+		if domain.LaterPrice(observation.ObservedAt, observation.ObservationID, selected.ObservedAt, selected.ObservationID) {
 			selected = observation
 		}
 	}

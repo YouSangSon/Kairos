@@ -35,17 +35,28 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
+      - name: Read the asdf project versions
+        id: tool_versions
+        run: |
+          golang=$(awk '$1 == "golang" { print $2 }' .tool-versions)
+          python=$(awk '$1 == "python" { print $2 }' .tool-versions)
+          [[ "$golang" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'Invalid golang version in .tool-versions' >&2; exit 1; }
+          [[ "$python" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'Invalid python version in .tool-versions' >&2; exit 1; }
+          printf 'golang=%s\npython=%s\n' "$golang" "$python" >> "$GITHUB_OUTPUT"
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
-          go-version: '1.24.5'
+          go-version: ${{ steps.tool_versions.outputs.golang }}
           cache: false
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
-          python-version: '3.14.5'
+          python-version: ${{ steps.tool_versions.outputs.python }}
       - name: Verify tool pins
+        env:
+          EXPECTED_GO_VERSION: ${{ steps.tool_versions.outputs.golang }}
+          EXPECTED_PYTHON_VERSION: ${{ steps.tool_versions.outputs.python }}
         run: |
-          grep -Fx 'golang 1.24.5' .tool-versions
-          grep -Fx 'python 3.14.5' .tool-versions
+          test "$(go env GOVERSION)" = "go$EXPECTED_GO_VERSION"
+          test "$(python -c 'import platform; print(platform.python_version())')" = "$EXPECTED_PYTHON_VERSION"
           go version
           python --version
       - name: Check paper promotion and migration compatibility first

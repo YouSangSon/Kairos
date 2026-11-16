@@ -12,8 +12,8 @@ func Snapshot(ctx context.Context, q Reader) (*PortfolioSnapshot, error) {
 	if err != nil {
 		return nil, fmt.Errorf("ledger replay state: %w", err)
 	}
-	if origin.Policy != ledgerdomain.FIFOCostBasisPolicy {
-		return nil, errors.New("ledger replay upgrade required; preview and activate the corrected replay before normal use")
+	if err := ledgerdomain.RequireCurrentReplayPolicy(origin.Policy); err != nil {
+		return nil, err
 	}
 	events, err := q.EventRange(ctx)
 	if err != nil {
@@ -26,8 +26,8 @@ func Snapshot(ctx context.Context, q Reader) (*PortfolioSnapshot, error) {
 }
 
 func SnapshotAt(ctx context.Context, q Reader, policy string, throughRevision int64) (*PortfolioSnapshot, error) {
-	if policy != ledgerdomain.FIFOCostBasisPolicy && policy != ledgerdomain.LegacyFIFOCostBasisPolicy {
-		return nil, errors.New("unsupported ledger replay policy")
+	if err := ledgerdomain.RequireReplayPolicy(policy); err != nil {
+		return nil, err
 	}
 	meta, err := q.Metadata(ctx)
 	if err != nil {

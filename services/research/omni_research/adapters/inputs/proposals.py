@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import hashlib
 import re
+from decimal import Decimal
 from typing import Any
 
 from ...application.artifacts import canonical_hash
 from ...application.proposals import build_paper_input_bundle, build_proposal
+from ...domain import experiment
 from ...domain.experiment import Parameters
-from ...domain.values import decimal_input
+from ...domain.values import validate_signal_time
 from .bars import parse_bars
 from .config import integer
 from .validation import request_execution, timestamp
@@ -33,7 +35,7 @@ def generate_proposal_from_bytes(raw_bars: bytes, research_bytes: bytes, artifac
     parameters = strategy["parameters"]
     if (set(manifest) != {"strategy", "data", "engine", "evaluation_policy"}
         or set(strategy) != {"name", "version", "parameters", "parameter_hash"}
-        or strategy["name"] != "long_only_sma_crossover" or strategy["version"] != "1.0.0"
+        or not experiment.supports_proposal_strategy(strategy["name"], strategy["version"])
         or manifest["engine"] != {"name": "omni-folio-reference", "version": "0.1.0"}
         or manifest["evaluation_policy"] != {"version": "sma-expanding-walk-forward.v1"}
         or set(parameters) != {"quantity", "fast_window", "slow_window"}
@@ -41,17 +43,15 @@ def generate_proposal_from_bytes(raw_bars: bytes, research_bytes: bytes, artifac
         raise ValueError("unsupported strategy contract")
     request_execution({"execution": artifact["execution"]})
     promotion = artifact["promotion"]
-    if (promotion["target"] != "paper_candidate" or promotion["failed_gates"] != []
-        or any(promotion[key] is not True for key in ("walk_forward_gate_passed", "final_holdout_gate_passed", "baseline_gate_passed"))):
-        raise ValueError("research candidate did not pass its paper gates")
-    fast = integer(parameters["fast_window"], "fast_window", minimum=1)
-    slow = integer(parameters["slow_window"], "slow_window", minimum=1)
-    if fast >= slow or artifact["challenger"]["parameters"] != {"fast_window": fast, "slow_window": slow}:
-        raise ValueError("strategy windows are invalid")
+    experiment.validate_paper_promotion(promotion)
+    fast = integer(parameters["fast_window"], "fast_window", minimum=experiment.MINIMUM_SMA_WINDOW)
+    slow = integer(parameters["slow_window"], "slow_window", minimum=experiment.MINIMUM_SMA_WINDOW)
+    experiment.validate_proposal_windows(fast, slow, artifact["challenger"])
     quantity = parameters["quantity"]
-    if not isinstance(quantity, str) or not re.fullmatch(r"[1-9][0-9]{0,63}", quantity):
+    if (not isinstance(quantity, str) or len(quantity) > 64
+        or not re.fullmatch(r"-?(?:0|[1-9][0-9]*)(?:\.[0-9]*[1-9])?", quantity)):
         raise ValueError("paper quantity must be positive whole shares")
-    decimal_input(quantity, "quantity")
+    experiment.validate_proposal_quantity(Decimal(quantity))
 
     # Hash and parsed bars must refer to the same immutable byte snapshots.
     research_sha = hashlib.sha256(research_bytes).hexdigest()
@@ -59,13 +59,12 @@ def generate_proposal_from_bytes(raw_bars: bytes, research_bytes: bytes, artifac
         raise ValueError("research data hash mismatch")
     research_bars = parse_bars(research_bytes)
     bars = parse_bars(raw_bars)
-    if len(bars) <= slow or not re.fullmatch(r"[0-9]{6}", bars[-1].symbol) or bars[-1].symbol != research_bars[-1].symbol:
-        raise ValueError("paper signal requires matching KRX symbols and sufficient history")
+    experiment.validate_signal_history(len(bars), slow, re.fullmatch(r"[0-9]{6}", bars[-1].symbol) is not None,
+                                       bars[-1].symbol, research_bars[-1].symbol)
     for bar in [*research_bars, *bars]:
         if not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", bar.at):
             raise ValueError("daily signal timestamps must be UTC whole seconds")
-    if timestamp(bars[-1].at, "signal time") <= timestamp(research_bars[-1].at, "research end"):
-        raise ValueError("signal must follow the research sample")
+    validate_signal_time(timestamp(bars[-1].at, "signal time"), timestamp(research_bars[-1].at, "research end"))
     return build_proposal(bars, Parameters(fast, slow), quantity, artifact, raw_bars)
 
 

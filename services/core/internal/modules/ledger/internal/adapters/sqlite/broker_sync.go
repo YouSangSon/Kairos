@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"errors"
+	ledgerdomain "omni-folio/services/core/internal/modules/ledger/internal/domain"
 	"omni-folio/services/core/migrations"
 	"strings"
 )
@@ -90,8 +91,8 @@ func requireKiwoomMockBinding(ctx context.Context, q orderQuerier, expectedAccou
 			return err
 		}
 		count++
-		if count > 1 || environment != KiwoomMock || (expectedAccount != "" && account != expectedAccount) {
-			return errors.New("stored Kiwoom KRX history has a different account binding")
+		if err := ledgerdomain.ValidateStoredMockBinding(count, ledgerdomain.BrokerEnvironment(environment), account, expectedAccount); err != nil {
+			return err
 		}
 	}
 	return rows.Err()

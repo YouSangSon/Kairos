@@ -810,7 +810,7 @@ A를 먼저 고정한 뒤 B/C/D를 병렬로 실행하고 E가 실제 명령을 
 새 사용자가 README만 따라가도 동일한 수직 슬라이스를 실행할 수 있는지, 명령·버전·환경변수·컨테이너 설명이 실제 파일과 일치하는지 검토했다. 독립 reviewer가 발견한 custom API port 불일치와 중복 asdf pin을 수정했고, Flutter 기본 scaffold 이름과 사용하지 않는 아이콘 의존성을 제거했다.
 
 - `README.md`의 custom-port 예시는 core bind address와 client `API_URL`을 같은 값으로 사용한다.
-- `.tool-versions`는 Flutter 3.47.1 stable, Go 1.24.5, Python 3.14.5를 한 번씩 고정한다.
+- `.tool-versions`는 Flutter·Go·Python을 한 번씩 고정하는 정본이다. 이 Phase 4 검토 당시 버전은 Flutter 3.47.1 stable, Go 1.24.5, Python 3.14.5였으며 현재 버전은 루트 파일을 따른다.
 - `.env.example`은 secret이 아닌 로컬 reference만 포함하며 Make가 암묵적으로 source하지 않음을 설명한다.
 - Compose는 root context를 `.dockerignore`로 제한하고 non-root, read-only, capability drop, loopback port, one-shot migration과 readiness를 실제로 통과했다.
 - 독립 DX reviewer 재검증에서 나온 3개 finding을 2026-08-24에 모두 수정했다.

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"omni-folio/services/core/internal/modules/marketdata/internal/application"
+	"omni-folio/services/core/internal/modules/marketdata/internal/domain"
 	"strings"
 	"time"
 )
@@ -103,7 +104,7 @@ func replayOwnerFXSeries(ctx context.Context, q queryer, base, quote, version st
 		r.Input = *input
 		at, _ := time.Parse(time.RFC3339Nano, r.RecordedAt)
 		fetched, _ := time.Parse(time.RFC3339Nano, input.FetchedAt)
-		if at.Before(fetched) || (proof.Versions > 0 && at.Before(previous)) {
+		if !domain.SeriesRecordTimeValid(at, fetched, previous, proof.Versions > 0) {
 			return nil, proof, errors.New("owner FX record time is invalid")
 		}
 		previous = at

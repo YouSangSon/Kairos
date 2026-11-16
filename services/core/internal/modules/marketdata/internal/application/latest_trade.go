@@ -8,7 +8,7 @@ import (
 	"omni-folio/services/core/internal/modules/marketdata/internal/domain"
 )
 
-type LatestTrade struct{ Source, Environment, Exchange, Symbol, Currency, Price, ObservedAt, FetchedAt string }
+type LatestTrade = domain.LatestTrade
 type LatestTradeSource interface {
 	LatestTrade(context.Context, string) (LatestTrade, error)
 }
@@ -30,7 +30,7 @@ func (s *Service) RecordLatestTrade(ctx context.Context, trade LatestTrade) (*c.
 	if s == nil {
 		return nil, errors.New("Kiwoom latest trade service is unavailable")
 	}
-	if trade.Source != "kiwoom" || (trade.Environment != "mock" && trade.Environment != "production") || trade.Exchange != "KRX" || trade.Currency != "KRW" || !domain.KRXSymbol(trade.Symbol) {
+	if !domain.LatestTradeIdentityValid(trade) {
 		return nil, errors.New("Kiwoom latest trade identity is invalid")
 	}
 	listing, err := s.ResolveListing(ctx, "XKRX", trade.Symbol, trade.Currency)

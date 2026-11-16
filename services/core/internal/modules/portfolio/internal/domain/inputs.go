@@ -36,6 +36,13 @@ func ValidateInputs(all Inputs) error {
 	}
 	return nil
 }
+
+func ValidateRequestedCutoff(at, now time.Time) error {
+	if at.After(now) {
+		return &Failure{Code: "invalid_query", Message: "valuation as_of cannot be in the future", Field: "as_of"}
+	}
+	return nil
+}
 func benchmarkReceipt(r *BenchmarkVersion) *BenchmarkSeriesReceipt {
 	i := r.Input
 	return &BenchmarkSeriesReceipt{StorageCheck: "verified", Authority: "owner_declared", BenchmarkID: i.BenchmarkID, Label: i.Label, Currency: i.Currency, ReturnBasis: i.ReturnBasis, SourceReference: i.SourceReference, SourceVersion: i.SourceVersion, Sample: i.Sample, DataSHA256: r.DataSHA256, PointCount: len(i.Points), FirstObservedAt: i.Points[0].ObservedAt, LastObservedAt: i.Points[len(i.Points)-1].ObservedAt, FetchedAt: i.FetchedAt, RecordedAt: r.RecordedAt}

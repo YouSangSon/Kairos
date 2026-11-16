@@ -6,17 +6,99 @@ from dataclasses import dataclass
 from decimal import Decimal
 from fractions import Fraction
 from math import floor
-from typing import Any
+from typing import Any, Mapping
 
 from . import paper_fill
 from .backtest import fill
 from .values import BPS_DENOMINATOR, ONE, ZERO, Bar, Order, decimal_string
+
+MINIMUM_FOLD_BARS = 30
+MINIMUM_SMA_WINDOW = 1
+MINIMUM_TRADE_COUNT = 1
 
 
 @dataclass(frozen=True, order=True)
 class Parameters:
     fast_window: int
     slow_window: int
+
+
+def validate_sma_strategy(name: str) -> None:
+    if name != "long_only_sma_crossover":
+        raise ValueError("only versioned long_only_sma_crossover is supported")
+
+
+def supports_proposal_strategy(name: str, version: str) -> bool:
+    return name == "long_only_sma_crossover" and version == "1.0.0"
+
+
+def validate_quantity(quantity: Decimal) -> None:
+    if quantity <= ZERO:
+        raise ValueError("strategy.quantity must be positive")
+
+
+def validate_grid(candidates: tuple[Parameters, ...]) -> None:
+    if len(candidates) > 64 or any(item.fast_window >= item.slow_window for item in candidates):
+        raise ValueError("strategy grid must contain at most 64 fast windows strictly below every slow window")
+
+
+def parameter_windows(values: tuple[int, ...], field: str) -> tuple[int, ...]:
+    if len(set(values)) != len(values):
+        raise ValueError(f"{field} must not contain duplicates")
+    return tuple(sorted(values))
+
+
+def validate_paper_strategy(version: str, quantity: Decimal, slow_windows: tuple[int, ...]) -> None:
+    if version != "1.0.0" or quantity != int(quantity) or quantity > paper_fill.MAX_QUANTITY or max(slow_windows) > 365:
+        raise ValueError("paper evaluation requires strategy 1.0.0, capitalized whole shares, and SMA windows at most 365")
+
+
+def validate_validation_folds(validation_bars: int, minimum_fold_bars: int) -> None:
+    if validation_bars < minimum_fold_bars * 2 or validation_bars % minimum_fold_bars != 0:
+        raise ValueError("splits.validation_bars must contain at least two complete walk-forward folds")
+
+
+def validate_promotion_baseline(baseline: str) -> None:
+    if baseline != "buy_and_hold":
+        raise ValueError("promotion requires the declared buy_and_hold baseline and explicit gates")
+
+
+def validate_drawdown(drawdown: Decimal) -> None:
+    if drawdown < ZERO or drawdown > ONE:
+        raise ValueError("promotion.maximum_holdout_max_drawdown must be in [0, 1]")
+
+
+def promotion_outcome(walk_forward_ok: bool, holdout_ok: bool, baseline_ok: bool) -> tuple[str, list[str]]:
+    target = "paper_candidate" if walk_forward_ok and holdout_ok and baseline_ok else "no_promotion"
+    failed = [name for name, passed in (("walk_forward", walk_forward_ok), ("final_holdout", holdout_ok),
+                                      ("buy_and_hold_baseline", baseline_ok)) if not passed]
+    return target, failed
+
+
+def validate_paper_promotion(promotion: Mapping[str, Any]) -> None:
+    # Later gate facts may be absent once an earlier gate rejects the candidate.
+    if (promotion["target"] != "paper_candidate" or promotion["failed_gates"] != []
+        or any(promotion[key] is not True for key in ("walk_forward_gate_passed", "final_holdout_gate_passed", "baseline_gate_passed"))):
+        raise ValueError("research candidate did not pass its paper gates")
+
+
+def validate_proposal_windows(fast: int, slow: int, challenger: Mapping[str, Any]) -> None:
+    if fast >= slow or challenger["parameters"] != {"fast_window": fast, "slow_window": slow}:
+        raise ValueError("strategy windows are invalid")
+
+
+def validate_proposal_quantity(quantity: Decimal) -> None:
+    if quantity <= ZERO or quantity != quantity.to_integral_value():
+        raise ValueError("paper quantity must be positive whole shares")
+
+
+def validate_signal_history(count: int, slow: int, krx_symbol: bool, symbol: str, research_symbol: str) -> None:
+    if count <= slow or not krx_symbol or symbol != research_symbol:
+        raise ValueError("paper signal requires matching KRX symbols and sufficient history")
+
+
+def signal_target(signal: str, quantity: str) -> str | None:
+    return quantity if signal == "golden_cross" else "0" if signal == "death_cross" else None
 
 
 @dataclass(frozen=True)

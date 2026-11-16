@@ -82,16 +82,13 @@ func (s *UseCases) SetSyntheticExecutionArmed(ctx context.Context, account strin
 		if err != nil {
 			return nil, err
 		}
-		if current.Armed == armed {
+		change, reason, nextFence := domain.ManualArmingTransition(current.Armed, armed, current.FencingToken)
+		if !change {
 			state := current.ExecutionAuthorityState
 			return &state, nil
 		}
 		now := s.now().UTC()
-		reason := "manual_halt"
-		if armed {
-			reason = "manual_arm"
-		}
-		record := AuthorityRecord{EventID: s.id("execution_authority"), AccountRef: account, Armed: armed, FencingToken: current.FencingToken + 1, ReasonCode: reason, RecordedAt: now.Format(time.RFC3339Nano)}
+		record := AuthorityRecord{EventID: s.id("execution_authority"), AccountRef: account, Armed: armed, FencingToken: nextFence, ReasonCode: reason, RecordedAt: now.Format(time.RFC3339Nano)}
 		if err := tx.Authority().InsertExecutionAuthorityRecord(ctx, record); err != nil {
 			return nil, err
 		}
@@ -183,21 +180,15 @@ func (s *UseCases) SelectPaperCandidate(ctx context.Context, result, expected st
 		if err != nil {
 			return nil, err
 		}
-		if state.CurrentEventID != expected {
-			return nil, errors.New("stale strategy selection")
+		if err := domain.ValidateExpectedSelection(state.CurrentEventID, expected); err != nil {
+			return nil, err
 		}
 		target, found, err := tx.Selections().EvidenceTarget(ctx, result)
 		if err != nil {
 			return nil, err
 		}
-		if !found {
-			return nil, errors.New("strategy evidence is not registered")
-		}
-		if target != "paper_candidate" {
-			return nil, errors.New("only paper_candidate evidence can be selected")
-		}
-		if state.SelectedResultSHA256 == result {
-			return nil, errors.New("strategy evidence is already selected")
+		if err := domain.ValidatePaperCandidateSelection(found, target, state.SelectedResultSHA256, result); err != nil {
+			return nil, err
 		}
 		event := StrategySelectionEvent{EventID: s.id("strategy_selection"), EventType: "SELECT", CandidateResultSHA256: result, ExpectedCurrentEventID: expected, PreviousSelectedResultSHA256: state.SelectedResultSHA256, SelectedResultSHA256: result, ReasonCode: "manual_selection", RecordedAt: now.Format(time.RFC3339Nano)}
 		event.PaperEvaluationSequence, err = tx.Selections().LatestPaperEvaluationSequence(ctx)
@@ -226,8 +217,8 @@ func (s *UseCases) RollbackPaperCandidate(ctx context.Context, expected, source 
 		if err != nil {
 			return nil, err
 		}
-		if state.CurrentEventID != expected || source != state.CurrentEventID {
-			return nil, errors.New("stale or mismatched strategy rollback source")
+		if err := domain.ValidateRollbackSource(state.CurrentEventID, expected, source); err != nil {
+			return nil, err
 		}
 		armed, err := tx.Authority().ArmedExecutionAccounts(ctx)
 		if err != nil {
@@ -273,8 +264,8 @@ func (s *UseCases) OpenPaperAccountingSessionChecked(ctx context.Context, accoun
 		if err != nil {
 			return nil, err
 		}
-		if count != 0 {
-			return nil, errors.New("paper accounting session cannot follow a paper order")
+		if err := domain.ValidateInitialPaperOrderCount(count); err != nil {
+			return nil, err
 		}
 		session := PaperAccountingSession{SchemaVersion: "paper-accounting-session.v1", AccountRef: account, StrategyResultSHA256: result, StrategySelectionEventID: selection, ExecutionPolicySHA256: policy.SHA256, ExecutionPolicyJSON: policy.CanonicalJSON, StartingCash: policy.StartingCash, Currency: "KRW", RecordedAt: s.now().UTC().Format(time.RFC3339Nano)}
 		session.SessionID = PaperAccountingSessionID(account, result, selection, policy.SHA256)

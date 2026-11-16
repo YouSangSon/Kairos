@@ -3,6 +3,8 @@ package application
 import (
 	"context"
 	"errors"
+	"omni-folio/services/core/internal/modules/trading/internal/domain"
+	orderdomain "omni-folio/services/core/internal/modules/trading/internal/domain/order"
 	"time"
 )
 
@@ -28,8 +30,8 @@ func CapturePromotionState(ctx context.Context, tx WriteScope, account string, n
 	} else {
 		count = value
 	}
-	if count != 1 {
-		return "", nil, "", empty, errors.New("paper promotion requires exactly one existing paper account session")
+	if err := domain.ValidatePromotionSessionCount(count); err != nil {
+		return "", nil, "", empty, err
 	}
 	session, found, err := tx.Paper().LoadPaperAccountingSession(ctx, account)
 	if err != nil || !found {
@@ -43,17 +45,15 @@ func CapturePromotionState(ctx context.Context, tx WriteScope, account string, n
 		return "", nil, "", empty, err
 	}
 	state := accounts[account]
-	for _, lots := range state.Lots {
-		if len(lots) != 0 {
-			return "", nil, "", empty, errors.New("paper promotion requires a flat paper account")
-		}
+	if err := domain.ValidatePromotionFlatAccount(state); err != nil {
+		return "", nil, "", empty, err
 	}
 	armed, err := tx.Authority().ArmedExecutionAccounts(ctx)
 	if err != nil {
 		return "", nil, "", empty, err
 	}
-	if len(armed) != 0 {
-		return "", nil, "", empty, errors.New("paper promotion requires all execution authorities halted")
+	if err := domain.ValidatePromotionAuthoritiesHalted(len(armed)); err != nil {
+		return "", nil, "", empty, err
 	}
 	if err := tx.Runner().RejectIncompleteRun(ctx, account, selection.CurrentEventID); err != nil {
 		return "", nil, "", empty, err
@@ -67,8 +67,8 @@ func CapturePromotionState(ctx context.Context, tx WriteScope, account string, n
 		if err != nil {
 			return "", nil, "", empty, err
 		}
-		if order.PendingAction != "" || (order.Status != "FILLED" && order.Status != "CANCELED" && order.Status != "REJECTED" && order.Status != "RISK_REJECTED") {
-			return "", nil, "", empty, errors.New("paper promotion requires every account order terminal")
+		if err := domain.ValidatePromotionTerminalOrder((*orderdomain.State)(order)); err != nil {
+			return "", nil, "", empty, err
 		}
 	}
 	orderProof, err := tx.Recovery().ProveOrderRecovery(ctx)

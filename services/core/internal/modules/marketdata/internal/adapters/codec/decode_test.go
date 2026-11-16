@@ -283,3 +283,32 @@ func mustTime(raw string) time.Time {
 func decodeOwnerPriceSeries(ctx context.Context, raw []byte) (*OwnerPriceSeriesInput, []byte, string, error) {
 	return DecodeOwnerPriceSeries(ctx, raw, func(symbol string) string { return "instrument_" + strings.ToLower(symbol) })
 }
+
+func TestOwnerPriceCanonicalIdentityCallbackKeepsValidationStage(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		change    func(*OwnerPriceSeriesInput)
+		wantCalls int
+		valid     bool
+	}{
+		{name: "valid", wantCalls: 1, valid: true},
+		{name: "invalid identifier", change: func(i *OwnerPriceSeriesInput) { i.SourceVersion = "" }},
+		{name: "lowercase symbol", change: func(i *OwnerPriceSeriesInput) { i.Symbol = "aapl" }},
+		{name: "wrong canonical identity", change: func(i *OwnerPriceSeriesInput) { i.InstrumentID = "other" }, wantCalls: 1},
+		{name: "invalid currency", change: func(i *OwnerPriceSeriesInput) { i.Currency = "usd" }, wantCalls: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := 0
+			_, _, _, err := DecodeOwnerPriceSeries(context.Background(), ownerPriceInputForTest(t, tc.change), func(symbol string) string {
+				calls++
+				if symbol != "AAPL" {
+					t.Fatalf("callback symbol = %s", symbol)
+				}
+				return "instrument_aapl"
+			})
+			if calls != tc.wantCalls || (err == nil) != tc.valid {
+				t.Fatalf("callback calls=%d, err=%v", calls, err)
+			}
+		})
+	}
+}

@@ -86,14 +86,7 @@ func (s *UseCases) PaperMonitor(ctx context.Context) (*PaperMonitor, error) {
 			heartbeat := time.Unix(0, lease.HeartbeatAtNS).UTC().Format(time.RFC3339Nano)
 			expires := time.Unix(0, lease.ExpiresAtNS).UTC().Format(time.RFC3339Nano)
 			result.Runner = PaperMonitorRunner{State: "lease_recorded", HeartbeatAt: &heartbeat, ExpiresAt: &expires}
-			switch {
-			case nowNS < lease.HeartbeatAtNS:
-				result.Runner.State = "clock_regressed"
-			case nowNS >= lease.ExpiresAtNS:
-				result.Runner.State = "expired"
-			case lease.StrategySelectionEventID != strategy.CurrentEventID || lease.SelectedResultSHA256 != strategy.SelectedResultSHA256:
-				result.Runner.State = "selection_changed"
-			}
+			result.Runner.State = domain.RunnerLeaseStatus(lease, nowNS, strategy.CurrentEventID, strategy.SelectedResultSHA256)
 		}
 		policy, window, err := reads.LatestPolicy(ctx)
 		if err != nil {
@@ -141,8 +134,8 @@ func (s *UseCases) PaperInputStatus(ctx context.Context, account, selection stri
 		if err != nil {
 			return err
 		}
-		if selected != StringField(proposal, "strategy_result_sha256") {
-			return errors.New("paper input selection differs")
+		if err := domain.ValidatePaperInputSelection(selected, StringField(proposal, "strategy_result_sha256")); err != nil {
+			return err
 		}
 		artifact, err := reads.ResearchArtifact(ctx, selected)
 		if err != nil {
@@ -152,12 +145,16 @@ func (s *UseCases) PaperInputStatus(ctx context.Context, account, selection stri
 		if err != nil {
 			return err
 		}
-		if evidence.Target != "paper_candidate" || evidence.ParameterSHA256 != StringField(proposal, "strategy_parameter_sha256") {
-			return errors.New("paper input research binding differs")
+		if err := domain.ValidatePaperInputResearch(evidence.Target, evidence.ParameterSHA256, StringField(proposal, "strategy_parameter_sha256")); err != nil {
+			return err
 		}
 		session, found, err := reads.Session(ctx, account)
-		if err != nil || !found || session.ExecutionPolicySHA256 != evidence.ExecutionPolicy.SHA256 {
-			return errors.New("paper input session binding differs")
+		var sessionPolicy string
+		if err == nil && found {
+			sessionPolicy = session.ExecutionPolicySHA256
+		}
+		if bindErr := domain.ValidatePaperInputSession(err == nil, found, sessionPolicy, evidence.ExecutionPolicy.SHA256); bindErr != nil {
+			return bindErr
 		}
 		var research map[string]any
 		if err := json.Unmarshal([]byte(artifact), &research); err != nil {
@@ -173,8 +170,8 @@ func (s *UseCases) PaperInputStatus(ctx context.Context, account, selection stri
 		}
 		last := bars[len(bars)-1]
 		asOf, ok := canonicalPaperTime(StringField(proposal, "data_as_of"))
-		if !ok || inputSHA != StringField(proposal, "input_sha256") || last.Symbol != StringField(proposal, "symbol") || last.CloseAt != asOf {
-			return errors.New("paper input CSV binding differs")
+		if err := domain.ValidatePaperInputCSV(ok, inputSHA, StringField(proposal, "input_sha256"), domain.PaperMarketBarObservation(last), StringField(proposal, "symbol"), asOf); err != nil {
+			return err
 		}
 		stored, err := reads.Bars(ctx, bars[0], last)
 		if err != nil {
@@ -271,8 +268,8 @@ func PromotionInputs(ctx context.Context, artifact func(context.Context, string)
 		}
 		policies[i] = evidence.ExecutionPolicy
 	}
-	if strategies[0].Quantity != strategies[1].Quantity || policies[0].SHA256 != policies[1].SHA256 || policies[0].SHA256 != policySHA {
-		return strategies[0], strategies[1], researchdomain.Execution{}, errors.New("paper promotion requires identical quantity and execution policy")
+	if err := domain.ValidatePromotionInputCompatibility(strategies[0].Quantity, strategies[1].Quantity, policies[0].SHA256, policies[1].SHA256, policySHA); err != nil {
+		return strategies[0], strategies[1], researchdomain.Execution{}, err
 	}
 	return strategies[0], strategies[1], researchdomain.Execution{StartingCash: cash, Policy: PaperExecutionPolicy(policies[0]), DelayBars: int(policies[0].DelayBars)}, nil
 }

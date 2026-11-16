@@ -16,49 +16,11 @@ type RunnerClaim struct {
 	SelectedResultSHA256     string
 }
 
-type AuthorityRecord struct {
-	EventID                       string `json:"event_id"`
-	AccountRef                    string `json:"account_ref"`
-	Armed                         bool   `json:"armed"`
-	LeaseOwner                    string `json:"lease_owner,omitempty"`
-	FencingToken                  int64  `json:"fencing_token"`
-	LeaseExpiresAt                string `json:"lease_expires_at,omitempty"`
-	ReasonCode                    string `json:"reason_code"`
-	PaperPerformancePolicyEventID string `json:"paper_performance_policy_event_id,omitempty"`
-	RecordedAt                    string `json:"recorded_at"`
-}
+type AuthorityRecord = domain.AuthorityRecord
 
-type RiskReservation struct {
-	ReservationID    string `json:"reservation_id"`
-	OrderID          string `json:"order_id"`
-	AccountRef       string `json:"account_ref"`
-	PolicyVersion    string `json:"policy_version"`
-	AuthorityEventID string `json:"authority_event_id"`
-	FencingToken     int64  `json:"fencing_token"`
-	Quantity         string `json:"quantity"`
-	LimitPrice       string `json:"limit_price"`
-	LimitNotional    string `json:"limit_notional"`
-	RiskEventID      string `json:"risk_event_id"`
-	DispatchEventID  string `json:"dispatch_event_id"`
-	ReservedAt       string `json:"reserved_at"`
-}
+type RiskReservation = domain.RiskReservation
 
-type PaperAuthorization struct {
-	AuthorizationID          string `json:"authorization_id"`
-	SchemaVersion            string `json:"schema_version"`
-	OrderID                  string `json:"order_id"`
-	AccountRef               string `json:"account_ref"`
-	PaperAccountingSessionID string `json:"paper_accounting_session_id"`
-	ExecutionPolicySHA256    string `json:"execution_policy_sha256"`
-	PolicyVersion            string `json:"policy_version"`
-	Side                     string `json:"side"`
-	Quantity                 string `json:"quantity"`
-	AuthorityEventID         string `json:"authority_event_id"`
-	FencingToken             int64  `json:"fencing_token"`
-	RiskEventID              string `json:"risk_event_id"`
-	DispatchEventID          string `json:"dispatch_event_id"`
-	AuthorizedAt             string `json:"authorized_at"`
-}
+type PaperAuthorization = domain.PaperAuthorization
 
 type StrategyExecutionPolicy struct {
 	StartingCash, Fee, Tax, SlippageBPS, MaxParticipation string

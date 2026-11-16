@@ -73,8 +73,8 @@ func (s *UseCases) AcquirePaperRunnerLease(ctx context.Context, accountRef strin
 			return nil, err
 		}
 		_, selectionEventID, selectedResult, err := tx.Evaluations().CurrentPaperPerformanceSelection(ctx)
-		if err != nil || selectedResult == noStrategySelection {
-			return nil, errors.Join(errors.New("paper runner requires a current strategy selection"), err)
+		if bindErr := domain.ValidateRunnerSelectedStrategy(err == nil, selectedResult); bindErr != nil {
+			return nil, errors.Join(bindErr, err)
 		}
 		next, changed, err := domain.AcquireRunnerLease(row, s.paperRunnerOwner, accountRef, selectionEventID, selectedResult, nowNS)
 		if err != nil {
@@ -131,22 +131,20 @@ func ValidatePaperRunnerLeaseTx(ctx context.Context, tx RunnerLeaseReader, claim
 	if err != nil {
 		return err
 	}
-	if claim == nil || ownerID == "" || claim.OwnerID != ownerID || !paperRunnerClaimMatchesRecord(claim, row) || claim.AccountRef != accountRef {
-		return errors.New("paper runner lease was lost")
+	claimRecord := paperRunnerRecordFromClaim(claim)
+	if err := domain.ValidateRunnerClaimBinding(claim != nil, claimRecord, row, ownerID, accountRef); err != nil {
+		return err
 	}
 	nowNS, err := paperRunnerTimeNS(now)
 	if err != nil {
 		return err
 	}
-	if nowNS < row.HeartbeatAtNS {
-		return errors.New("paper runner lease clock regressed")
-	}
-	if nowNS >= row.ExpiresAtNS {
-		return errors.New("paper runner lease expired")
+	if err := domain.ValidateRunnerLeaseTime(row, nowNS); err != nil {
+		return err
 	}
 	_, eventID, selectedResult, err := tx.CurrentPaperPerformanceSelection(ctx)
-	if err != nil || eventID != claim.StrategySelectionEventID || selectedResult != claim.SelectedResultSHA256 {
-		return errors.Join(errors.New("paper runner strategy selection changed"), err)
+	if bindErr := domain.ValidateRunnerSelectionBinding(err == nil, claimRecord, eventID, selectedResult); bindErr != nil {
+		return errors.Join(bindErr, err)
 	}
 	return nil
 }
@@ -161,31 +159,24 @@ func RenewPaperRunnerLeaseAfterPolicyRollbackTx(ctx context.Context, tx WriteSco
 	if err != nil {
 		return nil, err
 	}
-	if claim == nil || ownerID == "" || claim.OwnerID != ownerID || !paperRunnerClaimMatchesRecord(claim, row) {
-		return nil, errors.New("paper runner lease was lost")
+	claimRecord := paperRunnerRecordFromClaim(claim)
+	if err := domain.ValidateRunnerClaimBinding(claim != nil, claimRecord, row, ownerID, claimAccountRef(claim)); err != nil {
+		return nil, err
 	}
 	nowNS, err := paperRunnerTimeNS(now)
 	if err != nil {
 		return nil, err
 	}
-	if nowNS < row.HeartbeatAtNS {
-		return nil, errors.New("paper runner lease clock regressed")
-	}
-	if nowNS >= row.ExpiresAtNS {
-		return nil, errors.New("paper runner lease expired")
+	if err := domain.ValidateRunnerLeaseTime(row, nowNS); err != nil {
+		return nil, err
 	}
 	facts, err := tx.Runner().RollbackBinding(ctx, rollbackEventID, policyEventID)
 	if err != nil {
 		return nil, err
 	}
-	eventType, sourceEventID, previousResult, reasonCode, linkedPolicyID := facts.EventType, facts.SourceEventID, facts.PreviousResult, facts.ReasonCode, facts.PolicyID
-	decision, policyRollbackID := facts.Decision, facts.RollbackEventID
 	_, currentEventID, _, err := tx.Evaluations().CurrentPaperPerformanceSelection(ctx)
-	if err != nil || currentEventID != rollbackEventID || eventType != "ROLLBACK" ||
-		sourceEventID != claim.StrategySelectionEventID || previousResult != claim.SelectedResultSHA256 ||
-		reasonCode != "automatic_performance_rollback" || linkedPolicyID != policyEventID ||
-		decision != "HALT_AND_ROLLBACK" || policyRollbackID != rollbackEventID {
-		return nil, errors.Join(errors.New("paper runner automatic rollback lease transition is invalid"), err)
+	if bindErr := domain.ValidateRunnerRollbackBinding(err == nil, claimRecord, facts, currentEventID, rollbackEventID, policyEventID); bindErr != nil {
+		return nil, errors.Join(bindErr, err)
 	}
 	return RenewPaperRunnerLeaseRowTx(ctx, tx, claim, now)
 }

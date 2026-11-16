@@ -261,8 +261,8 @@ func rejectLegacyPaperPerformanceAccount(ctx context.Context, q orderQuerier, ac
 		AND json_extract(intent_json, '$.signal_schema_version') IN ('paper-signal.v1','paper-signal.v2')`, accountRef).Scan(&legacy); err != nil {
 		return err
 	}
-	if legacy != 0 {
-		return errors.New("paper performance cannot include a legacy paper account")
+	if err := domain.ValidatePerformanceLegacyOrderCount(legacy); err != nil {
+		return err
 	}
 	return nil
 }

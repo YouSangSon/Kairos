@@ -11,15 +11,14 @@ import (
 	"math/big"
 	"omni-folio/services/core/internal/modules/trading/contracts"
 	"omni-folio/services/core/internal/modules/trading/internal/application"
+	"omni-folio/services/core/internal/modules/trading/internal/domain"
+	orderdomain "omni-folio/services/core/internal/modules/trading/internal/domain/order"
 	"time"
 )
 
 const (
-	syntheticExecutionLeaseTTL  = 30 * time.Second
-	syntheticRiskPolicyVersion  = "credential_free_buy_v1"
-	syntheticMaxOrderQuantity   = int64(10)
-	syntheticMaxOrderNotional   = int64(1_000_000)
-	syntheticMaxAccountNotional = int64(1_000_000)
+	syntheticExecutionLeaseTTL = 30 * time.Second
+	syntheticRiskPolicyVersion = "credential_free_buy_v1"
 )
 
 type ExecutionAuthorityState = contracts.ExecutionAuthorityState
@@ -125,15 +124,7 @@ func activeReservedNotional(ctx context.Context, q orderQuerier, accountRef stri
 }
 
 func reservationIsActive(state *OrderState) bool {
-	if state.PendingAction != "" {
-		return true
-	}
-	switch state.Status {
-	case "SUBMIT_UNKNOWN", "OPEN", "PARTIALLY_FILLED", "CANCEL_UNKNOWN":
-		return true
-	default:
-		return false
-	}
+	return domain.ReservationIsActive((*orderdomain.State)(state))
 }
 
 func validateAuthorizedReservation(ctx context.Context, q orderQuerier, reservation riskReservationRecord) (*OrderState, error) {
@@ -141,15 +132,12 @@ func validateAuthorizedReservation(ctx context.Context, q orderQuerier, reservat
 	if err != nil {
 		return nil, err
 	}
-	notional, _, err := validateSyntheticBuyPolicy(intent)
-	if err != nil || reservation.AccountRef != intent.AccountRef || reservation.Quantity != intent.Quantity ||
-		reservation.LimitPrice != intent.LimitPrice || reservation.LimitNotional != notional {
-		return nil, errors.New("risk reservation does not match its order intent")
+	if err := domain.ValidateReservationIntent(reservation, domain.OrderIntent(intent)); err != nil {
+		return nil, err
 	}
 	authority, err := loadExecutionAuthorityRecordByID(ctx, q, reservation.AuthorityEventID)
-	if err != nil || authority.AccountRef != reservation.AccountRef || authority.FencingToken != reservation.FencingToken ||
-		authority.ReasonCode != "lease_acquired" || authority.LeaseOwner == "" {
-		return nil, errors.New("risk reservation does not match its execution authority")
+	if bindErr := domain.ValidateReservationAuthority(reservation, authority, err == nil); bindErr != nil {
+		return nil, bindErr
 	}
 	if _, err := loadExecutionAuthoritySnapshot(ctx, q, reservation.AccountRef); err != nil {
 		return nil, err
@@ -162,11 +150,8 @@ func validateAuthorizedReservation(ctx context.Context, q orderQuerier, reservat
 	if err != nil {
 		return nil, err
 	}
-	for _, event := range []OrderEvent{risk, dispatch} {
-		if event.OrderID != reservation.OrderID || event.Source != "synthetic" || event.RiskReservationID != reservation.ReservationID ||
-			event.RiskPolicyVersion != reservation.PolicyVersion || event.FencingToken != reservation.FencingToken {
-			return nil, errors.New("authorized order event does not match its reservation")
-		}
+	if err := domain.ValidateReservationEvents(reservation, domain.OrderEvent(risk), domain.OrderEvent(dispatch)); err != nil {
+		return nil, err
 	}
 	if risk.Type != "RISK_APPROVED" || dispatch.Type != "SUBMIT_DISPATCHED" || dispatchSequence != riskSequence+1 {
 		return nil, errors.New("risk reservation is missing its consecutive authorized event pair")
@@ -175,12 +160,10 @@ func validateAuthorizedReservation(ctx context.Context, q orderQuerier, reservat
 	if err != nil {
 		return nil, err
 	}
-	switch state.Status {
-	case "SUBMIT_UNKNOWN", "OPEN", "PARTIALLY_FILLED", "CANCEL_UNKNOWN", "REJECTED", "FILLED", "CANCELED":
-		return state, nil
-	default:
-		return nil, errors.New("reserved order is not in an authorized post-dispatch state")
+	if err := domain.ValidateReservedOrderState((*orderdomain.State)(state)); err != nil {
+		return nil, err
 	}
+	return state, nil
 }
 
 var authorizedOrderEvent = application.AuthorizedOrderEvent
@@ -360,14 +343,7 @@ func loadRiskReservationByOrder(ctx context.Context, q orderQuerier, orderID str
 }
 
 func validateRiskReservationRecord(record riskReservationRecord) error {
-	_, reservedOK := canonicalUTCTime(record.ReservedAt)
-	if !safeOrderID(record.ReservationID) || !safeOrderID(record.OrderID) || !orderAlias(record.AccountRef, "account") ||
-		record.PolicyVersion != syntheticRiskPolicyVersion || !safeOrderID(record.AuthorityEventID) || record.FencingToken <= 0 ||
-		!validOrderInteger(record.Quantity) || !positiveCanonicalDecimal(record.LimitPrice) || !positiveCanonicalDecimal(record.LimitNotional) ||
-		!safeOrderID(record.RiskEventID) || !safeOrderID(record.DispatchEventID) || record.RiskEventID == record.DispatchEventID || !reservedOK {
-		return errors.New("risk reservation is invalid")
-	}
-	return nil
+	return domain.ValidateRiskReservationRecord(record)
 }
 
 func loadAuthorizedOrderEvent(ctx context.Context, q orderQuerier, eventID string) (int64, OrderEvent, error) {

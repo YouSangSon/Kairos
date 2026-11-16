@@ -11,7 +11,7 @@
 [![Core checks](https://github.com/YouSangSon/Kairos/actions/workflows/core-checks.yml/badge.svg)](https://github.com/YouSangSon/Kairos/actions/workflows/core-checks.yml)
 [![Client release](https://github.com/YouSangSon/Kairos/actions/workflows/client-android-release.yml/badge.svg)](https://github.com/YouSangSon/Kairos/actions/workflows/client-android-release.yml)
 ![Flutter](https://img.shields.io/badge/Flutter-3.47.1-02569B?logo=flutter&logoColor=white)
-![Go](https://img.shields.io/badge/Go-1.24.5-00ADD8?logo=go&logoColor=white)
+![Go](https://img.shields.io/badge/Go-1.27.4-00ADD8?logo=go&logoColor=white)
 ![Python](https://img.shields.io/badge/Python-3.14.5-3776AB?logo=python&logoColor=white)
 
 [プロジェクトの目標](#purpose) · [現在の状態](#status) · [クイックスタート](#quick-start) · [ドキュメント](#documentation)
@@ -98,7 +98,7 @@ Go core は業務責任とデータ所有権を分けたモジュラーモノリ
 - `curl`
 - Docker Engine + Compose v2（コンテナー実行時のみ必要）
 
-プロジェクトの [`.tool-versions`](.tool-versions) は Flutter 3.47.1 stable、Go 1.24.5、Python 3.14.5 を固定しています。Python research runtime にサードパーティーパッケージはありません。
+プロジェクトの [`.tool-versions`](.tool-versions) は Flutter 3.47.1 stable、Go 1.27.4、Python 3.14.5 を固定しています。Python research runtime にサードパーティーパッケージはありません。`services/core/.tool-versions` はルートファイルを参照し、サブディレクトリでも同じ asdf バージョンを選択します。Core CI もこの設定を読み込みます。
 
 ```sh
 git clone https://github.com/YouSangSon/Kairos.git

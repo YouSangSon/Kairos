@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"omni-folio/services/core/internal/modules/trading/contracts"
+	"omni-folio/services/core/internal/modules/trading/internal/domain"
 )
 
 type Dispatcher interface {
@@ -27,10 +28,10 @@ func SubmitSyntheticLimit(ctx context.Context, journal DispatchJournal, id func(
 	if err != nil {
 		return nil, err
 	}
-	if intent.Mode != "synthetic" {
-		return nil, errors.New("limit order submit requires synthetic mode")
+	if err := domain.ValidateSyntheticSubmitIntent(domain.OrderIntent(intent)); err != nil {
+		return nil, err
 	}
-	if dispatch.Provider() != intent.Provider || dispatch.Mode() != intent.Mode {
+	if !domain.DispatchProviderMatches(dispatch.Provider(), intent.Provider) || !domain.DispatchModeMatches(dispatch.Mode(), intent.Mode) {
 		return nil, errors.New("limit order submit capability does not match intent")
 	}
 	if err := dispatch.Preflight(ctx); err != nil {

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"omni-folio/services/core/internal/codec"
 	ledger "omni-folio/services/core/internal/modules/ledger/internal/application"
+	ledgerdomain "omni-folio/services/core/internal/modules/ledger/internal/domain"
 	"omni-folio/services/core/migrations"
 	"strings"
 	"time"
@@ -23,8 +24,8 @@ func requireCurrentLedgerReplay(ctx context.Context, q queryer) error {
 	if err := q.QueryRowContext(ctx, `SELECT policy,(SELECT revision FROM ledger_meta WHERE singleton=1) FROM ledger_replay_state WHERE singleton=1`).Scan(&policy, &revision); err != nil {
 		return fmt.Errorf("ledger replay state: %w", err)
 	}
-	if policy != fifoCostBasisPolicy {
-		return errors.New("ledger replay upgrade required; preview and activate the corrected replay before normal use")
+	if err := ledgerdomain.RequireCurrentReplayPolicy(policy); err != nil {
+		return err
 	}
 	return requireLedgerRevision(ctx, q, revision)
 }
@@ -161,14 +162,11 @@ func proveLedgerReplayState(ctx context.Context, q queryer, archival bool) error
 	if err := requireLedgerRevision(ctx, q, currentRevision); err != nil {
 		return err
 	}
-	if policy == legacyFIFOCostBasisPolicy {
-		if !archival || legacyRevision == 0 || currentRevision != legacyRevision || count != 0 {
-			return errors.New("legacy replay state is not eligible for current activation")
-		}
-		return nil
+	if err := ledgerdomain.ValidateStoredReplayPolicy(policy, legacyRevision, currentRevision, count, archival); err != nil {
+		return err
 	}
-	if policy != fifoCostBasisPolicy || (legacyRevision == 0 && count != 0) || (legacyRevision > 0 && count != 1) {
-		return errors.New("ledger replay policy or transition count is invalid")
+	if policy == legacyFIFOCostBasisPolicy {
+		return nil
 	}
 	if legacyRevision == 0 {
 		return nil
@@ -183,7 +181,7 @@ func proveLedgerReplayState(ctx context.Context, q queryer, archival bool) error
 	}
 	recordedTime, _ := time.Parse(time.RFC3339Nano, recordedAt)
 	activatedTime, _ := time.Parse(time.RFC3339Nano, activatedAt)
-	if activatedTime.Before(recordedTime) {
+	if !ledgerdomain.ReplayActivationTimeEligible(recordedTime, activatedTime) {
 		return errors.New("ledger replay activation precedes its captured ledger")
 	}
 	preview, err := ledgerReplayAt(ctx, q, legacyRevision, recordedAt)
