@@ -29,6 +29,7 @@
 | UI token | [`../design-system/kairos/MASTER.md`](../design-system/kairos/MASTER.md) | 색상, typography, state, responsive/accessibility 규칙 |
 | 보안 보고 | [`../SECURITY.md`](../SECURITY.md) | credential·취약점 보고와 사고 대응 |
 | 수동 모의 실행 | [`local-paper-workflow.md`](local-paper-workflow.md) | 원본 연구·신규 CSV, 명시적 1회 paper 실행과 재시도/종료 경계 |
+| Ubuntu 개인 개발 실행 | [operations/ubuntu-development.md](operations/ubuntu-development.md) | rootless Podman·loopback·SSH tunnel, 명시적 migrate와 HTTP 종료·backup 검증 |
 | 원장 CSV 열람 | [`../gates/g1r-ledger-activity-export.md`](../gates/g1r-ledger-activity-export.md) | 검증된 공개 활동의 private export, 출력 한도와 backup 구분 |
 
 ## 실행 가능한 계약
