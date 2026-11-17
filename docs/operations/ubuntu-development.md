@@ -151,13 +151,13 @@ systemctl --user daemon-reload
 systemctl --user cat kairos-dev.service
 systemctl --user start kairos-dev.service
 systemctl --user status kairos-dev.service --no-pager
-curl --fail --silent --show-error --retry=10 --retry-connrefused --retry-delay=1 \
+curl --fail --silent --show-error --retry 10 --retry-connrefused --retry-delay 1 \
   http://127.0.0.1:18080/readyz
 podman inspect kairos-dev-core
 podman logs --tail=50 kairos-dev-core
 ss -ltn '( sport = :18080 )'
 systemctl --user restart kairos-dev.service
-curl --fail --silent --show-error --retry=10 --retry-connrefused --retry-delay=1 \
+curl --fail --silent --show-error --retry 10 --retry-connrefused --retry-delay 1 \
   http://127.0.0.1:18080/readyz
 systemctl --user stop kairos-dev.service
 test "$(systemctl --user is-active kairos-dev.service || test "$?" = 3)" = inactive
