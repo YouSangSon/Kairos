@@ -2,6 +2,7 @@ package composition
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net"
@@ -35,13 +36,22 @@ func TestServeHTTPDrainsBeforeClosingRuntime(t *testing.T) {
 		runtime.Routes().ServeHTTP(w, r)
 	})}
 	server.RegisterOnShutdown(func() { close(shutdown) })
-	t.Cleanup(func() { server.Close() })
 	returned := make(chan error, 1)
+	finished := make(chan struct{})
 	go func() {
+		defer close(finished)
 		err := serveHTTP(ctx, server, listener, time.Second)
 		runtime.Close()
 		returned <- err
 	}()
+	t.Cleanup(func() {
+		server.Close()
+		select {
+		case <-finished:
+		case <-time.After(2 * time.Second):
+			t.Error("test server goroutine did not stop")
+		}
+	})
 	response := make(chan error, 1)
 	go func() {
 		client := &http.Client{Timeout: 3 * time.Second}
@@ -75,6 +85,10 @@ func TestServeHTTPDrainsBeforeClosingRuntime(t *testing.T) {
 	server.Handler.ServeHTTP(late, httptest.NewRequest(http.MethodGet, "/readyz", nil))
 	if late.Code != http.StatusServiceUnavailable {
 		t.Fatalf("shutdown admitted a new handler: %d", late.Code)
+	}
+	var rejection APIError
+	if err := json.Unmarshal(late.Body.Bytes(), &rejection); err != nil || rejection.Code != "server_shutting_down" || rejection.Message != "server is shutting down" || late.Header().Get("Content-Type") != "application/json" {
+		t.Fatalf("shutdown rejection broke API error shape: %s %v", late.Body.String(), err)
 	}
 	if err := runtime.db.Ping(); err != nil {
 		t.Fatalf("runtime closed before handler completed: %v", err)
@@ -112,13 +126,22 @@ func TestServeHTTPTimeoutCancelsAndWaitsForHandler(t *testing.T) {
 			t.Errorf("runtime closed while forced handler still used it: %v", err)
 		}
 	})}
-	t.Cleanup(func() { server.Close() })
 	returned := make(chan error, 1)
+	finished := make(chan struct{})
 	go func() {
+		defer close(finished)
 		err := serveHTTP(ctx, server, listener, 20*time.Millisecond)
 		runtime.Close()
 		returned <- err
 	}()
+	t.Cleanup(func() {
+		server.Close()
+		select {
+		case <-finished:
+		case <-time.After(2 * time.Second):
+			t.Error("test server goroutine did not stop")
+		}
+	})
 	requestDone := make(chan struct{})
 	go func() {
 		defer close(requestDone)
@@ -165,5 +188,22 @@ func TestServeCLIListenFailurePreservesDatabase(t *testing.T) {
 	}
 	if err := RunCLI(context.Background(), []string{"migrate", "-db", path}, CLIOptions{}, os.Stdin, io.Discard, io.Discard); err != nil {
 		t.Fatalf("failed startup left database unusable: %v", err)
+	}
+}
+
+func TestServeHTTPListenerFailureStopsAdmission(t *testing.T) {
+	listener := lifecycleListener(t)
+	listener.Close()
+	server := &http.Server{Handler: http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Error("failed server admitted a handler")
+	})}
+	err := serveHTTP(context.Background(), server, listener, time.Second)
+	if !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("listener failure was hidden: %v", err)
+	}
+	response := httptest.NewRecorder()
+	server.Handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/", nil))
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("failed server admitted a request: %d", response.Code)
 	}
 }

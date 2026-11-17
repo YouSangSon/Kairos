@@ -17,7 +17,11 @@ func TestServeMainSIGTERMExitsCleanlyAndReleasesPort(t *testing.T) {
 	defer stopBuild()
 	dir := t.TempDir()
 	binary := filepath.Join(dir, "omni-core")
-	if output, err := exec.CommandContext(buildContext, "go", "build", "-o", binary, ".").CombinedOutput(); err != nil {
+	build := exec.CommandContext(buildContext, "go", "build", "-o", binary, ".")
+	build.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	build.Cancel = func() error { return syscall.Kill(-build.Process.Pid, syscall.SIGKILL) }
+	build.WaitDelay = time.Second
+	if output, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build actual main: %v\n%s", err, output)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
