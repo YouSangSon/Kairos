@@ -16,6 +16,7 @@
 
 | 목적 | 문서 | 역할 |
 |---|---|---|
+| 프로덕션·제품·투자 개선 설계 | [architecture/production-and-improvement.md](architecture/production-and-improvement.md) | 수집·추천·리밸런싱·복기·자동 개선의 owner, 운영 안전, 단계와 검증 gate. 신규 기능은 설계 제안 상태 |
 | 서비스·플랫폼 확장 설계 | [architecture/scalability-and-platform.md](architecture/scalability-and-platform.md) | MSA·복수 DB·인증·캐시·Kafka/RabbitMQ의 역할과 전환 gate |
 | 전체 리팩토링 설계 | [architecture/whole-project-refactoring.md](architecture/whole-project-refactoring.md) | Go·Flutter·Python 책임, 처리 경계, 전환 순서와 완료 기준 |
 | 모듈형 구현·검증 상태 | [architecture/modular-implementation-plan.md](architecture/modular-implementation-plan.md) | 구현 단위와 실제 검사·CI·배포 상태 |
@@ -28,6 +29,7 @@
 | UI token | [`../design-system/kairos/MASTER.md`](../design-system/kairos/MASTER.md) | 색상, typography, state, responsive/accessibility 규칙 |
 | 보안 보고 | [`../SECURITY.md`](../SECURITY.md) | credential·취약점 보고와 사고 대응 |
 | 수동 모의 실행 | [`local-paper-workflow.md`](local-paper-workflow.md) | 원본 연구·신규 CSV, 명시적 1회 paper 실행과 재시도/종료 경계 |
+| Ubuntu 개인 개발 실행 | [operations/ubuntu-development.md](operations/ubuntu-development.md) | rootless Podman·loopback·SSH tunnel, 명시적 migrate와 HTTP 종료·backup 검증 |
 | 원장 CSV 열람 | [`../gates/g1r-ledger-activity-export.md`](../gates/g1r-ledger-activity-export.md) | 검증된 공개 활동의 private export, 출력 한도와 backup 구분 |
 
 ## 실행 가능한 계약

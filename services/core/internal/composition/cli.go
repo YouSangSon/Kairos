@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	ledger "omni-folio/services/core/internal/modules/ledger"
 	maintenance "omni-folio/services/core/internal/modules/maintenance"
@@ -86,8 +87,12 @@ func RunCLI(ctx context.Context, args []string, options CLIOptions, input *os.Fi
 			WriteTimeout:      30 * time.Second,
 			IdleTimeout:       60 * time.Second,
 		}
-		log.Printf("omni-core listening on %s", *addr)
-		return srv.ListenAndServe()
+		listener, err := net.Listen("tcp", *addr)
+		if err != nil {
+			return err
+		}
+		log.Printf("omni-core listening on %s", listener.Addr())
+		return serveHTTP(ctx, srv, listener, 10*time.Second)
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
 	}

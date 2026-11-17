@@ -1,0 +1,33 @@
+[Unit]
+Description=Kairos private Ubuntu development core
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+[Container]
+Image=@IMAGE_ID@
+Pull=never
+ContainerName=kairos-dev-core
+Label=io.kairos.runtime=ubuntu-development
+Label=org.opencontainers.image.revision=@SOURCE_SHA@
+User=10001:10001
+UserNS=keep-id:uid=10001,gid=10001
+Volume=kairos-dev-data:/data
+PublishPort=127.0.0.1:18080:8080
+Exec=serve -db /data/omni-folio.db -addr 0.0.0.0:8080
+ReadOnly=true
+ReadOnlyTmpfs=false
+DropCapability=all
+NoNewPrivileges=true
+Tmpfs=/tmp:rw,nosuid,nodev,noexec,size=64m,mode=1777
+ShmSize=16m
+PidsLimit=256
+LogDriver=k8s-file
+PodmanArgs=--cpus=0.75 --memory=1536m --memory-swap=1536m --log-opt=max-size=10mb --stop-timeout=20 --replace=false
+
+[Service]
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=30
+
+[Install]
+WantedBy=default.target
