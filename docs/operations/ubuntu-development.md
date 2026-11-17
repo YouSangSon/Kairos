@@ -151,7 +151,8 @@ systemctl --user daemon-reload
 systemctl --user cat kairos-dev.service
 systemctl --user start kairos-dev.service
 systemctl --user status kairos-dev.service --no-pager
-curl --fail --silent --show-error http://127.0.0.1:18080/readyz
+curl --fail --silent --show-error --retry=10 --retry-connrefused --retry-delay=1 \
+  http://127.0.0.1:18080/readyz
 podman inspect kairos-dev-core
 podman logs --tail=50 kairos-dev-core
 ss -ltn '( sport = :18080 )'
@@ -168,10 +169,10 @@ inspect에서 image ID, user mapping, port, read-only, capability, no-new-privil
 
 SIGINT/SIGTERM을 받으면 새 handler 진입을 막고 HTTP 요청에 10초 유예를 준다. 유예 중에는 진행 중인 요청의 DB를 유지한다. 초과하면 연결을 닫고 요청 context를 취소하며 오류로 종료한다. handler가 취소를 무시하면 DB를 먼저 닫지 않고 기다린다. 이 경우 20초 container stop 또는 30초 systemd 제한에서 강제 종료될 수 있으므로 drain·cleanup 완료로 기록하지 않는다. 다음 시작의 readiness와 데이터 상태를 다시 확인한다. 일반 stop은 exit 0이며 `Restart=on-failure`는 이를 재기동하지 않는다.
 
-PC에서는 기존 SSH alias를 사용한다.
+PC의 로그인 zsh에서는 기존 SSH alias를 명령으로 호출한다. shell alias를 `ssh`의 hostname 인자로 넘기지 않는다. 첫 번째 터미널에서 tunnel을 유지하고 두 번째 터미널에서 API를 확인한다.
 
 ```sh
-ssh -N -L 127.0.0.1:18080:127.0.0.1:18080 my-ubuntu-server
+my-ubuntu-server -N -o ExitOnForwardFailure=yes -L 127.0.0.1:18080:127.0.0.1:18080
 curl --fail --silent --show-error http://127.0.0.1:18080/readyz
 ```
 
