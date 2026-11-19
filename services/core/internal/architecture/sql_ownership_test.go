@@ -128,6 +128,7 @@ func TestSchemaInventoryMatchesRegistry(t *testing.T) {
 func TestSchemaGateRejectsUnownedObjects(t *testing.T) {
 	for _, sql := range []string{
 		`CREATE TABLE mystery(id INTEGER)`,
+		checkpointDDL,
 		`CREATE VIEW mystery AS SELECT * FROM events`,
 		`CREATE TRIGGER mystery AFTER INSERT ON events BEGIN SELECT 1; END`,
 		`CREATE TRIGGER events_no_update AFTER INSERT ON events BEGIN DELETE FROM order_events; END`,

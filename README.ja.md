@@ -606,6 +606,8 @@ mkdir -p -m 700 data/candles
 
 3つの引数がすべて必要です。実際のリクエスト、提供者の元の時刻、UTC 取得時刻を保存し、レシートは行数とファイルの SHA256 を返します。既存の出力は上書きしません。公開後のエラーでも完成したファイルが残る場合があります。既存ファイルを確認し、新しい観測には別のパスを使ってください。足の完成、価格調整の単位、現在価格を検証した paper 入力ではありません。[対応 interval・上限・復旧契約](gates/g4aa-kiwoom-mock-candle-capture.md)
 
+中断後に再開するには、まず `mkdir -m 700 data/candles/run-001` で専用フォルダーを作成します。上のコマンドを `kiwoom-mock-candles-resume` に変更し、`-work ../../data/candles/run-001` を追加してください。再実行すると、最初の基準日で保存済みページを照合してから新しい観測値を追加します。完了した結果はオフラインで新しい出力先に保存できます。[再開と訂正時の動作](docs/architecture/production-and-improvement.md#resumable-candles)
+
 ### 保存した日足でコスト控除後の研究を実行
 
 上記の日足 capture を既存の SMA 候補探索・walk-forward・最終 holdout 計算に使います。v2 設定のみを受け付け、行数は train・validation・holdout の合計と完全に一致する必要があります。以下の設定には120行が必要なため、公開の1行 capture 例では実行できません。

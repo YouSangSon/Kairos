@@ -28,6 +28,8 @@ services/research/.pytest_cache/
 *.db
 *.db-shm
 *.db-wal
+**/candle-checkpoint.sqlite*
+**/.candle-checkpoint.sqlite*
 
 # Local agent goals and evidence
 /goal.md

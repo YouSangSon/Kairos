@@ -41,6 +41,14 @@ type MockCandleBatch struct {
 	Bars           []MockCapturedCandle
 }
 
+// MockCandlePage reports a validated provider page and the cumulative capture.
+type MockCandlePage struct {
+	Number   int
+	Digest   string
+	Complete bool
+	Batch    MockCandleBatch
+}
+
 type MockCandles struct {
 	mu     sync.Mutex
 	client *Client
@@ -70,20 +78,50 @@ func ValidateMockCandleRequest(symbol, interval string) error {
 }
 
 func (c *MockCandles) Capture(ctx context.Context, symbol, interval string) (MockCandleBatch, error) {
+	return c.capture(ctx, symbol, interval, time.Time{}, nil)
+}
+
+// CapturePages starts from page one using the original request clock and visits
+// each validated page before fetching another. A visitor error ends the capture.
+func (c *MockCandles) CapturePages(ctx context.Context, symbol, interval string, startedAt time.Time, visit func(MockCandlePage) error) (MockCandleBatch, error) {
+	if startedAt.IsZero() || visit == nil {
+		return MockCandleBatch{}, errors.New("Kiwoom mock candle page capture configuration is invalid")
+	}
+	return c.capture(ctx, symbol, interval, startedAt, visit)
+}
+
+func (c *MockCandles) capture(ctx context.Context, symbol, interval string, startedAt time.Time, visit func(MockCandlePage) error) (MockCandleBatch, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.client == nil {
 		return MockCandleBatch{}, errors.New("Kiwoom mock candle capture is closed")
 	}
-	batch, err := c.client.readCandleBatch(ctx, symbol, interval)
+	var terminal MockCandleBatch
+	if visit != nil {
+		notify := visit
+		visit = func(page MockCandlePage) error {
+			if page.Complete {
+				terminal = page.Batch
+			}
+			return notify(page)
+		}
+	}
+	batch, err := c.client.readCandlePages(ctx, symbol, interval, startedAt, visit)
 	if err != nil {
 		return MockCandleBatch{}, err
 	}
-	result := MockCandleBatch{Request: MockCandleRequestEvidence{APIID: batch.request.APIID, Body: MockCandleRequestBody{StockCode: batch.request.Body.StockCode, BaseDate: batch.request.Body.BaseDate, Adjustment: batch.request.Body.Adjustment, TickScope: batch.request.Body.TickScope}}, FetchStartedAt: batch.fetchStartedAt, FetchedAt: batch.fetchedAt, Bars: make([]MockCapturedCandle, len(batch.bars))}
-	for i, bar := range batch.bars {
-		result.Bars[i] = MockCapturedCandle{ProviderTime: bar.ProviderTime, Open: bar.Open, High: bar.High, Low: bar.Low, Close: bar.Close, Volume: bar.Volume}
+	if visit != nil {
+		return terminal, nil
 	}
-	return result, nil
+	return batch.mockBatch(), nil
+}
+
+func (batch *kiwoomCandleBatch) mockBatch() MockCandleBatch {
+	result := MockCandleBatch{Request: batch.request, FetchStartedAt: batch.fetchStartedAt, FetchedAt: batch.fetchedAt, Bars: make([]MockCapturedCandle, len(batch.bars))}
+	for i, bar := range batch.bars {
+		result.Bars[i] = bar.MockCapturedCandle
+	}
+	return result
 }
 
 func (c *MockCandles) Close() {

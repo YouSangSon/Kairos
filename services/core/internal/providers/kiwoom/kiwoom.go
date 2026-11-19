@@ -316,6 +316,10 @@ func (c *Client) accountPages(ctx context.Context, apiID string, requestBody any
 }
 
 func (c *Client) readPages(ctx context.Context, apiID string, requestBody any, handle func([]byte) (bool, error)) error {
+	return c.readPagesWithVisit(ctx, apiID, requestBody, handle, nil)
+}
+
+func (c *Client) readPagesWithVisit(ctx context.Context, apiID string, requestBody any, handle func([]byte) (bool, error), visit func(number int, continued, complete bool) error) error {
 	seen := make(map[string]struct{})
 	cont, next := "", ""
 	for pageNumber := 1; pageNumber <= kiwoomMaxPages; pageNumber++ {
@@ -327,16 +331,24 @@ func (c *Client) readPages(ctx context.Context, apiID string, requestBody any, h
 		if err != nil {
 			return err
 		}
-		if stop || !page.continued {
-			return nil
-		}
-		if pageNumber == kiwoomMaxPages {
+		complete := stop || !page.continued
+		if !complete && pageNumber == kiwoomMaxPages {
 			return &KiwoomError{Kind: "pagination_limit", APIID: apiID}
 		}
-		if _, duplicate := seen[page.nextKey]; duplicate {
-			return &KiwoomError{Kind: "repeated_cursor", APIID: apiID}
+		if page.continued && (!complete || visit != nil) {
+			if _, duplicate := seen[page.nextKey]; duplicate {
+				return &KiwoomError{Kind: "repeated_cursor", APIID: apiID}
+			}
+			seen[page.nextKey] = struct{}{}
 		}
-		seen[page.nextKey] = struct{}{}
+		if visit != nil {
+			if err := visit(pageNumber, page.continued, complete); err != nil {
+				return err
+			}
+		}
+		if complete {
+			return nil
+		}
 		cont, next = "Y", page.nextKey
 	}
 	return &KiwoomError{Kind: "pagination_limit", APIID: apiID}

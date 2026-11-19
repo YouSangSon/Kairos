@@ -606,6 +606,8 @@ mkdir -p -m 700 data/candles
 
 三个参数都必须提供。文件保留实际请求、提供方原始时间和 UTC 获取时间，回执返回行数及文件 SHA256。已有输出不会被覆盖。发布后发生错误时，完整文件仍可能保留；请先检查已有文件，再为新观测使用其他路径。这不是已验证 K 线完成、价格调整单位或当前价格的 paper 输入。[支持的 interval、限制与恢复契约](gates/g4aa-kiwoom-mock-candle-capture.md)
 
+如需在中断后继续采集，先用 `mkdir -m 700 data/candles/run-001` 创建私有目录。将上面的命令改为 `kiwoom-mock-candles-resume`，并添加 `-work ../../data/candles/run-001`。重新运行时会使用最初的基准日期逐页核对，再追加新的观测值。采集完成后，可以离线导出到新的文件路径。[恢复和数据修订规则](docs/architecture/production-and-improvement.md#resumable-candles)
+
 ### 使用已保存的日线运行扣除成本的研究
 
 将上述日线 capture 用于现有 SMA 参数搜索、walk-forward 和最终 holdout 计算。仅支持 v2 配置，行数必须与 train、validation、holdout 的总数完全一致。以下配置需要120行，公开的单行 capture 示例不足以运行。

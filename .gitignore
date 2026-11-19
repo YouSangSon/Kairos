@@ -32,6 +32,9 @@ backups/
 *.db-shm
 *.db-wal
 *.sqlite
+candle-checkpoint.sqlite-*
+candle-checkpoint.sqlite.pending-*
+.candle-checkpoint.sqlite*
 *.sqlite3
 *.csv.tmp
 

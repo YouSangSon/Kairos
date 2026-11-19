@@ -606,6 +606,8 @@ mkdir -p -m 700 data/candles
 
 All three arguments are required. The file preserves the exact request, raw provider times, and UTC fetch clocks; the receipt returns the row count and file SHA256. Existing output is never overwritten. A completed file may remain after a publication error. Inspect it and choose a different path for a new observation. This is not a paper input with verified bar completion, adjustment units, or current prices. [Intervals, bounds, and recovery contract](gates/g4aa-kiwoom-mock-candle-capture.md)
 
+For resumable collection, create a private directory with `mkdir -m 700 data/candles/run-001`. In the command above, use `kiwoom-mock-candles-resume` and add `-work ../../data/candles/run-001`. A retry verifies the saved pages using the original base date before appending new observations. A completed capture can be exported offline to a fresh output path. [Restart and correction behavior](docs/architecture/production-and-improvement.md#resumable-candles)
+
 ### Run cost-aware research on saved daily candles
 
 Use the daily capture above with the existing SMA grid, walk-forward, and final holdout calculation. Only v2 config is supported, and its train, validation, and holdout counts must exactly match the capture rows. The config below requires 120 rows; the public one-row capture example is insufficient.

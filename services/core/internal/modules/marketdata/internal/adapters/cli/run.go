@@ -27,8 +27,8 @@ func Run(ctx context.Context, command string, args []string, config Config, out 
 		return runOwnerFXImportCommand(ctx, args, config, out)
 	case "benchmark-import", "benchmark-status":
 		return runBenchmarkSeriesCommand(ctx, command, args, config, out)
-	case "kiwoom-mock-candles":
-		return runCandles(ctx, args, out, config)
+	case "kiwoom-mock-candles", "kiwoom-mock-candles-resume":
+		return runCandles(ctx, command, args, out, config)
 	default:
 		return errors.New("market command is invalid")
 	}

@@ -36,7 +36,7 @@ var mockReadRuntimeFactory = func(resources Resources) MockReadRuntime {
 
 func RunCLI(ctx context.Context, args []string, options CLIOptions, input *os.File, output, stderr io.Writer) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: omni-core <migrate|ledger-replay-preview|ledger-replay-activate|ledger-export|benchmark-import|benchmark-status|owner-fx-import|owner-price-import|kiwoom-mock-sync|kiwoom-mock-candles|serve|backup|verify-restore|strategy-register|strategy-status|strategy-select|strategy-rollback|paper-run-due|paper-run-loop|paper-init|paper-import-bars|paper-execute|paper-execute-stream|paper-input-status|paper-improve|paper-promote|paper-promotion-status|paper-promotion-abort>")
+		return fmt.Errorf("usage: omni-core <migrate|ledger-replay-preview|ledger-replay-activate|ledger-export|benchmark-import|benchmark-status|owner-fx-import|owner-price-import|kiwoom-mock-sync|kiwoom-mock-candles|kiwoom-mock-candles-resume|serve|backup|verify-restore|strategy-register|strategy-status|strategy-select|strategy-rollback|paper-run-due|paper-run-loop|paper-init|paper-import-bars|paper-execute|paper-execute-stream|paper-input-status|paper-improve|paper-promote|paper-promotion-status|paper-promotion-abort>")
 	}
 	resources := NewResources()
 	factory := options.MockReadRuntime
@@ -46,7 +46,7 @@ func RunCLI(ctx context.Context, args []string, options CLIOptions, input *os.Fi
 	switch args[0] {
 	case "owner-price-import", "owner-fx-import", "benchmark-import", "benchmark-status":
 		return market.RunCLI(ctx, args[0], args[1:], market.CLIConfig{Resources: resources.Market(), CanonicalInstrumentID: ledger.ComposeIdentifiers()}, output)
-	case "kiwoom-mock-candles":
+	case "kiwoom-mock-candles", "kiwoom-mock-candles-resume":
 		runtime := factory(resources)
 		defer runtime.Close()
 		return market.RunCLI(ctx, args[0], args[1:], runtime.Market, output)
