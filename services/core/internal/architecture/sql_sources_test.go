@@ -106,6 +106,10 @@ func inspectSQLSources(root string) ([]string, error) {
 			return ok && imports[pkg.Name] == internalPrefix+"storage/observation" && selector.Sel.Name == "Statement"
 		}
 		collect := func(literal *ast.CompositeLit) {
+			if source.path == candleCheckpointAdapter {
+				violations = append(violations, source.path+" checkpoint cannot register observation SQL")
+				return
+			}
 			fields := map[string]ast.Expr{}
 			for _, element := range literal.Elts {
 				if field, ok := element.(*ast.KeyValueExpr); ok {
@@ -236,6 +240,12 @@ func inspectSQLSources(root string) ([]string, error) {
 						index = 0
 					case "QueryContext", "QueryRowContext", "ExecContext", "PrepareContext", "QueryOne", "Execute":
 						index = 1
+					}
+					if index >= 0 && source.path == candleCheckpointAdapter {
+						if !approvedCandleCheckpointSQL(source, call, selector.Sel.Name) {
+							violations = append(violations, fmt.Sprintf("%s:%d requires fixed checkpoint SQL in %s", source.path, source.positions.Position(call.Pos()).Line, selector.Sel.Name))
+						}
+						return true
 					}
 					if index >= 0 && index < len(call.Args) {
 						if approvedSQLForwarder(source.path, source.file, call.Pos()) || transparentSQLForwarder(source.path, source.file, call) {

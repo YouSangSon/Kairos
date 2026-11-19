@@ -52,7 +52,7 @@ func runContext(ctx context.Context, args []string) error {
 	return Run(ctx, args[0], args[1:], Config{}, io.Discard)
 }
 func runKiwoomMockCandles(ctx context.Context, args []string, out io.Writer, readSecret func(context.Context) ([]byte, error), transport http.RoundTripper, now func() time.Time, pacer *sdk.MockReadPacer) error {
-	return runCandles(ctx, args, out, Config{ReadSecret: readSecret, Transport: transport, Now: now, Pacer: pacer})
+	return Run(ctx, "kiwoom-mock-candles", args, Config{ReadSecret: readSecret, Transport: transport, Now: now, Pacer: pacer}, out)
 }
 func TestKiwoomMockCandlesDispatchRequiresExplicitArguments(t *testing.T) {
 	for _, args := range [][]string{

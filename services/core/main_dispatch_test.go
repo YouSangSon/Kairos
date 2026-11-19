@@ -8,9 +8,9 @@ import (
 )
 
 func TestModularMainRejectsFlagsBeforeOpeningResources(t *testing.T) {
-	for _, command := range []string{"migrate", "ledger-replay-preview", "ledger-replay-activate", "ledger-export", "benchmark-import", "benchmark-status", "owner-fx-import", "owner-price-import", "kiwoom-mock-sync", "kiwoom-mock-candles", "serve", "backup", "verify-restore", "strategy-register", "strategy-status", "strategy-select", "strategy-rollback", "paper-run-due", "paper-run-loop", "paper-init", "paper-import-bars", "paper-execute", "paper-execute-stream", "paper-input-status", "paper-improve", "paper-promote", "paper-promotion-status", "paper-promotion-abort"} {
+	for _, command := range []string{"migrate", "ledger-replay-preview", "ledger-replay-activate", "ledger-export", "benchmark-import", "benchmark-status", "owner-fx-import", "owner-price-import", "kiwoom-mock-sync", "kiwoom-mock-candles", "kiwoom-mock-candles-resume", "serve", "backup", "verify-restore", "strategy-register", "strategy-status", "strategy-select", "strategy-rollback", "paper-run-due", "paper-run-loop", "paper-init", "paper-import-bars", "paper-execute", "paper-execute-stream", "paper-input-status", "paper-improve", "paper-promote", "paper-promotion-status", "paper-promotion-abort"} {
 		t.Run(command, func(t *testing.T) {
-			if err := runContext(context.Background(), []string{command, "-h"}); err == nil {
+			if err := runContext(context.Background(), []string{command, "-h"}); err == nil || strings.Contains(err.Error(), "unknown command") {
 				t.Fatal("help entered command resources")
 			}
 		})

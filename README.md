@@ -606,6 +606,8 @@ mkdir -p -m 700 data/candles
 
 세 인자가 모두 필요합니다. 파일은 실제 요청·원본 제공자 시각·UTC 조회 시각을 보존하며, 영수증은 행 수와 파일 SHA256을 반환합니다. 기존 출력은 덮어쓰지 않습니다. 발행 뒤 오류에서도 완성 파일이 남을 수 있으므로 기존 파일을 확인하고 새 관찰에는 다른 경로를 사용하세요. 봉 완료·가격 조정 단위·현재 시세를 검증한 paper 입력은 아닙니다. [지원 interval·한도·복구 계약](gates/g4aa-kiwoom-mock-candle-capture.md)
 
+중단 후 이어서 수집하려면 먼저 `mkdir -m 700 data/candles/run-001`로 작업 폴더를 만드세요. 위 명령을 `kiwoom-mock-candles-resume`으로 바꾸고 `-work ../../data/candles/run-001`을 추가합니다. 재실행하면 같은 기준일로 저장한 페이지를 다시 확인한 뒤 새 봉을 수집합니다. 완료한 관찰은 새 출력 경로에 오프라인으로 다시 저장할 수 있습니다. [재시작과 원천 정정 처리](docs/architecture/production-and-improvement.md#resumable-candles)
+
 ### 저장한 일봉으로 비용 차감 연구 실행
 
 위 일봉 capture를 기존 SMA 후보 탐색·walk-forward·최종 holdout 계산에 사용합니다. v2 설정만 지원하며 행 수가 train·validation·holdout 합계와 정확히 같아야 합니다. 아래 설정은 120행이 필요하므로 공개 1행 capture 예제로는 실행되지 않습니다.
