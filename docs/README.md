@@ -16,7 +16,7 @@
 
 | 목적 | 문서 | 역할 |
 |---|---|---|
-| 프로덕션·제품·투자 개선 설계 | [architecture/production-and-improvement.md](architecture/production-and-improvement.md) | 수집·추천·리밸런싱·복기·자동 개선의 owner, 운영 안전, 단계와 검증 gate. 신규 기능은 설계 제안 상태 |
+| 프로덕션·제품·투자 개선 설계 | [architecture/production-and-improvement.md](architecture/production-and-improvement.md) | 수집·추천·리밸런싱·복기·자동 개선의 owner, 운영 안전과 후속 단계 |
 | 서비스·플랫폼 확장 설계 | [architecture/scalability-and-platform.md](architecture/scalability-and-platform.md) | MSA·복수 DB·인증·캐시·Kafka/RabbitMQ의 역할과 전환 gate |
 | 전체 리팩토링 설계 | [architecture/whole-project-refactoring.md](architecture/whole-project-refactoring.md) | Go·Flutter·Python 책임, 처리 경계, 전환 순서와 완료 기준 |
 | 모듈형 구현·검증 상태 | [architecture/modular-implementation-plan.md](architecture/modular-implementation-plan.md) | 구현 단위와 실제 검사·CI·배포 상태 |
@@ -37,6 +37,7 @@
 - HTTP API source of truth: [`../contracts/openapi.json`](../contracts/openapi.json)
 - JSON/decimal/fixture 계약: [`../contracts/`](../contracts/)
 - Gate별 acceptance: [`../gates/`](../gates/)
+- [I1-1 같은 관측의 평가 근거 조회](../gates/i1a-valuation-evidence.md)
 - Strategy/order authority: [`../gates/g3-research.md`](../gates/g3-research.md)
 - 현재 paper accounting leaf: [`../gates/g3k-paper-fill-accounting.md`](../gates/g3k-paper-fill-accounting.md)
 - 현재 paper performance leaf: [`../gates/g3l-paper-performance-evidence.md`](../gates/g3l-paper-performance-evidence.md)

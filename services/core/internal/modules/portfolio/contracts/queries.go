@@ -22,6 +22,7 @@ type InputsReader interface {
 type Queries interface {
 	CashValuation(context.Context, string, string) (*CashValuation, error)
 	HoldingValuation(context.Context, string) (*HoldingValuation, error)
+	ValuationEvidence(context.Context) (*PortfolioValuationEvidence, error)
 	CurrentValuation(context.Context) (*CurrentPortfolioValuation, error)
 	XIRR(context.Context) (*PortfolioXIRR, error)
 	TWR(context.Context) (*PortfolioTWR, error)

@@ -3,6 +3,7 @@ package observations_test
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"sync/atomic"
@@ -16,6 +17,7 @@ import (
 	market "omni-folio/services/core/internal/modules/marketdata"
 	mc "omni-folio/services/core/internal/modules/marketdata/contracts"
 	portfolio "omni-folio/services/core/internal/modules/portfolio"
+	pc "omni-folio/services/core/internal/modules/portfolio/contracts"
 	watch "omni-folio/services/core/internal/modules/watchlist"
 	wc "omni-folio/services/core/internal/modules/watchlist/contracts"
 	storage "omni-folio/services/core/internal/storage/contracts"
@@ -204,6 +206,118 @@ func TestMOD11RealOwnerModulesPreservePortfolioObservation(t *testing.T) {
 	}
 	if _, err := f.ledger.ValuationFacts(ctx, l.seen); err == nil {
 		t.Fatal("real ledger accepted an expired observation")
+	}
+}
+
+func TestValuationEvidencePreservesRealOwnerObservation(t *testing.T) {
+	f := newModuleFixture(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	advance := moduleBarrier(t, ctx, func() error { return f.advance(ctx) })
+	f.reads.after = func() error {
+		f.reads.after = nil
+		return advance()
+	}
+	api := portfolio.Compose(observations.Portfolio{Registry: f.registry, Ledger: f.reads, Market: f.market.Queries}, f.clock)
+	cutoff := f.clock().Format(time.RFC3339Nano)
+
+	type snapshot struct {
+		revision, priceVersion, observedAt, price, rate string
+		cash                                            []lc.Money
+		cashKRW, holdingsKRW, totalKRW                  string
+	}
+	check := func(report *pc.PortfolioValuationEvidence, want snapshot) {
+		t.Helper()
+		if report.ObservationCutoff != cutoff {
+			t.Fatalf("observation cutoff = %q, want %q", report.ObservationCutoff, cutoff)
+		}
+		for _, view := range []struct{ name, asOf, revision string }{
+			{"cash", report.Cash.ValuationAsOf, report.Cash.LedgerRevision},
+			{"holdings", report.Holdings.ValuationAsOf, report.Holdings.LedgerRevision},
+			{"current", report.Current.ValuationAsOf, report.Current.LedgerRevision},
+		} {
+			if view.asOf != cutoff || view.revision != want.revision {
+				t.Fatalf("%s valuation = %q at %q, want %q at %q", view.name, view.revision, view.asOf, want.revision, cutoff)
+			}
+		}
+		if len(report.Cash.Lines) != len(want.cash) {
+			t.Fatalf("%s cash lines = %+v, want native balances %+v", want.revision, report.Cash.Lines, want.cash)
+		}
+		for i, line := range report.Cash.Lines {
+			balance := want.cash[i]
+			if line.Currency != balance.Currency || line.Amount != balance.Amount || line.FX != nil {
+				t.Fatalf("%s cash line = %+v, want unconverted %+v", want.revision, line, balance)
+			}
+		}
+		if len(report.Holdings.Lines) != 1 {
+			t.Fatalf("%s holdings = %+v, want one USD holding", want.revision, report.Holdings.Lines)
+		}
+		holding := report.Holdings.Lines[0]
+		if holding.Symbol != "AAPL" || holding.Currency != "USD" || holding.Quantity != "1" || holding.CostBasis != "100" ||
+			holding.MarketValue == nil || *holding.MarketValue != want.price {
+			t.Fatalf("%s holding = %+v, want 1 AAPL at USD %s with USD 100 cost", want.revision, holding, want.price)
+		}
+		price := holding.Price
+		if price == nil || price.SourceVersion != want.priceVersion || price.Price != want.price || price.ObservedAt != want.observedAt {
+			t.Fatalf("%s holding price = %+v, want %s price %s observed %s", want.revision, price, want.priceVersion, want.price, want.observedAt)
+		}
+		if len(report.ConversionFX) != 1 {
+			t.Fatalf("%s conversion FX = %+v, want one receipt for the USD holding", want.revision, report.ConversionFX)
+		}
+		fx := report.ConversionFX[0]
+		if fx.Source != "local_fixture" || fx.ObservationID == "" || fx.BaseCurrency != "USD" || fx.QuoteCurrency != "KRW" ||
+			fx.Rate != want.rate || fx.ObservedAt != want.observedAt || fx.FetchedAt != want.observedAt || fx.RecordedAt != cutoff {
+			t.Fatalf("%s conversion FX = %+v, want stored USD/KRW rate %s observed %s", want.revision, fx, want.rate, want.observedAt)
+		}
+		for _, total := range []struct {
+			name string
+			got  *lc.Money
+			want string
+		}{
+			{"cash total", report.Cash.Total, want.cashKRW},
+			{"current cash", report.Current.CashValue, want.cashKRW},
+			{"current holdings", report.Current.HoldingsValue, want.holdingsKRW},
+			{"current total", report.Current.TotalValue, want.totalKRW},
+		} {
+			if total.got == nil || total.got.Currency != "KRW" || total.got.Amount != total.want {
+				t.Fatalf("%s %s = %+v, want KRW %s", want.revision, total.name, total.got, total.want)
+			}
+		}
+	}
+	encode := func(report *pc.PortfolioValuationEvidence) string {
+		t.Helper()
+		data, err := json.Marshal(report)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(data)
+	}
+
+	first, err := api.ValuationEvidence(ctx)
+	if err != nil || first == nil {
+		t.Fatalf("first report = %+v, err = %v", first, err)
+	}
+	check(first, snapshot{
+		revision: "rev_0000000002", priceVersion: "old", observedAt: "2026-01-09T12:00:00Z", price: "200", rate: "1370",
+		cash: []lc.Money{{Currency: "USD", Amount: "0"}}, cashKRW: "0", holdingsKRW: "274000", totalKRW: "274000",
+	})
+	before := encode(first)
+	firstFXID := first.ConversionFX[0].ObservationID
+
+	next, err := api.ValuationEvidence(ctx)
+	if err != nil || next == nil {
+		t.Fatalf("next report = %+v, err = %v", next, err)
+	}
+	check(next, snapshot{
+		revision: "rev_0000000003", priceVersion: "new", observedAt: "2026-01-09T13:00:00Z", price: "300", rate: "1400",
+		cash: []lc.Money{{Currency: "KRW", Amount: "100"}, {Currency: "USD", Amount: "0"}}, cashKRW: "100", holdingsKRW: "420000", totalKRW: "420100",
+	})
+	if next.ConversionFX[0].ObservationID == firstFXID {
+		t.Fatal("new rate reused the previous FX observation identity")
+	}
+	if encode(first) != before {
+		t.Fatal("first report changed after the next observation")
 	}
 }
 

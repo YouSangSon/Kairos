@@ -51,6 +51,39 @@ func CurrentValuation(ctx context.Context, all Inputs) (*CurrentPortfolioValuati
 	usedSample := false
 	usedOwnerFX := false
 	usedOwnerPrice := false
+	seenFX := make(map[string]bool)
+	conversionRate := func(currency string) (*big.Rat, error) {
+		fx := latestEligibleCashFX(fxObservations, fxTimes, currency, currentPortfolioValuationBaseCurrency, valuationTime)
+		if fx == nil {
+			result.Issues = appendCurrentValuationIssue(result.Issues, APIError{
+				Code: "missing_direct_fx", Message: "an eligible direct FX observation is unavailable", Field: currency,
+			})
+			return nil, nil
+		}
+		usedSample = usedSample || fxIsSample(fx)
+		usedOwnerFX = usedOwnerFX || fx.Source == ownerFXSource
+		key := fxTimeKey(*fx)
+		stale := valuationTime.Sub(fxTimes[key][0]) > cashFXMaxAge
+		if !seenFX[key] {
+			receipt := publicCashValuationFX(fx)
+			if stale {
+				receipt.State = "stale"
+			}
+			result.ConversionFX = append(result.ConversionFX, *receipt)
+			seenFX[key] = true
+		}
+		if stale {
+			result.Issues = appendCurrentValuationIssue(result.Issues, APIError{
+				Code: "stale_direct_fx", Message: "the direct FX observation exceeds the policy age", Field: currency,
+			})
+			return nil, nil
+		}
+		rate, err := parseDecimal(fx.Rate)
+		if err != nil {
+			return nil, errors.New("FX rate is invalid")
+		}
+		return rate, nil
+	}
 	for _, cash := range snapshot.Cash {
 		amount, err := parseDecimal(cash.Amount)
 		if err != nil {
@@ -60,26 +93,13 @@ func CurrentValuation(ctx context.Context, all Inputs) (*CurrentPortfolioValuati
 			cashTotal.Add(cashTotal, amount)
 			continue
 		}
-		observation := latestEligibleCashFX(fxObservations, fxTimes, cash.Currency, currentPortfolioValuationBaseCurrency, valuationTime)
-		if observation == nil {
-			result.Issues = appendCurrentValuationIssue(result.Issues, APIError{
-				Code: "missing_direct_fx", Message: "an eligible direct FX observation is unavailable", Field: cash.Currency,
-			})
-			available = false
-			continue
-		}
-		usedSample = usedSample || fxIsSample(observation)
-		usedOwnerFX = usedOwnerFX || observation.Source == ownerFXSource
-		if valuationTime.Sub(fxTimes[fxTimeKey(*observation)][0]) > cashFXMaxAge {
-			result.Issues = appendCurrentValuationIssue(result.Issues, APIError{
-				Code: "stale_direct_fx", Message: "the direct FX observation exceeds the policy age", Field: cash.Currency,
-			})
-			available = false
-			continue
-		}
-		rate, err := parseDecimal(observation.Rate)
+		rate, err := conversionRate(cash.Currency)
 		if err != nil {
-			return nil, errors.New("FX rate is invalid")
+			return nil, err
+		}
+		if rate == nil {
+			available = false
+			continue
 		}
 		cashTotal.Add(cashTotal, new(big.Rat).Mul(amount, rate))
 	}
@@ -110,26 +130,13 @@ func CurrentValuation(ctx context.Context, all Inputs) (*CurrentPortfolioValuati
 		}
 		marketValue := new(big.Rat).Mul(quantity, price)
 		if holding.Currency != currentPortfolioValuationBaseCurrency {
-			fx := latestEligibleCashFX(fxObservations, fxTimes, holding.Currency, currentPortfolioValuationBaseCurrency, valuationTime)
-			if fx == nil {
-				result.Issues = appendCurrentValuationIssue(result.Issues, APIError{
-					Code: "missing_direct_fx", Message: "an eligible direct FX observation is unavailable", Field: holding.Currency,
-				})
-				available = false
-				continue
-			}
-			usedSample = usedSample || fxIsSample(fx)
-			usedOwnerFX = usedOwnerFX || fx.Source == ownerFXSource
-			if valuationTime.Sub(fxTimes[fxTimeKey(*fx)][0]) > cashFXMaxAge {
-				result.Issues = appendCurrentValuationIssue(result.Issues, APIError{
-					Code: "stale_direct_fx", Message: "the direct FX observation exceeds the policy age", Field: holding.Currency,
-				})
-				available = false
-				continue
-			}
-			rate, err := parseDecimal(fx.Rate)
+			rate, err := conversionRate(holding.Currency)
 			if err != nil {
-				return nil, errors.New("FX rate is invalid")
+				return nil, err
+			}
+			if rate == nil {
+				available = false
+				continue
 			}
 			marketValue.Mul(marketValue, rate)
 		}

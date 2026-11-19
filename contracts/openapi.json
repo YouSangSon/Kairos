@@ -743,6 +743,24 @@
         }
       }
     },
+    "/v1/portfolio/valuation-evidence": {
+      "get": {
+        "operationId": "getPortfolioValuationEvidence",
+        "description": "Reads cash, native-currency holdings, and whole-portfolio KRW valuation using stored local observations in one replay-verified read transaction at a server-owned UTC cutoff. Query parameters are rejected.",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Valuation views and selected FX evidence from one observation.",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/PortfolioValuationEvidence"}}}
+          },
+          "400": {"$ref": "#/components/responses/BadRequest"},
+          "500": {
+            "description": "An invalid server cutoff or failed ledger or market input validation returns a redacted error.",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}
+          }
+        }
+      }
+    },
     "/v1/broker-reconciliation/latest": {
       "get": {
         "operationId": "getLatestBrokerReconciliation",
@@ -4899,6 +4917,31 @@
           }
         ],
         "description": " Without selected owner security prices, selected owner FX uses v2. owner_declared_fx is non-blocking provenance, independent of sample_data, and remains visible for stale/unavailable results. Pair inputs use one latest-known complete version at report cutoff; a missing point never falls back to an older version. Owner security price selection uses v3 with one nonblocking owner_declared_price notice and optional independent owner_declared_fx notice."
+      },
+      "PortfolioValuationEvidence": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["schema_version", "observation_cutoff", "source_availability_at_cutoff", "cash", "holdings", "current", "conversion_fx"],
+        "properties": {
+          "schema_version": {"const": "portfolio-valuation-evidence.v1"},
+          "observation_cutoff": {"$ref": "#/components/schemas/LedgerActivityTimestamp"},
+          "source_availability_at_cutoff": {
+            "const": "unverified",
+            "description": "External publication and availability times remain unverified even when the calculation is complete. Stored observation, fetch and record timestamps describe the local evidence."
+          },
+          "cash": {
+            "$ref": "#/components/schemas/CashValuation",
+            "properties": {"base_currency": {"const": "KRW"}}
+          },
+          "holdings": {"$ref": "#/components/schemas/HoldingValuation"},
+          "current": {"$ref": "#/components/schemas/CurrentPortfolioValuation"},
+          "conversion_fx": {
+            "type": "array",
+            "items": {"$ref": "#/components/schemas/CashValuationFX"},
+            "description": "Direct FX candidates selected during current valuation, deduplicated by source and observation identity. Over-age candidates retain stale state."
+          }
+        },
+        "description": "The three valuation views share one ledger revision and their valuation_as_of equals observation_cutoff. The server calculates each response on demand. Market input changes can produce different results for the same cutoff and revision."
       },
       "BrokerPositionDifference": {
         "type": "object",
