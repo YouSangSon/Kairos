@@ -109,6 +109,10 @@ G5 paper -> shadow -> canary -> limited live
 G6 PostgreSQL and Kubernetes promotion
 ```
 
+## 제품 개선 단계
+
+I1의 첫 구현 단위는 같은 관측에서 현금·원통화 보유·KRW 전체 평가를 조회한다. I1에는 지속 수집과 재개, 당시 자료 이용 가능성 검증, 화면 연결이 남아 있다. [I1-1 조회 계약과 검증 범위](gates/i1a-valuation-evidence.md)
+
 ## Root completion evidence
 
 - G3AN은 G4AA 일봉 capture를 기존 비용 차감 후보·walk-forward·holdout 계산으로 연결한다. 원본 bytes hash·요청·날짜·나노초 조회 clock과 불확실성을 보존하며 별도 보고서 형식으로 운영 등록을 차단한다. 독립 리뷰·집중/race·최종 Core/research/contracts, native CLI QA 3개와 소유 자원 정리를 로컬 통과했다. 원격 CI·main 반영과 운영 연결은 별도다. [계약과 현재 검증 범위](gates/g3an-captured-candle-research.md).

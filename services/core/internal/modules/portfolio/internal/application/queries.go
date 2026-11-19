@@ -86,6 +86,38 @@ func (q *Queries) CurrentValuation(ctx context.Context) (*c.CurrentPortfolioValu
 	result, err := domain.CurrentValuation(ctx, all)
 	return publicCurrentPortfolioValuation(result), domainError(err)
 }
+func (q *Queries) ValuationEvidence(ctx context.Context) (*c.PortfolioValuationEvidence, error) {
+	all, err := q.read(ctx, c.InputQuery{FX: true, Prices: true})
+	if err != nil {
+		return nil, err
+	}
+	current, err := domain.CurrentValuation(ctx, all)
+	if err != nil {
+		return nil, err
+	}
+	cash, err := domain.ComputeCashValuation(ctx, all, current.BaseCurrency, current.ValuationAsOf)
+	if err != nil {
+		return nil, err
+	}
+	holdings, err := domain.ComputeHoldingValuation(ctx, all, current.ValuationAsOf)
+	if err != nil {
+		return nil, err
+	}
+	fx := make([]c.CashValuationFX, len(current.ConversionFX))
+	for i, receipt := range current.ConversionFX {
+		fx[i] = c.CashValuationFX(receipt)
+	}
+	return &c.PortfolioValuationEvidence{
+		SchemaVersion:              "portfolio-valuation-evidence.v1",
+		ObservationCutoff:          current.ValuationAsOf,
+		SourceAvailabilityAtCutoff: "unverified",
+		Cash:                       publicCashValuation(cash),
+		Holdings:                   publicHoldingValuation(holdings),
+		Current:                    publicCurrentPortfolioValuation(current),
+		ConversionFX:               fx,
+	}, nil
+}
+
 func (q *Queries) XIRR(ctx context.Context) (*c.PortfolioXIRR, error) {
 	all, err := q.read(ctx, c.InputQuery{FX: true, Prices: true})
 	if err != nil {

@@ -1,0 +1,20 @@
+# I1-1 같은 관측의 포트폴리오 평가 근거
+
+`GET /v1/portfolio/valuation-evidence`는 로컬 원장과 시장 관측을 한 번의 읽기 트랜잭션에서 가져와 현금, 원통화 보유, KRW 전체 평가를 반환한다. [OpenAPI 계약](../contracts/openapi.json)
+
+## 조회 계약
+
+- `schema_version`은 `portfolio-valuation-evidence.v1`이다. 세 결과의 `ledger_revision`이 일치하며 각 `valuation_as_of`는 서버의 `observation_cutoff`와 같다.
+- `source_availability_at_cutoff`는 계산 결과가 `complete`여도 `unverified`다. 저장된 관측·조회·기록 시각만으로는 외부 자료가 언제 공개되거나 이용 가능했는지 확인할 수 없다.
+- `cash`는 원통화 잔액과 KRW 환산 결과를 보여 준다. `holdings`는 원통화 수량과 원가를 보존하고, 유효한 가격이 있는 항목의 원통화 평가액을 보여 준다. `current`는 기존 KRW 평가 정책을 적용하며 필수 입력이 없거나 정책을 충족하지 못하면 세 합계를 `null`로 반환한다.
+- `conversion_fx`는 `current`가 선택한 환산 후보를 출처와 관측 ID로 중복 제거한 배열이다. 기존 24시간 한도를 지난 후보의 상태는 `stale`이다. 현금과 환산 환율에는 공개 FX 필드인 `observation_id`가 포함된다. Go 모듈은 보유 종목과 가격 관측의 내부 ID를 보존한다. HTTP 응답의 공개 범위에서는 이 ID와 원천 관측 ID, 원본 입력을 제외한다.
+- 쿼리가 들어오면 `400 invalid_query`를 반환한다. 지원하지 않는 메서드에는 기존 라우터가 `405`로 응답한다. 서버 cutoff가 원장보다 앞서거나 내부 검증이 실패하면 전체 요청에 내부 사유를 가린 `500 internal_error`를 반환한다.
+- 시장 입력이 바뀌면 같은 cutoff와 원장 revision에서 다시 읽은 결과가 달라질 수 있다. 서버는 요청마다 결과를 계산한다. 과거 판단 근거의 불변 저장은 후속 advisory 단계가 다룬다.
+
+## 검증 범위
+
+단위·HTTP 테스트는 입력을 한 번 읽는지, 시각과 revision이 일치하는지, 누락·오래된 입력에서도 원통화가 보존되는지 확인한다. USD 현금이 0이어도 USD 보유분 환산에 선택한 환율을 확인하며, 공개 필드와 오류는 OpenAPI 계약에 맞춘다.
+
+SQLite WAL 통합 테스트는 원장과 시장 자료를 읽는 사이에 별도 연결의 쓰기를 커밋한다. 첫 응답은 이전 입력을 보존하며 다음 요청에서 새 상태를 읽은 뒤에도 첫 응답 값이 유지되는지 확인한다. `make smoke`는 demo 원장의 USD 현금 778, 보유 수량 6, 원가 300.6과 KRW 합계의 `unavailable` 상태를 HTTP 응답에서 대조한다.
+
+I1을 완료하려면 지속 수집·중단 후 재개, 원천 자료의 이용 가능 시각 검증, 화면 연결이 남아 있다. 로컬 통합 검증, 해당 커밋의 CI, main 반영과 개발 서버 검증은 각각 확인한다.

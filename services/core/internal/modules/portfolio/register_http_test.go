@@ -33,6 +33,10 @@ func (q *queries) CurrentValuation(context.Context) (*c.CurrentPortfolioValuatio
 	q.called = "current"
 	return &c.CurrentPortfolioValuation{}, q.err
 }
+func (q *queries) ValuationEvidence(context.Context) (*c.PortfolioValuationEvidence, error) {
+	q.called = "evidence"
+	return &c.PortfolioValuationEvidence{Holdings: &c.HoldingValuation{}}, q.err
+}
 func (q *queries) XIRR(context.Context) (*c.PortfolioXIRR, error) {
 	q.called = "xirr"
 	return &c.PortfolioXIRR{}, q.err
@@ -66,6 +70,7 @@ func TestHTTPQueriesAndSingleMuxSemantics(t *testing.T) {
 		{"cash-valuation?base_currency=USD&as_of=2026-01-01T00:00:00Z", "cash", 200},
 		{"cash-valuation?base_currency=USD", "", 400}, {"cash-valuation?base_currency=USD&as_of=x&as_of=y", "", 400}, {"cash-valuation?unknown=x", "", 400}, {"cash-valuation?%zz", "", 400},
 		{"holding-valuation", "holding", 200}, {"holding-valuation?as_of=explicit", "holding", 200}, {"holding-valuation?unknown=x", "", 400}, {"holding-valuation?as_of=x&as_of=y", "", 400},
+		{"valuation-evidence", "evidence", 200}, {"valuation-evidence?x=y", "", 400},
 		{"current-valuation", "current", 200}, {"current-valuation?", "current", 200}, {"current-valuation?x=y", "", 400},
 		{"xirr", "xirr", 200}, {"xirr?", "xirr", 200}, {"xirr?x=y", "", 400}, {"twr", "twr", 200}, {"twr?", "twr", 200}, {"twr?x=y", "", 400},
 		{"twr/checkpoints", "twr/checkpoints", 200}, {"twr/checkpoints?", "", 400}, {"benchmarks", "benchmarks", 200}, {"benchmarks?", "", 400},

@@ -98,6 +98,18 @@ type CashValuation struct {
 	Issues                   []APIError          `json:"issues"`
 }
 
+// PortfolioValuationEvidence holds one read of portfolio inputs. HTTP projects
+// holdings separately to keep internal instrument and price identifiers private.
+type PortfolioValuationEvidence struct {
+	SchemaVersion              string
+	ObservationCutoff          string
+	SourceAvailabilityAtCutoff string
+	Cash                       *CashValuation
+	Holdings                   *HoldingValuation
+	Current                    *CurrentPortfolioValuation
+	ConversionFX               []CashValuationFX
+}
+
 type CurrentPortfolioValuation struct {
 	Scope                    string     `json:"scope"`
 	PolicyVersion            string     `json:"policy_version"`

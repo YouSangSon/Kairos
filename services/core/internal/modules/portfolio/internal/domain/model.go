@@ -168,6 +168,7 @@ type CashValuation struct {
 	Issues                   []APIError
 }
 type CurrentPortfolioValuation struct {
+	ConversionFX             []CashValuationFX
 	Scope                    string
 	PolicyVersion            string
 	MaxObservationAgeSeconds int64

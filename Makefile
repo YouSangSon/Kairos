@@ -417,6 +417,15 @@ smoke:
 	$(MAKE) --no-print-directory seed-demo API_URL=http://127.0.0.1:18080; \
 	snapshot_json="$$(curl --fail --silent http://127.0.0.1:18080/v1/portfolio/snapshot)"; \
 	"$(PYTHON)" -c 'import json,sys; d=json.loads(sys.argv[1]); assert d["ledger_revision"] == "rev_0000000003" and d["cost_basis_policy"] == "fifo_utc_nanosecond_exact_else_half_even_residual_8_v2" and d["live_enabled"] is False and d["cash"][0]["amount"] == "778"' "$$snapshot_json"; \
+	evidence_json="$$(curl --fail --silent http://127.0.0.1:18080/v1/portfolio/valuation-evidence)"; \
+	"$(PYTHON)" -c 'import json,sys; d=json.loads(sys.argv[1]); cash=d["cash"]["lines"][0]; holding=d["holdings"]["lines"][0]; assert ( \
+		d["schema_version"] == "portfolio-valuation-evidence.v1" and d["source_availability_at_cutoff"] == "unverified" \
+		and all(d[view]["valuation_as_of"] == d["observation_cutoff"] and d[view]["ledger_revision"] == "rev_0000000003" \
+		        for view in ("cash", "holdings", "current")) \
+		and d["cash"]["base_currency"] == "KRW" and (cash["currency"], cash["amount"]) == ("USD", "778") \
+		and (holding["currency"], holding["quantity"], holding["cost_basis"]) == ("USD", "6", "300.6") \
+		and d["current"]["status"] == "unavailable" and d["current"]["total_value"] is None and d["conversion_fx"] == [] \
+	), d' "$$evidence_json"; \
 	duplicate_output="$$( $(MAKE) --no-print-directory seed-demo API_URL=http://127.0.0.1:18080 )"; \
 	test "$$duplicate_output" = 'demo: sample ledger already present'; \
 	conflict_csv="$$smoke_dir/conflicting-import.csv"; \
@@ -426,4 +435,4 @@ smoke:
 	"$(PYTHON)" -c 'import json,sys; d=json.loads(sys.argv[1]); assert d["source"] == "local_ledger" and d["broker_freshness"] == "unverified" and d["ledger_revision"] == "rev_0000000003" and [row["type"] for row in d["events"]] == ["SELL", "BUY", "DEPOSIT"] and d["next_cursor"] is None; assert not ({"event_id", "source_event_id", "account_id", "instrument_id", "receipt_id", "corrects_source_event_id", "sequence"} & set().union(*(row.keys() for row in d["events"])))' "$$activity_json"; \
 	market_json="$$(curl --fail --silent 'http://127.0.0.1:18080/v1/market-data/candles?symbol=AAPL&interval=1d')"; \
 	"$(PYTHON)" -c 'import json,sys; d=json.loads(sys.argv[1]); assert d["symbol"] == "AAPL" and d["price_adjustment"] == "unspecified" and d["source"] == "local_fixture" and d["sample"] is True and d["state"] == "stale" and d["issues"][0]["code"] == "sample_data" and len(d["bars"]) == 6 and d["bars"][0]["open"] == "10" and d["bars"][-1]["close"] == "16"' "$$market_json"; \
-	printf '%s\n' 'smoke: health, status, preview, apply, snapshot, activity, market data OK'
+	printf '%s\n' 'smoke: health, status, preview, apply, snapshot, valuation evidence, activity, market data OK'

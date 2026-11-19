@@ -4,6 +4,8 @@ import (
 	"net/http"
 	"net/url"
 	"time"
+
+	c "omni-folio/services/core/internal/modules/portfolio/contracts"
 )
 
 func (s *handler) handleHoldingValuation(w http.ResponseWriter, r *http.Request) {
@@ -21,6 +23,10 @@ func (s *handler) handleHoldingValuation(w http.ResponseWriter, r *http.Request)
 		writeError(w, portfolioError(appErr))
 		return
 	}
+	writeJSON(w, http.StatusOK, publicHoldingValuation(valuation))
+}
+
+func publicHoldingValuation(valuation *c.HoldingValuation) map[string]any {
 	// Whitelist the public view; durable instrument and observation IDs stay internal.
 	lines := make([]map[string]any, 0, len(valuation.Lines))
 	for _, line := range valuation.Lines {
@@ -42,12 +48,12 @@ func (s *handler) handleHoldingValuation(w http.ResponseWriter, r *http.Request)
 			"market_value": line.MarketValue, "unrealized_pnl": line.UnrealizedPnL, "issue": line.Issue,
 		})
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	return map[string]any{
 		"scope": valuation.Scope, "policy_version": valuation.PolicyVersion,
 		"max_observation_age_seconds": valuation.MaxObservationAgeSeconds,
 		"valuation_as_of":             valuation.ValuationAsOf, "ledger_revision": valuation.LedgerRevision,
 		"ledger_as_of": valuation.LedgerAsOf, "ledger_recorded_at": valuation.LedgerRecordedAt,
 		"status": valuation.Status, "sample": valuation.Sample, "totals": valuation.Totals,
 		"lines": lines, "issues": valuation.Issues,
-	})
+	}
 }
