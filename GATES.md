@@ -111,13 +111,13 @@ G6 PostgreSQL and Kubernetes promotion
 
 ## 제품 개선 단계
 
-I1의 첫 구현 단위는 같은 관측에서 현금·원통화 보유·KRW 전체 평가를 조회한다. I1에는 지속 수집과 재개, 당시 자료 이용 가능성 검증, 화면 연결이 남아 있다. [I1-1 조회 계약과 검증 범위](gates/i1a-valuation-evidence.md)
+I1의 첫 구현 단위는 같은 관측에서 현금·원통화 보유·KRW 전체 평가를 조회한다. I1-3은 키움 모의 일봉 capture의 봉별 이용 가능 시각·완료·정정 근거를 구분해 연구 보고서 v2의 표시·연구·판단 자격으로 연결한다. 완료 근거가 없는 마지막 봉은 연구 수치에서 빠지고 판단 결과는 `not_eligible`이다. I1에는 지속 수집과 재개, 제공자 근거로 판단 자격을 주는 당시 자료 이용 가능성 검증, 화면 연결이 남아 있다. [I1-1 조회 계약과 검증 범위](gates/i1a-valuation-evidence.md) · [I1-3 봉 근거와 판단 자격](docs/architecture/production-and-improvement.md#captured-bar-eligibility)
 
 ## Root completion evidence
 
-- G3AN은 G4AA 일봉 capture를 기존 비용 차감 후보·walk-forward·holdout 계산으로 연결한다. 원본 bytes hash·요청·날짜·나노초 조회 clock과 불확실성을 보존하며 별도 보고서 형식으로 운영 등록을 차단한다. 독립 리뷰·집중/race·최종 Core/research/contracts, native CLI QA 3개와 소유 자원 정리를 로컬 통과했다. 원격 CI·main 반영과 운영 연결은 별도다. [계약과 현재 검증 범위](gates/g3an-captured-candle-research.md).
+- G3AN은 G4AA 일봉 capture를 기존 비용 차감 후보·walk-forward·holdout 계산으로 연결한다. 원본 bytes hash·요청·날짜·나노초 조회 clock과 불확실성을 보존하며 별도 보고서 형식으로 운영 등록을 차단한다. 독립 리뷰·집중/race·최종 Core/research/contracts, native CLI QA 3개와 소유 자원 정리를 로컬 통과했다. I1-3의 v2 보고서는 완료 근거가 없는 마지막 봉을 연구에서 빼고 봉별 근거와 `not_eligible` 판단 사유를 보여 준다. 원격 CI·main 반영과 운영 연결은 별도다. [계약과 현재 검증 범위](gates/g3an-captured-candle-research.md).
 
-- G4AA는 명시적 CLI로 mock 봉의 요청·원본 시간·조회 시간을 새 연구 JSON에 보존한다. 독립 리뷰·집중/race·전체 Core/research/contracts와 실제 test-main TLS·production 조기 거절을 로컬 검증했다. closed-bar/paper/live 권한과 실제 인증 관찰은 별도다. [계약과 검증 범위](gates/g4aa-kiwoom-mock-candle-capture.md).
+- G4AA는 명시적 CLI로 mock 봉의 요청·원본 시간·조회 시간을 새 연구 JSON에 보존한다. 독립 리뷰·집중/race·전체 Core/research/contracts와 실제 test-main TLS·production 조기 거절을 로컬 검증했다. closed-bar/paper/live 권한과 실제 인증 관찰은 별도다. capture 안의 순서로 앞 봉의 완료를 추론하는 것은 오프라인 연구에만 허용하며 판단 자격을 주지 않는다. [계약과 검증 범위](gates/g4aa-kiwoom-mock-candle-capture.md).
 
 - G3AM은 별도 Mimir가 저장 공시·뉴스·분석을 제한된 공개 파일로 내보내고 기존 Go GET과 Flutter 읽기 화면에 연결한다. 관심종목 시장은 거래소에서 가져오며 보유·연결 화면은 시장을 직접 고른다. 출처·사용 근거와 연구 의견의 한계를 보존하고 원장·주문 상태를 쓰지 않는다. [계약과 로컬 검증 범위](gates/g3am-mimir-public-research.md).
 - G4Z는 기존 Keychain 항목을 사용하는 명시적 모의 계좌 읽기를 기존 Go client·snapshot journal·대조 GET으로 연결한다. 단일 모의 계좌 바인딩과 저장 시점 재검증을 유지하며 실제 Keychain·외부 제공자 인증 관찰은 미수행이다. [계약과 로컬 검증](gates/g4z-kiwoom-mock-sync.md).

@@ -216,6 +216,20 @@ Flutter와 Python의 기존 구조 검사도 새 feature·artifact 호출을 포
 
 현재 candle capture의 hash·provider 시각 보존만으로 봉 완료·adjustment·발표 시각·실제 인증을 증명하지 못한다. 해당 증거를 추가하지 않은 입력은 offline 분석에만 머문다. 신뢰할 수 없는 자료에도 `판단 불가`라는 사용자 결과를 제공한다.
 
+<a id="captured-bar-eligibility"></a>
+
+#### 키움 모의 일봉의 근거와 판단 자격 (I1-3)
+
+| 자격 | 조건 | 키움 모의 일봉 capture |
+| --- | --- | --- |
+| 표시 가능 | 형식·값 검증 통과 | 모든 봉 |
+| 연구 가능(오프라인) | 표시 가능 + 같은 capture 안에 더 늦은 날짜 봉이 있음 | 마지막 봉을 뺀 봉 |
+| 판단(추천·주문) 가능 | 이용 가능 시각·제공자의 완료 증거·정정·수정주가·시장 달력과 누락·실제 인증을 원천 근거로 확인 | 없음. `not_eligible`과 차단 사유 |
+
+키움은 봉의 이용 가능 시각을 제공하지 않으므로 `available_at`은 null이다. 조회 시각·파일 시각·요청 기준일로 대신하지 않는다. 앞 봉의 완료는 같은 capture 안에 더 늦은 날짜 봉이 있다는 순서 추론이며 제공자의 완료 증명이 아니다. 캡처 내 순서로 앞 봉의 완료를 추론하는 것은 오프라인 연구에만 허용하며 판단 자격을 주지 않는다. 마지막 봉은 장 마감 뒤 수집했더라도 미검증이며 거래소 달력이나 시계로 완료를 추정하지 않는다. 관측이 한 번뿐이므로 정정과 수정주가도 미검증이다. capture의 `bar_completion: unverified`는 제공자 근거 기준으로 계속 맞는 값이다.
+
+`captured-candle-research.v2`는 행 0부터 N-2까지만 분석하고 행 번호는 원본 `bars` 위치를 유지한다. 설정의 train·validation·holdout 합계는 capture 행 수 − 1과 같아야 한다. `data_eligibility`는 차원별 근거, 연구 범위, 표시 전용 행과 판단 결과를 담는다. 판단 결과는 항상 `not_eligible`이며 이용 가능 시각·제공자 완료 증거·정정·수정주가·시장 달력 누락의 미확인과 모의 환경을 차단 사유로 남긴다. v1 형식은 과거 보고서 검증에만 쓴다. [연구 보고서 계약과 검증](../../gates/g3an-captured-candle-research.md)
+
 `portfolio.InputsReader`의 같은 DB transaction/cutoff를 이용해 원장 revision·가격·FX·benchmark ID와 계산 version을 캡처한다. 외부 연구 파일과 별도로 읽은 trading 상태에는 각각 시각·revision을 기록한다. 하나의 동시 snapshot이라고 표기하지 않는다. 읽기 session이 끝나면 참조를 폐기하고 불변 값만 advisory에 넘긴다. 이는 과거 원장을 복원하는 일반 time-travel 기능이 아니다.
 
 ### 4.3 수집 효율·부하 제어

@@ -610,7 +610,7 @@ mkdir -p -m 700 data/candles
 
 ### 保存した日足でコスト控除後の研究を実行
 
-上記の日足 capture を既存の SMA 候補探索・walk-forward・最終 holdout 計算に使います。v2 設定のみを受け付け、行数は train・validation・holdout の合計と完全に一致する必要があります。以下の設定には120行が必要なため、公開の1行 capture 例では実行できません。
+上記の日足 capture を既存の SMA 候補探索・walk-forward・最終 holdout 計算に使います。最後の足は同じ capture 内に後続の足がなく完成を推定できないため、表示のみとし研究の数値から除外します。v2 設定のみを受け付け、行数は train・validation・holdout の合計よりちょうど1行多い必要があります。以下の設定には121行が必要なため、公開の1行 capture 例では実行できません。
 
 ```sh
 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=services/research python3 -B -m omni_research.capture_cli \
@@ -618,7 +618,7 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=services/research python3 -B -m omni_resear
   --config contracts/fixtures/strategy-improvement-paper-config.json
 ```
 
-結果は stdout のみに出力します。元の capture を別途保管し、シェルで保存する場合は別のパスを選んでください。シェルのリダイレクトに対する上書き防止・原子的な保存は保証しません。レポートは元の bytes の SHA256、リクエスト、元の日付、取得 clock と不確実性を保持します。日付は行ラベルであり、公開時刻には変換しません。数値基準をすべて満たしても、戦略登録・`paper-improve`・paper proposal はこの形式を拒否します。[契約・検証・残る接続](gates/g3an-captured-candle-research.md)
+結果は stdout のみに出力します。元の capture を別途保管し、シェルで保存する場合は別のパスを選んでください。シェルのリダイレクトに対する上書き防止・原子的な保存は保証しません。レポートは元の bytes の SHA256、リクエスト、元の日付、取得 clock と不確実性を保持します。日付は行ラベルであり、公開時刻には変換しません。`captured-candle-research.v2` レポートの `data_eligibility` は、足ごとの利用可能時刻・完成・訂正・修正株価の根拠と研究に使った行を示します。判断結果は常に `not_eligible` で、判断できない理由を併記します。数値基準をすべて満たしても、戦略登録・`paper-improve`・paper proposal はこの形式を拒否します。[契約・検証・残る接続](gates/g3an-captured-candle-research.md)
 
 ## 主なコマンド
 

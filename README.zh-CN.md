@@ -610,7 +610,7 @@ mkdir -p -m 700 data/candles
 
 ### 使用已保存的日线运行扣除成本的研究
 
-将上述日线 capture 用于现有 SMA 参数搜索、walk-forward 和最终 holdout 计算。仅支持 v2 配置，行数必须与 train、validation、holdout 的总数完全一致。以下配置需要120行，公开的单行 capture 示例不足以运行。
+将上述日线 capture 用于现有 SMA 参数搜索、walk-forward 和最终 holdout 计算。最后一根 K 线在同一 capture 中没有更晚的 K 线可用于推断其已完成，因此仅用于显示，不计入研究数值。仅支持 v2 配置，行数必须恰好比 train、validation、holdout 的总数多 1。以下配置需要121行，公开的单行 capture 示例不足以运行。
 
 ```sh
 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=services/research python3 -B -m omni_research.capture_cli \
@@ -618,7 +618,7 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=services/research python3 -B -m omni_resear
   --config contracts/fixtures/strategy-improvement-paper-config.json
 ```
 
-报告仅输出到 stdout。请另行保留原始 capture，使用 shell 重定向保存时请选择其他路径。命令不保证 shell 重定向的防覆盖或原子发布。报告保留原始 bytes 的 SHA256、请求、原始日期、获取 clock 及不确定性。日期仍为行标签，不会转换为发布时刻。即使所有数值门槛通过，策略注册、`paper-improve` 和 paper proposal 也会拒绝此格式。[契约、验证与后续连接](gates/g3an-captured-candle-research.md)
+报告仅输出到 stdout。请另行保留原始 capture，使用 shell 重定向保存时请选择其他路径。命令不保证 shell 重定向的防覆盖或原子发布。报告保留原始 bytes 的 SHA256、请求、原始日期、获取 clock 及不确定性。日期仍为行标签，不会转换为发布时刻。`captured-candle-research.v2` 报告中的 `data_eligibility` 展示每根 K 线的可用时间、完成、修订和复权依据，以及用于研究的行。判断结果始终为 `not_eligible`，并列出无法判断的原因。即使所有数值门槛通过，策略注册、`paper-improve` 和 paper proposal 也会拒绝此格式。[契约、验证与后续连接](gates/g3an-captured-candle-research.md)
 
 ## 主要命令
 
