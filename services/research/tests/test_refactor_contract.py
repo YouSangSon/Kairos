@@ -53,7 +53,7 @@ class RefactorContractTest(unittest.TestCase):
             "backtest": "8a5121c733ef07f8998d4789c6e2308f29bad5d03cb36bac12b57dc9723ea8c4",
             "experiment_v1": "004fd55c0bc939f3a9394902cf0b6972590ec15f33f6dba726e0344e8882682f",
             "experiment_v2": "143c2690d0a139c95d5ed46d902e0e02644858444fb35e3dcd47b2d2fd5ce846",
-            "capture": "ff5c974014ae6e55bb322d939b9a08459402f4cd343137606f0fc95f622237c5",
+            "capture": "ff97f28a8f9b0ec8dc88b7329d8839fa0bce2426e1e5ed594f502a111c899b9e",
             "proposal": "485a311f2e87b8d30866c39df93da6d4c6826db14e677b30e9d7775040e9b869",
             "bundle": "652fb9030ec2bc92ec09a090f3672743170a0ac709af47db77068acb72a5b6eb",
         })

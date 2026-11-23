@@ -27,6 +27,8 @@ def synthetic_capture() -> dict:
         {"provider_time": row["bar_at"][:10].replace("-", ""), **{key: row[key] for key in ("open", "high", "low", "close", "volume")}}
         for row in rows
     ]
+    # The newest row has no later-dated row in the capture, so it stays display-only beside the 120 research rows.
+    capture["bars"].append({"provider_time": "20260501", "open": "27", "high": "28", "low": "26", "close": "27", "volume": "100"})
     return capture
 
 
@@ -70,9 +72,9 @@ class CaptureResearchTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr.decode())
         self.assertEqual(result.stderr, b"")
         report = json.loads(result.stdout)
-        self.assertEqual(report["schema_version"], "captured-candle-research.v1")
+        self.assertEqual(report["schema_version"], "captured-candle-research.v2")
         self.assertEqual(report["scope"], "offline_capture_research_only")
-        self.assertEqual(set(report), {"schema_version", "scope", "source", "config", "config_sha256", "analysis", "limitations", "report_sha256"})
+        self.assertEqual(set(report), {"schema_version", "scope", "source", "config", "config_sha256", "analysis", "data_eligibility", "limitations", "report_sha256"})
 
     def test_all_numeric_results_and_selections_equal_existing_v2(self) -> None:
         capture = synthetic_capture()
@@ -130,6 +132,42 @@ class CaptureResearchTest(unittest.TestCase):
         self.assertNotEqual(original["analysis"]["final_holdout"]["metrics"], changed["analysis"]["final_holdout"]["metrics"])
         for forbidden in ('"at"', '"signal_at"', '"eligible_at"', '"fill_at"', '"source_available_at"', '"close_at"', '"instrument_id"', '"manifest"', '"target"', '"proposal"'):
             self.assertNotIn(forbidden, json.dumps(original))
+
+    def test_last_row_without_later_bar_never_changes_research(self) -> None:
+        capture = synthetic_capture()
+        original = self.research(capture)
+        last = capture["bars"][-1]
+        # An in-progress daily bar can still move its open and cumulative volume.
+        for changes in ({"open": last["high"]}, {"open": last["low"], "volume": "1"}):
+            changed = copy.deepcopy(capture)
+            changed["bars"][-1].update(changes)
+            with self.subTest(changes=changes):
+                self.assertEqual(self.research(changed)["analysis"], original["analysis"])
+
+    def test_report_separates_research_rows_from_decision_eligibility(self) -> None:
+        after_close = synthetic_capture()
+        after_close["bars"][-1]["provider_time"] = after_close["request"]["body"]["base_dt"]
+        after_close["fetch_started_at"] = after_close["fetched_at"] = "2030-01-01T08:00:00Z"
+        for capture in (synthetic_capture(), after_close):
+            rows = capture["bars"]
+            reference = lambda index: {"row": index, "provider_time": rows[index]["provider_time"]}
+            report = self.research(capture)
+            self.assertEqual(report["schema_version"], "captured-candle-research.v2")
+            self.assertEqual(report["data_eligibility"], {
+                "policy": "kiwoom-capture-bar-eligibility.v1",
+                "evidence": {
+                    "available_at": {"status": "not_provided", "value": None},
+                    "completion": {"status": "later_bar_in_capture", "basis": "capture_order_inference", "unverified_row": reference(len(rows) - 1)},
+                    "correction": {"status": "unverified"},
+                    "adjustment": {"status": "unverified"},
+                },
+                "research_rows": {"first": reference(0), "last": reference(len(rows) - 2), "bar_count": len(rows) - 1},
+                "decision": {"status": "not_eligible", "blockers": [
+                    "available_at_not_provided", "completion_not_provider_verified", "correction_unverified",
+                    "adjustment_unverified", "calendar_gaps_unverified", "mock_environment",
+                ]},
+            })
+            self.assertNotIn(json.dumps(reference(len(rows) - 1)), json.dumps(report["analysis"]))
 
     def test_snapshot_hashes_preserve_original_bytes_strings_and_config(self) -> None:
         capture = synthetic_capture()
@@ -342,7 +380,7 @@ class CaptureResearchTest(unittest.TestCase):
                     simulate_fold(bars[:1], parse_config(config), Parameters(2, count + 3), warmup=warmup)
 
     def test_report_schema_closes_analysis_and_all_new_nested_objects(self) -> None:
-        schema = json.loads((ROOT / "contracts/captured-candle-research.schema.json").read_text())
+        schema = json.loads((ROOT / "contracts/captured-candle-research-v2.schema.json").read_text())
         report = self.research(synthetic_capture())
         def check(value, rule, document=schema):
             if "$ref" in rule:
@@ -379,7 +417,7 @@ class CaptureResearchTest(unittest.TestCase):
                     for item in value:
                         if isinstance(item, dict): closed(item)
         closed(schema)
-        for key in ("analysis", "limitations", "source"):
+        for key in ("analysis", "data_eligibility", "limitations", "source"):
             changed = copy.deepcopy(report)
             changed[key]["unexpected"] = "x"
             with self.assertRaises(AssertionError): check(changed, schema)
