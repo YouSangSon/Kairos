@@ -111,7 +111,7 @@ G6 PostgreSQL and Kubernetes promotion
 
 ## 제품 개선 단계
 
-I1의 첫 구현 단위는 같은 관측에서 현금·원통화 보유·KRW 전체 평가를 조회한다. I1-3은 키움 모의 일봉 capture의 봉별 이용 가능 시각·완료·정정 근거를 구분해 연구 보고서 v2의 표시·연구·판단 자격으로 연결한다. 완료 근거가 없는 마지막 봉은 연구 수치에서 빠지고 판단 결과는 `not_eligible`이다. I1에는 지속 수집과 재개, 제공자 근거로 판단 자격을 주는 당시 자료 이용 가능성 검증, 화면 연결이 남아 있다. [I1-1 조회 계약과 검증 범위](gates/i1a-valuation-evidence.md) · [I1-3 봉 근거와 판단 자격](docs/architecture/production-and-improvement.md#captured-bar-eligibility)
+I1의 첫 구현 단위는 같은 관측에서 현금·원통화 보유·KRW 전체 평가를 조회한다. I1-3은 키움 모의 일봉 capture의 봉별 이용 가능 시각·완료·정정 근거를 구분해 연구 보고서 v2의 표시·연구·판단 자격으로 연결한다. 완료 근거가 없는 마지막 봉은 연구 수치에서 빠지고 판단 결과는 `not_eligible`이다. 홈의 평가 근거 화면은 이 조회 한 번으로 현금·보유의 원통화 금액, 사용한 환율과 미확인 이용 가능 시각을 보여 준다. I1에는 지속 수집과 재개, 제공자 근거로 판단 자격을 주는 당시 자료 이용 가능성 검증이 남아 있다. [I1-1 조회 계약과 검증 범위](gates/i1a-valuation-evidence.md) · [I1-3 봉 근거와 판단 자격](docs/architecture/production-and-improvement.md#captured-bar-eligibility)
 
 ## Root completion evidence
 
