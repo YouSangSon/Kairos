@@ -67,6 +67,8 @@ def build_capture_report(
     bars: list[Bar], config: ExperimentConfig, capture: dict[str, Any],
     raw_v2_config: dict[str, Any], raw: bytes,
 ) -> dict[str, Any]:
+    if len(bars) != config.train_bars + config.validation_bars + config.holdout_bars + 1:
+        raise ValueError("capture rows must exceed the configured folds by exactly one display-only last row")
     # Decoded dates strictly increase, so only the last row lacks a later-dated row inferring its completion.
     research = Span(0, len(bars) - 1)
     evaluated = _evaluate(bars[: research.stop], config)

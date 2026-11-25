@@ -167,7 +167,13 @@ class CaptureResearchTest(unittest.TestCase):
                     "adjustment_unverified", "calendar_gaps_unverified", "mock_environment",
                 ]},
             })
-            self.assertNotIn(json.dumps(reference(len(rows) - 1)), json.dumps(report["analysis"]))
+            def referenced(value):
+                if isinstance(value, dict):
+                    yield from [value["row"]] if "row" in value else []
+                    for item in value.values(): yield from referenced(item)
+                if isinstance(value, list):
+                    for item in value: yield from referenced(item)
+            self.assertEqual(max(referenced(report["analysis"])), len(rows) - 2)
 
     def test_snapshot_hashes_preserve_original_bytes_strings_and_config(self) -> None:
         capture = synthetic_capture()
@@ -298,11 +304,12 @@ class CaptureResearchTest(unittest.TestCase):
             capture["bars"][0]["provider_time"] = value
             with self.subTest(date=value), self.assertRaises(ValueError):
                 self.research(capture)
-        for mode in ("duplicate", "reverse", "short", "empty", "extra-row", "extra-field", "negative-volume", "inconsistent", "close-limit", "close-precision"):
+        for mode in ("duplicate", "reverse", "short", "second-display-row", "empty", "extra-row", "extra-field", "negative-volume", "inconsistent", "close-limit", "close-precision"):
             capture = synthetic_capture()
             if mode == "duplicate": capture["bars"][1]["provider_time"] = capture["bars"][0]["provider_time"]
             if mode == "reverse": capture["bars"].reverse()
             if mode == "short": capture["bars"].pop()
+            if mode == "second-display-row": capture["bars"].append({**capture["bars"][-1], "provider_time": "20260502"})
             if mode == "empty": capture["bars"] = []
             if mode == "extra-row": capture["bars"] *= 5
             if mode == "extra-field": capture["bars"][0]["at"] = "2026-01-01T00:00:00Z"
@@ -310,7 +317,8 @@ class CaptureResearchTest(unittest.TestCase):
             if mode == "inconsistent": capture["bars"][0]["high"] = "1"
             if mode == "close-limit": capture["bars"][0].update(open="1000000000000", high="1000000000000", low="1000000000000", close="1000000000000")
             if mode == "close-precision": capture["bars"][0]["close"] = "20.000000001"
-            with self.subTest(mode=mode), self.assertRaises(ValueError):
+            message = "display-only last row" if mode in ("short", "second-display-row") else ""
+            with self.subTest(mode=mode), self.assertRaisesRegex(ValueError, message):
                 self.research(capture)
 
     def test_opened_descriptor_single_snapshot_and_nonregular_inputs(self) -> None:
@@ -416,7 +424,8 @@ class CaptureResearchTest(unittest.TestCase):
                 if isinstance(value, list):
                     for item in value:
                         if isinstance(item, dict): closed(item)
-        closed(schema)
+        for name in ("captured-candle-research.schema.json", "captured-candle-research-v2.schema.json"):
+            closed(json.loads((ROOT / "contracts" / name).read_text()))
         for key in ("analysis", "data_eligibility", "limitations", "source"):
             changed = copy.deepcopy(report)
             changed[key]["unexpected"] = "x"

@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://omni-folio.local/contracts/captured-candle-research.v2.schema.json",
   "title": "Offline captured daily candle research v2",
-  "description": "Compact UTF-8 JSON plus newline is capped at 1 MiB. Row references preserve raw provider labels, not availability instants. Analysis uses capture rows 0 through N-2 and train, validation and holdout totals equal capture rows minus one. The last row has no later-dated row in the same capture, so it is display-only. Completion of earlier rows is inferred from capture order for offline research only and never grants decision eligibility. Capture SHA hashes original bytes; report SHA hashes the canonical body excluding report_sha256. Native coherence, row eligibility, arithmetic and hashes require runtime verification. captured-candle-research.v1 remains only for validating earlier reports.",
+  "description": "Compact UTF-8 JSON plus newline is capped at 1 MiB. Row references preserve raw provider labels, not availability instants. Analysis uses capture rows 0 through N-2 and train, validation and holdout totals equal capture rows minus one. The last row has no later-dated row in the same capture, so it is display-only. Completion of earlier rows is inferred from capture order for offline research only and never grants decision eligibility. Capture SHA hashes original bytes; report SHA hashes the canonical body excluding report_sha256. Native coherence, row eligibility, arithmetic and hashes require runtime verification. The captured-candle-research.v1 schema remains the definition source this schema references, and validates only earlier v1 reports.",
   "type": "object",
   "additionalProperties": false,
   "required": [
