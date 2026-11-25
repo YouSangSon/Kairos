@@ -618,7 +618,7 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=services/research python3 -B -m omni_resear
   --config contracts/fixtures/strategy-improvement-paper-config.json
 ```
 
-결과는 stdout으로만 나옵니다. 원본 파일은 별도로 보관하세요. 셸로 저장할 때는 다른 경로를 고르세요. 셸 리디렉션의 덮어쓰기 방지·원자적 저장은 이 명령이 보장하지 않습니다. 보고서는 원본 bytes의 SHA256, 요청·원본 날짜·조회 clock과 불확실성을 보존합니다. 날짜는 행 라벨이며 봉 공개 시각으로 변환하지 않습니다. `captured-candle-research.v2` 보고서의 `data_eligibility`는 봉별 이용 가능 시각·완료·정정·수정주가 근거와 연구에 쓴 행을 보여 줍니다. 판단 결과는 항상 `not_eligible`이며 판단 불가 사유를 함께 표시합니다. 수치 기준을 모두 통과해도 전략 등록·`paper-improve`·paper proposal은 이 형식을 거절합니다. [계약·검증·남은 연결](gates/g3an-captured-candle-research.md)
+결과는 stdout으로만 나옵니다. 원본 파일은 별도로 보관하세요. 셸로 저장할 때는 다른 경로를 고르세요. 셸 리디렉션의 덮어쓰기 방지·원자적 저장은 이 명령이 보장하지 않습니다. 보고서는 원본 bytes의 SHA256, 요청·원본 날짜·조회 clock과 불확실성을 보존합니다. 날짜는 행 라벨이며 봉 공개 시각으로 변환하지 않습니다. `captured-candle-research.v2` 보고서의 `data_eligibility`는 이용 가능 시각·완료·정정·수정주가의 차원별 근거와 표시 전용 행, 연구에 쓴 행을 보여 줍니다. 판단 결과는 항상 `not_eligible`이며 판단 불가 사유를 함께 표시합니다. 수치 기준을 모두 통과해도 전략 등록·`paper-improve`·paper proposal은 이 형식을 거절합니다. [계약·검증·남은 연결](gates/g3an-captured-candle-research.md)
 
 ## 주요 명령
 

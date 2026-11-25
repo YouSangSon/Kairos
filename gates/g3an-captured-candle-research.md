@@ -4,7 +4,7 @@
 
 G4AA가 저장한 mock 일봉을 기존 비용 차감 SMA 후보 탐색·expanding walk-forward·최종 holdout에 사용한다. 수집한 관측을 실제 분석으로 연결하는 단위이며, 정보 수집·탐지부터 근거 있는 추천·사전 승인 투자와 리밸런싱·기록·복기·개선까지의 전체 목표는 계속 남아 있다.
 
-새 결과는 [`captured-candle-research.v2`](../contracts/captured-candle-research-v2.schema.json), scope는 `offline_capture_research_only`다. [v1 schema](../contracts/captured-candle-research.schema.json)는 이미 만든 과거 보고서 검증 전용으로 남기며 새 실행은 v2만 만든다. 수치 기준을 모두 통과해도 기존 전략 등록·`paper-improve`·paper proposal decoder가 받지 않는 별도 형식이다. 운영 Go allowlist·DB·HTTP·Flutter·인증 설정은 바꾸지 않는다. 기존 CSV v1/v2 입력·보고서·public `simulate_fold`·`run_experiment` 계약은 유지한다.
+새 결과는 [`captured-candle-research.v2`](../contracts/captured-candle-research-v2.schema.json), scope는 `offline_capture_research_only`다. [v1 schema](../contracts/captured-candle-research.schema.json)는 v2가 `$ref`로 재사용하는 정의 원본이며, v1 형식 보고서는 이미 만든 과거 보고서 검증에만 쓴다. 새 실행은 v2만 만든다. 수치 기준을 모두 통과해도 기존 전략 등록·`paper-improve`·paper proposal decoder가 받지 않는 별도 형식이다. 운영 Go allowlist·DB·HTTP·Flutter·인증 설정은 바꾸지 않는다. 기존 CSV v1/v2 입력·보고서·public `simulate_fold`·`run_experiment` 계약은 유지한다.
 
 ## 입력과 실행
 
@@ -32,7 +32,7 @@ OHLCV는 Decimal 생성 전에 canonical 숫자 문자열과 원천 token 64자 
 
 ## 해석의 한계와 다음 연결
 
-`provider_time`은 관측 라벨이다. timezone·봉 경계·공개 시각은 제공되지 않는다. 봉 완료는 같은 capture 안의 더 늦은 날짜 봉에서 오프라인 연구용으로만 추론하며 제공자의 완료 증거가 아니다. `data_eligibility`는 이용 가능 시각 `not_provided`(값 null), 완료 추론과 미검증 마지막 행, 미검증 정정·수정주가, 연구 행 범위를 보여 준다. 판단 결과는 항상 `not_eligible`이며 차단 사유는 `available_at_not_provided`·`completion_not_provider_verified`·`correction_unverified`·`adjustment_unverified`·`calendar_gaps_unverified`·`mock_environment`다. `delay_bars`는 다음 관측 행을 세며 실제 가용 시각이나 경과 시간을 검증하지 않는다. adjustment 요청 `1`도 적용 결과나 가격 단위 비교 가능성을 증명하지 않는다. 각 fold는 가상 자본을 초기화하고 마지막에 강제 청산한다. 이를 연속 운영 계좌·연환산 성과·실전 수익성으로 해석하지 않는다. [봉 근거와 판단 자격](../docs/architecture/production-and-improvement.md#captured-bar-eligibility)
+`provider_time`은 관측 라벨이다. timezone·봉 경계·공개 시각은 제공되지 않는다. 봉 완료는 같은 capture 안의 더 늦은 날짜 봉에서 오프라인 연구용으로만 추론하며 제공자의 완료 증거가 아니다. `data_eligibility`는 규칙 버전 `policy`(`kiwoom-capture-bar-eligibility.v1`), 이용 가능 시각 `not_provided`(값 null), 완료 추론과 미검증 마지막 행 `evidence.completion.unverified_row`, 미검증 정정·수정주가, 연구 행 범위 `research_rows`를 보여 준다. 판단 결과는 항상 `not_eligible`이며 차단 사유는 `available_at_not_provided`·`completion_not_provider_verified`·`correction_unverified`·`adjustment_unverified`·`calendar_gaps_unverified`·`mock_environment`다. `delay_bars`는 다음 관측 행을 세며 실제 가용 시각이나 경과 시간을 검증하지 않는다. adjustment 요청 `1`도 적용 결과나 가격 단위 비교 가능성을 증명하지 않는다. 각 fold는 가상 자본을 초기화하고 마지막에 강제 청산한다. 이를 연속 운영 계좌·연환산 성과·실전 수익성으로 해석하지 않는다. [봉 근거와 판단 자격](../docs/architecture/production-and-improvement.md#captured-bar-eligibility)
 
 운영 paper admission에는 별도 출처·가용 시각·비교 가능성 증거와 명시적인 계약이 필요하다. 지속 수집·새로운 기회/위험 탐지·보유자산을 고려한 추천·포트폴리오 리밸런싱·승인 범위 안의 실행과 복기 연결은 별도 후속 작업이다.
 
