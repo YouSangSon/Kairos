@@ -85,6 +85,10 @@ Json _priceQuote(
 };
 
 class _Api implements TestRepositories {
+  @override
+  Future<PortfolioValuationEvidence> valuationEvidence() =>
+      throw UnsupportedError('Not used by this fixture.');
+
   Future<WatchlistReport> Function()? read;
   Future<WatchlistState> Function(WatchlistChange)? write;
   int reads = 0;

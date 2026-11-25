@@ -8,4 +8,5 @@ abstract interface class PortfolioRepository {
   Future<PortfolioTwrCheckpoints> portfolioTwrCheckpoints();
   Future<PortfolioBenchmarks> portfolioBenchmarks();
   Future<HoldingValuation> holdingValuation();
+  Future<PortfolioValuationEvidence> valuationEvidence();
 }

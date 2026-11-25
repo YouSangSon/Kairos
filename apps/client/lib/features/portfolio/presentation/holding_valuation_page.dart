@@ -76,7 +76,7 @@ class _HoldingValuationPageState extends State<HoldingValuationPage> {
       );
     }
     if (valuation == null) {
-      return _ValuationMessage(
+      return ValuationMessage(
         icon: Icons.cloud_off_outlined,
         title: _error ?? '저장 가격 평가를 불러오지 못했습니다',
         body: '민감한 오류 정보는 표시하지 않습니다. 서버를 확인한 뒤 다시 시도하세요.',
@@ -97,7 +97,7 @@ class _HoldingValuationPageState extends State<HoldingValuationPage> {
         }
         return Padding(
           padding: const EdgeInsets.only(top: 12),
-          child: _ValuationLineCard(line: valuation.lines[index - 1]),
+          child: HoldingValuationLineCard(line: valuation.lines[index - 1]),
         );
       },
     );
@@ -124,14 +124,14 @@ class _ValuationHeader extends StatelessWidget {
         const SizedBox(height: 12),
       ],
       if (error != null) ...[
-        _ValuationNotice(
+        ValuationNotice(
           icon: Icons.sync_problem_outlined,
           text: error!,
           color: Theme.of(context).colorScheme.error,
         ),
         const SizedBox(height: 12),
       ],
-      _ValuationNotice(
+      ValuationNotice(
         icon: Icons.info_outline,
         text: valuation.sample
             ? '샘플 저장 가격 · 실시간/현재 시세 아님'
@@ -140,7 +140,7 @@ class _ValuationHeader extends StatelessWidget {
       ),
       if (valuation.ownerDeclaredPrice) ...[
         const SizedBox(height: 12),
-        _ValuationNotice(
+        ValuationNotice(
           icon: Icons.info_outline,
           text: '직접 입력 가격 사용 · 시세 제공자가 검증한 값이 아닙니다.',
           color: Theme.of(context).colorScheme.tertiary,
@@ -148,7 +148,7 @@ class _ValuationHeader extends StatelessWidget {
       ],
       if (valuation.status == 'empty') ...[
         const SizedBox(height: 12),
-        _ValuationNotice(
+        ValuationNotice(
           icon: Icons.inbox_outlined,
           text: '평가할 보유 종목이 없습니다. 적용된 거래가 없거나 모든 종목을 매도했습니다.',
           color: Theme.of(context).colorScheme.primary,
@@ -156,7 +156,7 @@ class _ValuationHeader extends StatelessWidget {
       ],
       if (valuation.status == 'unavailable') ...[
         const SizedBox(height: 12),
-        _ValuationNotice(
+        ValuationNotice(
           icon: Icons.warning_amber_rounded,
           text: '일부 종목을 평가할 수 없어 합계를 표시하지 않습니다.',
           color: Theme.of(context).colorScheme.error,
@@ -171,7 +171,7 @@ class _ValuationHeader extends StatelessWidget {
             children: [
               Text('평가 근거', style: Theme.of(context).textTheme.titleMedium),
               const SizedBox(height: 8),
-              Text('평가 기준 ${_readableTime(valuation.valuationAsOf)}'),
+              Text('평가 기준 ${readableValuationTime(valuation.valuationAsOf)}'),
               const SizedBox(height: 4),
               const Text('범위 · 보유 종목만 (현금 제외 · 전체 계좌 평가 아님)'),
               const SizedBox(height: 4),
@@ -180,7 +180,7 @@ class _ValuationHeader extends StatelessWidget {
               ),
               const SizedBox(height: 4),
               Text(
-                '원장 ${valuation.ledgerRevision} · 기록 ${_readableTime(valuation.ledgerRecordedAt)}',
+                '원장 ${valuation.ledgerRevision} · 기록 ${readableValuationTime(valuation.ledgerRecordedAt)}',
               ),
             ],
           ),
@@ -194,7 +194,7 @@ class _ValuationHeader extends StatelessWidget {
         ),
         const SizedBox(height: 8),
         for (final total in valuation.totals) ...[
-          _ValuationTotalCard(total: total),
+          HoldingValuationTotalCard(total: total),
           const SizedBox(height: 8),
         ],
       ],
@@ -209,8 +209,8 @@ class _ValuationHeader extends StatelessWidget {
   );
 }
 
-class _ValuationTotalCard extends StatelessWidget {
-  const _ValuationTotalCard({required this.total});
+class HoldingValuationTotalCard extends StatelessWidget {
+  const HoldingValuationTotalCard({super.key, required this.total});
 
   final HoldingValuationTotal total;
 
@@ -252,8 +252,8 @@ class _ValuationTotalCard extends StatelessWidget {
   );
 }
 
-class _ValuationLineCard extends StatelessWidget {
-  const _ValuationLineCard({required this.line});
+class HoldingValuationLineCard extends StatelessWidget {
+  const HoldingValuationLineCard({super.key, required this.line});
 
   final HoldingValuationLine line;
 
@@ -284,8 +284,8 @@ class _ValuationLineCard extends StatelessWidget {
       ?issueText,
       if (price != null)
         '저장 가격 ${price.currency} ${price.price}, 원천 ${price.source}, '
-            '거래소 ${price.venue}, 관측 ${_readableTime(price.observedAt)}, '
-            '가져옴 ${_readableTime(price.fetchedAt)}, 저장 ${_readableTime(price.recordedAt)}, '
+            '거래소 ${price.venue}, 관측 ${readableValuationTime(price.observedAt)}, '
+            '가져옴 ${readableValuationTime(price.fetchedAt)}, 저장 ${readableValuationTime(price.recordedAt)}, '
             '${price.sourceVersion == null ? '' : '입력 버전 ${price.sourceVersion}, '}'
             '$priceNote',
     ].join(', ');
@@ -342,11 +342,11 @@ class _ValuationLineCard extends StatelessWidget {
                   const SizedBox(height: 4),
                   if (price.sourceVersion != null)
                     Text('입력 버전: ${price.sourceVersion}'),
-                  Text('관측 ${_readableTime(price.observedAt)}'),
+                  Text('관측 ${readableValuationTime(price.observedAt)}'),
                   const SizedBox(height: 4),
-                  Text('가져옴 ${_readableTime(price.fetchedAt)}'),
+                  Text('가져옴 ${readableValuationTime(price.fetchedAt)}'),
                   const SizedBox(height: 4),
-                  Text('저장 ${_readableTime(price.recordedAt)}'),
+                  Text('저장 ${readableValuationTime(price.recordedAt)}'),
                   const SizedBox(height: 4),
                   Text(priceNote, style: Theme.of(context).textTheme.bodySmall),
                 ],
@@ -359,8 +359,9 @@ class _ValuationLineCard extends StatelessWidget {
   }
 }
 
-class _ValuationNotice extends StatelessWidget {
-  const _ValuationNotice({
+class ValuationNotice extends StatelessWidget {
+  const ValuationNotice({
+    super.key,
     required this.icon,
     required this.text,
     required this.color,
@@ -398,8 +399,9 @@ class _ValuationNotice extends StatelessWidget {
   );
 }
 
-class _ValuationMessage extends StatelessWidget {
-  const _ValuationMessage({
+class ValuationMessage extends StatelessWidget {
+  const ValuationMessage({
+    super.key,
     required this.icon,
     required this.title,
     required this.body,
@@ -454,5 +456,5 @@ String? _issueText(String status) => switch (status) {
   _ => null,
 };
 
-String _readableTime(String value) =>
+String readableValuationTime(String value) =>
     value.replaceFirst('T', ' ').replaceFirst('Z', ' UTC');

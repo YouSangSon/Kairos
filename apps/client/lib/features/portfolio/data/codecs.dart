@@ -498,6 +498,281 @@ bool _sameValuationIssues(
   return true;
 }
 
+PortfolioValuationEvidence decodePortfolioValuationEvidence(Json json) {
+  jsonRequireExactKeys(json, const {
+    'schema_version',
+    'observation_cutoff',
+    'source_availability_at_cutoff',
+    'cash',
+    'holdings',
+    'current',
+    'conversion_fx',
+  });
+  final cutoff = jsonUtcText(json, 'observation_cutoff');
+  final views = [
+    for (final key in const ['cash', 'holdings', 'current'])
+      json[key] is Json
+          ? json[key] as Json
+          : throw const FormatException('Missing valuation view'),
+  ];
+  final sameObservation = const [
+    'ledger_revision',
+    'ledger_as_of',
+    'ledger_recorded_at',
+  ].every((key) => views.every((view) => view[key] == views.last[key]));
+  if (jsonText(json, 'schema_version') != 'portfolio-valuation-evidence.v1' ||
+      jsonText(json, 'source_availability_at_cutoff') != 'unverified' ||
+      !sameObservation ||
+      !views.every((view) => view['valuation_as_of'] == cutoff)) {
+    throw const FormatException('Valuation views differ from one observation');
+  }
+  final cutoffTime = utcNanoseconds(cutoff);
+  String fxKey(Json item) => '${item['source']}\n${item['observation_id']}';
+  final rawFx = jsonJsonList(json, 'conversion_fx');
+  final fx = rawFx
+      .map((item) => _decodeValuationFx(item, cutoffTime))
+      .toList(growable: false);
+  final fxKeys = rawFx.map(fxKey).toSet();
+  if (fx.any((item) => item.quoteCurrency != 'KRW') ||
+      fxKeys.length != fx.length) {
+    throw const FormatException('Invalid conversion FX');
+  }
+  final cash = _decodeCashValuation(views[0], cutoffTime);
+  final current = decodeCurrentPortfolioValuation(views[2]);
+  // The server's current valuation selects the same FX as cash and records
+  // every selected candidate, so these hold for any response it produces.
+  final cashFxKeys = [
+    for (final line in jsonJsonList(views[0], 'lines'))
+      if (line['fx'] case final Json used) fxKey(used),
+  ];
+  final cashValue = current.cashValue;
+  if ((cash.status == 'unavailable' && current.status != 'unavailable') ||
+      (cash.total != null &&
+          cashValue != null &&
+          cash.total!.amount != cashValue.amount) ||
+      !cashFxKeys.every(fxKeys.contains)) {
+    throw const FormatException('Valuation views disagree');
+  }
+  return PortfolioValuationEvidence(
+    observationCutoff: cutoff,
+    cash: cash,
+    holdings: decodeHoldingValuation(views[1]),
+    current: current,
+    conversionFx: fx,
+  );
+}
+
+final _maxObservationAge = BigInt.from(86400) * BigInt.from(1000000000);
+
+bool _overAge(String observedAt, BigInt cutoff) =>
+    cutoff - utcNanoseconds(observedAt) > _maxObservationAge;
+
+// Mirrors the server's ComputeCashValuation rules for the KRW evidence view.
+CashValuation _decodeCashValuation(Json json, BigInt cutoff) {
+  jsonRequireExactKeys(json, const {
+    'scope',
+    'policy_version',
+    'max_observation_age_seconds',
+    'base_currency',
+    'valuation_as_of',
+    'ledger_revision',
+    'ledger_as_of',
+    'ledger_recorded_at',
+    'status',
+    'sample',
+    'total',
+    'lines',
+    'issues',
+  });
+  final status = jsonText(json, 'status');
+  final sample = jsonBool(json, 'sample');
+  final total = _currentValuationMoney(json, 'total');
+  final lines = jsonJsonList(json, 'lines')
+      .map((line) => _decodeCashValuationLine(line, cutoff))
+      .toList(growable: false);
+  final issues = jsonJsonList(
+    json,
+    'issues',
+  ).map(decodeHoldingValuationIssue).toList(growable: false);
+  final owner = lines.any((line) => line.fx?.source == 'owner_declared');
+  final usedSample = lines.any((line) => line.fx?.sample ?? false);
+  final available = lines.every((line) => line.valuedAmount != null);
+  final expectedIssues = [
+    for (final line in lines)
+      if (line.issue case final issue?) '${issue.code}:${issue.field}',
+    if (owner) 'owner_declared_fx:null',
+    if (status == 'stale_sample') 'sample_data:null',
+  ];
+  final validState = switch (status) {
+    'empty' => lines.isEmpty && total == null,
+    'unavailable' => lines.isNotEmpty && !available && total == null,
+    'complete' => lines.isNotEmpty && available && !usedSample && total != null,
+    'stale_sample' =>
+      lines.isNotEmpty && available && usedSample && total != null,
+    _ => false,
+  };
+  if (jsonText(json, 'scope') != 'cash_only' ||
+      jsonText(json, 'policy_version') !=
+          (owner ? 'direct_fx_cash_v2' : 'direct_fx_cash_v1') ||
+      jsonCount(json, 'max_observation_age_seconds') != 86400 ||
+      jsonCurrency(json, 'base_currency') != 'KRW' ||
+      !validState ||
+      sample != usedSample ||
+      lines.map((line) => line.currency).toSet().length != lines.length ||
+      issues.map((i) => '${i.code}:${i.field}').join('\n') !=
+          expectedIssues.join('\n') ||
+      (total != null &&
+          (total.currency != 'KRW' ||
+              !_decimalSumIs([
+                for (final line in lines) line.valuedAmount!,
+              ], total.amount)))) {
+    throw const FormatException('Invalid cash valuation');
+  }
+  return CashValuation(
+    status: status,
+    sample: sample,
+    total: total,
+    lines: lines,
+    issues: issues,
+  );
+}
+
+CashValuationLine _decodeCashValuationLine(Json json, BigInt cutoff) {
+  jsonRequireExactKeys(json, const {
+    'currency',
+    'amount',
+    'status',
+    'valued_amount',
+    'fx',
+    'issue',
+  });
+  final currency = jsonCurrency(json, 'currency');
+  final amount = jsonDecimal(json, 'amount');
+  final status = jsonText(json, 'status');
+  final valued = jsonNullableDecimal(json, 'valued_amount');
+  final fx = switch (json['fx']) {
+    null => null,
+    final Json value => _decodeValuationFx(value, cutoff),
+    _ => throw const FormatException('Invalid cash FX'),
+  };
+  final issue = switch (json['issue']) {
+    null => null,
+    final Json value => decodeHoldingValuationIssue(value),
+    _ => throw const FormatException('Invalid cash issue'),
+  };
+  final foreign = amount != '0' && currency != 'KRW';
+  final pair = fx?.baseCurrency == currency && fx?.quoteCurrency == 'KRW';
+  bool issueIs(String code) => issue?.code == code && issue?.field == currency;
+  final valid = switch (status) {
+    'zero' => amount == '0' && valued == '0' && fx == null && issue == null,
+    'identity' =>
+      amount != '0' &&
+          currency == 'KRW' &&
+          valued == amount &&
+          fx == null &&
+          issue == null,
+    'valued' =>
+      foreign &&
+          pair &&
+          issue == null &&
+          valued != null &&
+          !_overAge(fx!.observedAt, cutoff) &&
+          _decimalProductIs(amount, fx.rate, valued),
+    'missing' =>
+      foreign && valued == null && fx == null && issueIs('missing_direct_fx'),
+    'stale' =>
+      foreign &&
+          valued == null &&
+          pair &&
+          _overAge(fx!.observedAt, cutoff) &&
+          issueIs('stale_direct_fx'),
+    _ => false,
+  };
+  if (!valid) throw const FormatException('Invalid cash valuation line');
+  return CashValuationLine(
+    currency: currency,
+    amount: amount,
+    status: status,
+    valuedAmount: valued,
+    fx: fx,
+    issue: issue,
+  );
+}
+
+ValuationFx _decodeValuationFx(Json json, BigInt cutoff) {
+  final owner = json['source'] == 'owner_declared';
+  jsonRequireExactKeys(json, {
+    'observation_id',
+    'source',
+    'base_currency',
+    'quote_currency',
+    'rate',
+    'observed_at',
+    'fetched_at',
+    'recorded_at',
+    'sample',
+    'state',
+    if (owner) 'source_version',
+  });
+  jsonText(json, 'observation_id');
+  final source = jsonText(json, 'source');
+  final base = jsonCurrency(json, 'base_currency');
+  final quote = jsonCurrency(json, 'quote_currency');
+  final rate = jsonDecimal(json, 'rate');
+  final sample = jsonBool(json, 'sample');
+  final state = jsonText(json, 'state');
+  final observedAt = jsonUtcText(json, 'observed_at');
+  final fetchedAt = jsonUtcText(json, 'fetched_at');
+  final recordedAt = jsonUtcText(json, 'recorded_at');
+  final fetched = utcNanoseconds(fetchedAt);
+  final recorded = utcNanoseconds(recordedAt);
+  if (rate == '0' ||
+      rate.startsWith('-') ||
+      base == quote ||
+      fetched < utcNanoseconds(observedAt) ||
+      recorded < fetched ||
+      recorded > cutoff ||
+      !(owner
+          ? state == (_overAge(observedAt, cutoff) ? 'stale' : 'unknown')
+          : source == 'local_fixture' && sample && state == 'stale')) {
+    throw const FormatException('Invalid valuation FX provenance');
+  }
+  return ValuationFx(
+    source: source,
+    sourceVersion: owner
+        ? jsonBenchmarkText(json, 'source_version', 128, identity: true)
+        : null,
+    baseCurrency: base,
+    quoteCurrency: quote,
+    rate: rate,
+    observedAt: observedAt,
+    fetchedAt: fetchedAt,
+    recordedAt: recordedAt,
+    sample: sample,
+    state: state,
+  );
+}
+
+bool _decimalSumIs(List<String> values, String total) {
+  final scale = [
+    total,
+    ...values,
+  ].map(decimalScale).reduce((a, b) => a > b ? a : b);
+  return values.fold(
+        BigInt.zero,
+        (sum, value) => sum + scaledDecimal(value, scale),
+      ) ==
+      scaledDecimal(total, scale);
+}
+
+bool _decimalProductIs(String left, String right, String product) {
+  final scale = decimalScale(left) + decimalScale(right);
+  return decimalScale(product) <= scale &&
+      scaledDecimal(left, decimalScale(left)) *
+              scaledDecimal(right, decimalScale(right)) ==
+          scaledDecimal(product, scale);
+}
+
 PortfolioSnapshot decodePortfolioSnapshot(Json json) {
   if (jsonBool(json, 'live_enabled') ||
       jsonText(json, 'valuation_status') != 'unavailable') {

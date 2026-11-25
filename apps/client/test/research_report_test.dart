@@ -379,6 +379,10 @@ void main() {
 
 class _ResearchApi implements TestRepositories {
   @override
+  Future<PortfolioValuationEvidence> valuationEvidence() =>
+      throw UnsupportedError('Not used by this fixture.');
+
+  @override
   Future<PortfolioBenchmarks> portfolioBenchmarks() async =>
       throw UnimplementedError();
 

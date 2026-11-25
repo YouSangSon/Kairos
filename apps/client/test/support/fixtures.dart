@@ -179,6 +179,17 @@ class FakeApi implements TestRepositories {
   Future<HoldingValuation> holdingValuation() =>
       throw UnsupportedError('Not used by this fixture.');
 
+  int valuationEvidenceCalls = 0;
+  Future<PortfolioValuationEvidence> Function()? valuationEvidenceHandler;
+
+  @override
+  Future<PortfolioValuationEvidence> valuationEvidence() {
+    valuationEvidenceCalls += 1;
+    final handler = valuationEvidenceHandler;
+    if (handler == null) throw UnsupportedError('Not used by this fixture.');
+    return handler();
+  }
+
   @override
   Future<MarketCandles> candles(String symbol) async {
     candleCalls += 1;

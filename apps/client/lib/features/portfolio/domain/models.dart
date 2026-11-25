@@ -162,6 +162,85 @@ class CurrentPortfolioValuation {
       .length;
 }
 
+class ValuationFx {
+  const ValuationFx({
+    required this.source,
+    this.sourceVersion,
+    required this.baseCurrency,
+    required this.quoteCurrency,
+    required this.rate,
+    required this.observedAt,
+    required this.fetchedAt,
+    required this.recordedAt,
+    required this.sample,
+    required this.state,
+  });
+
+  final String source;
+  final String? sourceVersion;
+  final String baseCurrency;
+  final String quoteCurrency;
+  final String rate;
+  final String observedAt;
+  final String fetchedAt;
+  final String recordedAt;
+  final bool sample;
+  final String state;
+}
+
+class CashValuationLine {
+  const CashValuationLine({
+    required this.currency,
+    required this.amount,
+    required this.status,
+    required this.valuedAmount,
+    required this.fx,
+    required this.issue,
+  });
+
+  final String currency;
+  final String amount;
+  final String status;
+  final String? valuedAmount;
+  final ValuationFx? fx;
+  final HoldingValuationIssue? issue;
+}
+
+class CashValuation {
+  const CashValuation({
+    required this.status,
+    required this.sample,
+    required this.total,
+    required this.lines,
+    required this.issues,
+  });
+
+  final String status;
+  final bool sample;
+  final Money? total;
+  final List<CashValuationLine> lines;
+  final List<HoldingValuationIssue> issues;
+}
+
+/// One server read: the three views share [observationCutoff] and one ledger
+/// revision, and source availability at the cutoff is always unverified.
+class PortfolioValuationEvidence {
+  const PortfolioValuationEvidence({
+    required this.observationCutoff,
+    required this.cash,
+    required this.holdings,
+    required this.current,
+    required this.conversionFx,
+  });
+
+  final String observationCutoff;
+  final CashValuation cash;
+  final HoldingValuation holdings;
+  final CurrentPortfolioValuation current;
+  final List<ValuationFx> conversionFx;
+  String get ledgerRevision => current.ledgerRevision;
+}
+
 class PortfolioSnapshot {
   const PortfolioSnapshot({
     required this.ledgerRevision,

@@ -344,6 +344,10 @@ void main() {
 
 class _PaperApi implements TestRepositories {
   @override
+  Future<PortfolioValuationEvidence> valuationEvidence() =>
+      throw UnsupportedError('Not used by this fixture.');
+
+  @override
   Future<PortfolioBenchmarks> portfolioBenchmarks() async =>
       throw UnimplementedError();
 

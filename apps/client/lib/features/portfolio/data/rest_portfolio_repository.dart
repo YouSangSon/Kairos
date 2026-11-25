@@ -68,4 +68,10 @@ class RestPortfolioRepository implements PortfolioRepository {
   Future<HoldingValuation> holdingValuation() async => decodeHoldingValuation(
     await transport.get('/v1/portfolio/holding-valuation'),
   );
+
+  @override
+  Future<PortfolioValuationEvidence> valuationEvidence() async =>
+      decodePortfolioValuationEvidence(
+        await transport.get('/v1/portfolio/valuation-evidence'),
+      );
 }

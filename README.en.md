@@ -272,6 +272,16 @@ The latest complete file per instrument and currency feeds valuation, TWR, XIRR,
 
 In the Korean app, open **Connections → Import price, FX and index files**, select UTF-8 JSON (up to 1MiB), then explicitly **Review input → Store reviewed file**. Both KRW and USD benchmark series are supported. Review checks input format only; it does not certify admission, currentness or provider authority. New versions replace the complete series; empty price/FX series withdraw observations. If storage is uncertain, retry the same original until a matching receipt arrives. Pending requests survive navigation during the app session, but not app termination. Confirm perpetual storage rights for the file. [Contract and verification scope](gates/g1y-owner-data-import.md)
 
+### Valuation evidence from one observation
+
+Use `같은 시점의 평가 근거 보기` on Home to see cash, holdings, and the whole-portfolio KRW valuation computed in one read. Cash shows each native-currency balance with the FX rate used for KRW conversion; holdings show native quantity, cost, and stored price. A missing rate or price, or one older than 24 hours, is shown with its reason, and no partial KRW total is formed. The app does not verify when external data was published or became available, so it labels that as unverified.
+
+```sh
+curl -fsS http://127.0.0.1:8080/v1/portfolio/valuation-evidence
+```
+
+[Contract and verification scope](gates/i1a-valuation-evidence.md)
+
 ### Annualized return adjusted for deposits and withdrawals
 
 Use `입출금을 반영한 수익률 보기` on Home to read since-inception `XIRR`. It combines dated external cash flows with the current KRW valuation, without counting trades, dividends, or costs as additional deposits or withdrawals. It annualizes actual UTC calendar days on a 365-day basis.
