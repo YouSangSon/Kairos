@@ -33,6 +33,10 @@ OwnerDataPreview review(Json c) => decodeOwnerDataPreview(
 );
 
 class _Api implements TestRepositories {
+  @override
+  Future<PortfolioValuationEvidence> valuationEvidence() =>
+      throw UnsupportedError('Not used by this fixture.');
+
   Future<OwnerDataPreview> Function(String)? previewHandler;
   Future<OwnerDataReceipt> Function(OwnerDataPreview)? applyHandler;
   @override
@@ -46,6 +50,10 @@ class _Api implements TestRepositories {
 }
 
 class _RefreshApi implements TestRepositories {
+  @override
+  Future<PortfolioValuationEvidence> valuationEvidence() =>
+      throw UnsupportedError('Not used by this fixture.');
+
   final base = goldenApi();
   final statusGate = Completer<ServiceStatus>();
   final reconciliationGate = Completer<BrokerReconciliation?>();

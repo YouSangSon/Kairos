@@ -178,6 +178,10 @@ double _p95(Iterable<Duration> values) {
 
 class _ProfileApi implements TestRepositories {
   @override
+  Future<PortfolioValuationEvidence> valuationEvidence() =>
+      throw UnsupportedError('Not used by this fixture.');
+
+  @override
   Future<WatchlistReport> watchlist() async => decodeWatchlistReport({
     'policy_version': 'watchlist_stored_prices_24h.v1',
     'max_observation_age_seconds': 86400,

@@ -6,6 +6,7 @@ import 'package:omni_folio_client/features/portfolio/application/portfolio_contr
 import 'package:omni_folio_client/features/portfolio/domain/models.dart';
 import 'package:omni_folio_client/features/portfolio/presentation/holding_valuation_page.dart';
 import 'package:omni_folio_client/features/portfolio/presentation/portfolio_xirr_page.dart';
+import 'package:omni_folio_client/features/portfolio/presentation/valuation_evidence_page.dart';
 
 class OverviewPage extends StatelessWidget {
   const OverviewPage({
@@ -90,6 +91,16 @@ class OverviewPage extends StatelessWidget {
           ),
           icon: const Icon(Icons.trending_up),
           label: const Text('입출금을 반영한 수익률 보기', textAlign: TextAlign.center),
+        ),
+        const SizedBox(height: 8),
+        OutlinedButton.icon(
+          onPressed: () => Navigator.of(context).push<void>(
+            MaterialPageRoute(
+              builder: (_) => ValuationEvidencePage(api: controller.api),
+            ),
+          ),
+          icon: const Icon(Icons.fact_check_outlined),
+          label: const Text('같은 시점의 평가 근거 보기', textAlign: TextAlign.center),
         ),
         const SizedBox(height: 12),
 

@@ -48,6 +48,10 @@ Json _rates(List<String> rates) {
 }
 
 class _Api implements TestRepositories {
+  @override
+  Future<PortfolioValuationEvidence> valuationEvidence() =>
+      throw UnsupportedError('Not used by this fixture.');
+
   _Api(this.data);
   Json data;
   Future<PortfolioTwrCheckpoints> Function()? handler;

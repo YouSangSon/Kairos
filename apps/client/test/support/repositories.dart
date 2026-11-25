@@ -72,6 +72,9 @@ class RestTestRepositories implements TestRepositories {
   Future<HoldingValuation> holdingValuation() =>
       dependencies.portfolio.holdingValuation();
   @override
+  Future<PortfolioValuationEvidence> valuationEvidence() =>
+      dependencies.portfolio.valuationEvidence();
+  @override
   Future<InstrumentLedger> instrumentLedger(
     String instrumentId,
     String currency,
