@@ -14,7 +14,7 @@
 
 `request.api_id`와 `request.body`는 실제 전송한 의미상 요청과 같다. 조회 시작 UTC clock에서 고정 KST 기준 `base_dt`를 한 번 계산하고 페이지·갱신 동안 그대로 사용한다. `upd_stkpc_tp=1`과 기준일은 요청 근거이며, 조정이 실제 적용되었거나 서로 다른 capture의 주가 단위가 같다는 보장은 아니다. 원본 `dt` 또는 `cntr_tm`은 해당 OHLCV와 함께 `provider_time`에 보존한다. 값은 기존 magnitude/decimal 검증과 정규화를 따른다.
 
-`fetch_started_at`과 `fetched_at`은 실제 UTC RFC3339Nano clock이다. 종료가 시작보다 앞서면 새 capture만 거절한다. 발행 경계는 원본 시각이 일봉 8자리·분봉 14자리 ASCII 숫자인지도 검사한다. 기존 `Candles`의 반환형·KST 정규화 `At`·오류 계약과 분수 초 허용에는 이 검사를 추가하지 않는다. capture에는 정규화 `at`, 봉 시작·종료·공개·가용 시각을 만들지 않는다. `time_evidence`는 제공자 timezone·bar boundary·publication time이 `not_provided`이며 bar completion은 `unverified`임을 명시한다. 이 파일은 closed-bar 입력, canonical 가격 평가, paper 입력이나 주문 권한이 아니다.
+`fetch_started_at`과 `fetched_at`은 실제 UTC RFC3339Nano clock이다. 종료가 시작보다 앞서면 새 capture만 거절한다. 발행 경계는 원본 시각이 일봉 8자리·분봉 14자리 ASCII 숫자인지도 검사한다. 기존 `Candles`의 반환형·KST 정규화 `At`·오류 계약과 분수 초 허용에는 이 검사를 추가하지 않는다. capture에는 정규화 `at`, 봉 시작·종료·공개·가용 시각을 만들지 않는다. `time_evidence`는 제공자 timezone·bar boundary·publication time이 `not_provided`이며 bar completion은 `unverified`임을 명시한다. 같은 capture 안의 더 늦은 날짜 봉으로 앞 봉의 완료를 추론하는 것은 오프라인 연구에만 허용하며 판단 자격을 주지 않는다. 마지막 봉은 장 마감 뒤 수집했더라도 미검증이다. 이 파일은 closed-bar 입력, canonical 가격 평가, paper 입력이나 주문 권한이 아니다. [봉 근거와 판단 자격](../docs/architecture/production-and-improvement.md#captured-bar-eligibility)
 
 ## Publication and recovery
 

@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://omni-folio.local/contracts/kiwoom-candle-capture.v1.schema.json",
   "title": "Kiwoom mock candle research observation v1",
-  "description": "Create-only research JSON, at most 1 MiB including its final newline. Exact request and UTC fetch clocks are local provenance. fetched_at must not precede fetch_started_at. Raw provider time is not proof of bar boundaries, timezone, publication, completion or adjustment comparability. No instrument, ledger or paper authority.",
+  "description": "Create-only research JSON, at most 1 MiB including its final newline. Exact request and UTC fetch clocks are local provenance. fetched_at must not precede fetch_started_at. Raw provider time is not proof of bar boundaries, timezone, publication, completion or adjustment comparability. Inferring a bar's completion from a later-dated bar in the same capture is allowed only for offline research and grants no decision eligibility. No instrument, ledger or paper authority.",
   "type": "object",
   "additionalProperties": false,
   "required": [

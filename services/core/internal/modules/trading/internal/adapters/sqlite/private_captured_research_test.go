@@ -38,7 +38,10 @@ func TestCapturedCandleResearchActualProducerAndPythonCannotEnterPaperAuthority(
 	if err != nil || len(records) != 121 {
 		t.Fatalf("synthetic research CSV: %d rows, %v", len(records)-1, err)
 	}
-	rows := make([]map[string]string, 0, len(records)-1)
+	// Kiwoom returns newest first. The newest bar has no later bar in the capture, so research keeps it display-only beside the 120 configured rows.
+	rows := append(make([]map[string]string, 0, len(records)), map[string]string{
+		"dt": "20260501", "open_pric": "27", "high_pric": "28", "low_pric": "26", "cur_prc": "27", "trde_qty": "100",
+	})
 	for index := len(records) - 1; index > 0; index-- {
 		row := records[index]
 		rows = append(rows, map[string]string{
@@ -62,10 +65,10 @@ func TestCapturedCandleResearchActualProducerAndPythonCannotEnterPaperAuthority(
 	}
 
 	capture, rawCapture := capturedModularReadCapture(t, path)
-	if len(capture.Bars) != 120 || calls.Load() != 2 {
-		t.Fatalf("actual producer did not retain 120 synthetic observations: %d rows, %d calls", len(capture.Bars), calls.Load())
+	if len(capture.Bars) != 121 || calls.Load() != 2 {
+		t.Fatalf("actual producer did not retain 121 synthetic observations: %d rows, %d calls", len(capture.Bars), calls.Load())
 	}
-	capturedModularAssertReceipt(t, captureReceipt.Bytes(), rawCapture, 120)
+	capturedModularAssertReceipt(t, captureReceipt.Bytes(), rawCapture, 121)
 	command := exec.Command("python3", "-B", "-m", "omni_research.capture_cli", "--capture", path,
 		"--config", filepath.Join(root, "contracts/fixtures/strategy-improvement-paper-config.json"))
 	command.Env = append(os.Environ(), "PYTHONDONTWRITEBYTECODE=1", "PYTHONPATH="+filepath.Join(root, "services/research"))
@@ -87,13 +90,27 @@ func TestCapturedCandleResearchActualProducerAndPythonCannotEnterPaperAuthority(
 		Analysis struct {
 			Comparisons map[string]bool `json:"threshold_comparisons"`
 		} `json:"analysis"`
+		Eligibility struct {
+			ResearchRows struct {
+				Last struct {
+					Row int `json:"row"`
+				} `json:"last"`
+				BarCount int `json:"bar_count"`
+			} `json:"research_rows"`
+			Decision struct {
+				Status string `json:"status"`
+			} `json:"decision"`
+		} `json:"data_eligibility"`
 	}
 	if err := json.Unmarshal(rawReport, &report); err != nil {
 		t.Fatal(err)
 	}
 	sum := sha256.Sum256(rawCapture)
-	if report.SchemaVersion != "captured-candle-research.v1" || report.Source.SHA256 != hex.EncodeToString(sum[:]) || len(report.Source.Capture.Bars) != 120 {
+	if report.SchemaVersion != "captured-candle-research.v2" || report.Source.SHA256 != hex.EncodeToString(sum[:]) || len(report.Source.Capture.Bars) != 121 {
 		t.Fatal("Python report lost the native capture provenance")
+	}
+	if rows := report.Eligibility.ResearchRows; rows.BarCount != 120 || rows.Last.Row != 119 || report.Eligibility.Decision.Status != "not_eligible" {
+		t.Fatalf("newest producer bar must stay display-only and the report must not be decision eligible: %+v", report.Eligibility)
 	}
 	if len(report.Analysis.Comparisons) != 3 {
 		t.Fatal("report did not compute all research threshold comparisons")

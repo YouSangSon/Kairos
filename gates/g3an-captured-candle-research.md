@@ -4,7 +4,7 @@
 
 G4AA가 저장한 mock 일봉을 기존 비용 차감 SMA 후보 탐색·expanding walk-forward·최종 holdout에 사용한다. 수집한 관측을 실제 분석으로 연결하는 단위이며, 정보 수집·탐지부터 근거 있는 추천·사전 승인 투자와 리밸런싱·기록·복기·개선까지의 전체 목표는 계속 남아 있다.
 
-새 결과는 `captured-candle-research.v1`, scope는 `offline_capture_research_only`다. 수치 기준을 모두 통과해도 기존 전략 등록·`paper-improve`·paper proposal decoder가 받지 않는 별도 형식이다. 운영 Go allowlist·DB·HTTP·Flutter·인증 설정은 바꾸지 않는다. 기존 CSV v1/v2 입력·보고서·public `simulate_fold`·`run_experiment` 계약은 유지한다.
+새 결과는 [`captured-candle-research.v2`](../contracts/captured-candle-research-v2.schema.json), scope는 `offline_capture_research_only`다. [v1 schema](../contracts/captured-candle-research.schema.json)는 v2가 `$ref`로 재사용하는 정의 원본이며, v1 형식 보고서는 이미 만든 과거 보고서 검증에만 쓴다. 새 실행은 v2만 만든다. 수치 기준을 모두 통과해도 기존 전략 등록·`paper-improve`·paper proposal decoder가 받지 않는 별도 형식이다. 운영 Go allowlist·DB·HTTP·Flutter·인증 설정은 바꾸지 않는다. 기존 CSV v1/v2 입력·보고서·public `simulate_fold`·`run_experiment` 계약은 유지한다.
 
 ## 입력과 실행
 
@@ -14,7 +14,7 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=services/research python3 -B -m omni_resear
   --config contracts/fixtures/strategy-improvement-paper-config.json
 ```
 
-`--capture`와 `--config`만 받는다. native 일봉과 v2 설정만 지원한다. 행 수는 train·validation·holdout 합계와 정확히 같아야 하며 위 설정은 120행이 필요하다. 공개 capture fixture는 1행이므로 이 연구에 충분하지 않다. 라이브러리는 `capture_research.run_capture_experiment(Path, raw_v2_config)`를 제공한다.
+`--capture`와 `--config`만 받는다. native 일봉과 v2 설정만 지원한다. capture의 마지막 봉은 같은 capture 안에 더 늦은 날짜 봉이 없어 완료를 추론할 수 없으므로 표시 전용이며 분석에서 뺀다. 행 수는 train·validation·holdout 합계 + 1과 정확히 같아야 하며 위 설정은 121행이 필요하다. 연구 가능 봉이 합계와 다르면 보고서 없이 실패한다. 공개 capture fixture는 1행이므로 이 연구에 충분하지 않다. 라이브러리는 `capture_research.run_capture_experiment(Path, raw_v2_config)`를 제공한다.
 
 두 파일은 열린 descriptor가 regular file인지 확인한 뒤 각각 최대 1 MiB+1 byte를 한 번 읽는다. FIFO는 nonblocking open으로 기다리지 않고 거절한다. UTF-8·단일 JSON object·모든 깊이의 중복 key·비유한 수·예상 밖 key·타입을 검사한다. 일봉 요청·종목·adjustment 요청값·고정 time evidence·bounds, 달력상 유효한 고유 증가 날짜와 요청일 상한, fetch 시작의 고정 UTC+09 요청일, 나노초 단위 fetch 선후관계를 검증한다.
 
@@ -24,20 +24,21 @@ OHLCV는 Decimal 생성 전에 canonical 숫자 문자열과 원천 token 64자 
 
 `improve.py`가 후보 순위·체결·비용·validation·holdout·buy-and-hold·수치 비교를 계속 한 곳에서 계산한다. 내부 `Evaluation`은 후보·범위·fold·선택·지표와 행 인덱스 거래 기록을 담는다. 각 계산은 기존 `bars/config/parameters/warmup` 슬라이스·evaluation 시작·길이·청산·오류 동작을 유지한다. 기존 공개 API는 warmup+bars의 원래 시각 라벨로 복원한다.
 
-새 보고서의 root는 `schema_version,scope,source,config,config_sha256,analysis,limitations,report_sha256`다. 모든 새 하위 object는 닫힌 JSON Schema로 정의한다. `source.capture`는 검증한 decoded capture 전체이며 `source.sha256`은 같은 원본 bytes의 hash다. hash는 제공자의 진위를 증명하지 않으며 decoded object만으로 원본 공백·escape·key 순서를 복원할 수 없으므로 원본 파일을 보관해야 한다. 설정 전체와 기존 canonical config hash를 보존하며 `config.promotion`은 공급한 연구 기준이다.
+새 보고서의 root는 `schema_version,scope,source,config,config_sha256,analysis,data_eligibility,limitations,report_sha256`다. 모든 새 하위 object는 닫힌 JSON Schema로 정의한다. `source.capture`는 검증한 decoded capture 전체이며 `source.sha256`은 같은 원본 bytes의 hash다. hash는 제공자의 진위를 증명하지 않으며 decoded object만으로 원본 공백·escape·key 순서를 복원할 수 없으므로 원본 파일을 보관해야 한다. 설정 전체와 기존 canonical config hash를 보존하며 `config.promotion`은 공급한 연구 기준이다.
 
-분석에는 기존 산술·평가정책, 모든 후보의 pre-holdout 지표, 단일 fold 목록, 최종 선택, validation 집계, holdout 범위·거래·지표, buy-and-hold와 세 기준 비교가 있다. 범위와 거래는 `{row,provider_time}`로 원래 0-based 행을 참조한다. 기존 상수 `lookahead_violations`는 새 지표에 포함하지 않는다. 새 보고서에는 기존 accepted artifact·manifest·운영 `promotion.target`·proposal·주문 지시가 없다.
+분석에는 기존 산술·평가정책, 모든 후보의 pre-holdout 지표, 단일 fold 목록, 최종 선택, validation 집계, holdout 범위·거래·지표, buy-and-hold와 세 기준 비교가 있다. 분석은 행 0부터 N-2까지만 사용한다. 범위와 거래는 `{row,provider_time}`로 원래 0-based 행을 참조하며 마지막 봉의 값은 어떤 분석 수치에도 영향을 주지 않는다. 기존 상수 `lookahead_violations`는 새 지표에 포함하지 않는다. 새 보고서에는 기존 accepted artifact·manifest·운영 `promotion.target`·proposal·주문 지시가 없다.
 
 정렬한 compact JSON과 newline이 1 MiB 이하인 것을 확인한 뒤 stdout으로 출력한다. 입력·보고서 오류는 부분 stdout 없이 실패한다. 출력 transport 오류도 실패로 보고한다. 명령은 파일을 발행하지 않으며 셸 리디렉션의 원자성·덮어쓰기 방지를 제공하지 않는다.
 
 ## 해석의 한계와 다음 연결
 
-`provider_time`은 관측 라벨이다. timezone·봉 경계·공개 시각이 제공되지 않고 봉 완료도 미검증이다. `delay_bars`는 다음 관측 행을 세며 실제 가용 시각이나 경과 시간을 검증하지 않는다. adjustment 요청 `1`도 적용 결과나 가격 단위 비교 가능성을 증명하지 않는다. 각 fold는 가상 자본을 초기화하고 마지막에 강제 청산한다. 이를 연속 운영 계좌·연환산 성과·실전 수익성으로 해석하지 않는다.
+`provider_time`은 관측 라벨이다. timezone·봉 경계·공개 시각은 제공되지 않는다. 봉 완료는 같은 capture 안의 더 늦은 날짜 봉에서 오프라인 연구용으로만 추론하며 제공자의 완료 증거가 아니다. `data_eligibility`는 규칙 버전 `policy`(`kiwoom-capture-bar-eligibility.v1`), 이용 가능 시각 `not_provided`(값 null), 완료 추론과 미검증 마지막 행 `evidence.completion.unverified_row`, 미검증 정정·수정주가, 연구 행 범위 `research_rows`를 보여 준다. 판단 결과는 항상 `not_eligible`이며 차단 사유는 `available_at_not_provided`·`completion_not_provider_verified`·`correction_unverified`·`adjustment_unverified`·`calendar_gaps_unverified`·`mock_environment`다. `delay_bars`는 다음 관측 행을 세며 실제 가용 시각이나 경과 시간을 검증하지 않는다. adjustment 요청 `1`도 적용 결과나 가격 단위 비교 가능성을 증명하지 않는다. 각 fold는 가상 자본을 초기화하고 마지막에 강제 청산한다. 이를 연속 운영 계좌·연환산 성과·실전 수익성으로 해석하지 않는다. [봉 근거와 판단 자격](../docs/architecture/production-and-improvement.md#captured-bar-eligibility)
 
 운영 paper admission에는 별도 출처·가용 시각·비교 가능성 증거와 명시적인 계약이 필요하다. 지속 수집·새로운 기회/위험 탐지·보유자산을 고려한 추천·포트폴리오 리밸런싱·승인 범위 안의 실행과 복기 연결은 별도 후속 작업이다.
 
 ## 현재 검증 근거
 
+- I1-3 v2: 구현 전 마지막 봉의 open만 바꾼 capture는 holdout `after_cost_return`을 `0.014734027`에서 `0.015732028`로 바꿨고 거래량만 1로 낮춘 capture는 `fold cannot complete every delayed long-only order`로 연구 전체가 실패했다. v2에서는 두 경우 모두 분석이 같다. 같은 120개 연구 행에서 v2 분석은 base `8098a31`의 v1 분석과 byte 단위로 같았고, 합성 TLS 응답으로 실제 Go 수집 CLI가 만든 121행 capture도 Python v2 보고서와 paper 권한 차단 흐름을 통과했다. 아래 항목은 v1 당시 근거다.
 - 실제 신규 CLI는 구현 전 `No module named omni_research.capture_cli`, exit 1·stdout 0 bytes로 실패했고 실제 CLI를 호출한 새 테스트도 실패했다. 기준 입력·stdout·stderr·exit는 `goal-20261103-capture-research/implementation-red-*`에 보존했다.
 - 계산 추출 후 기존 연구 19개가 통과했고 v1/v2 native CLI stdout·stderr는 부모가 base `e2a3c86`에서 저장한 기준 bytes와 완전히 같았다. stdout SHA256은 각각 `004fd55c0bc939f3a9394902cf0b6972590ec15f33f6dba726e0344e8882682f`, `143c2690d0a139c95d5ed46d902e0e02644858444fb35e3dcd47b2d2fd5ce846`다.
 - 캡처 집중 Python 13개가 통과했다. 기존 120행 CSV로 명시적으로 만든 합성 capture와 v2 30/60/30 설정을 사용해 모든 수치·선택의 일치, 최종 holdout 비개입, 원본 bytes·decoded source·config hash·결정성, 임의 warmup, malformed/중복/유형/날짜/요청/clock/가격/한도/FIFO/출력 실패를 확인했다. 이 입력은 실제 증권사 자료나 수익성 근거가 아니다.

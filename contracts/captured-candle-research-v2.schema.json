@@ -1,0 +1,183 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://omni-folio.local/contracts/captured-candle-research.v2.schema.json",
+  "title": "Offline captured daily candle research v2",
+  "description": "Compact UTF-8 JSON plus newline is capped at 1 MiB. Row references preserve raw provider labels, not availability instants. Analysis uses capture rows 0 through N-2 and train, validation and holdout totals equal capture rows minus one. The last row has no later-dated row in the same capture, so it is display-only. Completion of earlier rows is inferred from capture order for offline research only and never grants decision eligibility. Capture SHA hashes original bytes; report SHA hashes the canonical body excluding report_sha256. Native coherence, row eligibility, arithmetic and hashes require runtime verification. The captured-candle-research.v1 schema remains the definition source this schema references, and validates only earlier v1 reports.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "scope",
+    "source",
+    "config",
+    "config_sha256",
+    "analysis",
+    "data_eligibility",
+    "limitations",
+    "report_sha256"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "captured-candle-research.v2"
+    },
+    "scope": {
+      "$ref": "captured-candle-research.schema.json#/properties/scope"
+    },
+    "source": {
+      "$ref": "captured-candle-research.schema.json#/properties/source"
+    },
+    "config": {
+      "$ref": "captured-candle-research.schema.json#/properties/config"
+    },
+    "config_sha256": {
+      "$ref": "captured-candle-research.schema.json#/properties/config_sha256"
+    },
+    "analysis": {
+      "$ref": "captured-candle-research.schema.json#/properties/analysis"
+    },
+    "data_eligibility": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "policy",
+        "evidence",
+        "research_rows",
+        "decision"
+      ],
+      "properties": {
+        "policy": {
+          "const": "kiwoom-capture-bar-eligibility.v1"
+        },
+        "evidence": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "available_at",
+            "completion",
+            "correction",
+            "adjustment"
+          ],
+          "properties": {
+            "available_at": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "status",
+                "value"
+              ],
+              "properties": {
+                "status": {
+                  "const": "not_provided"
+                },
+                "value": {
+                  "const": null
+                }
+              }
+            },
+            "completion": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "status",
+                "basis",
+                "unverified_row"
+              ],
+              "properties": {
+                "status": {
+                  "const": "later_bar_in_capture"
+                },
+                "basis": {
+                  "const": "capture_order_inference"
+                },
+                "unverified_row": {
+                  "$ref": "captured-candle-research.schema.json#/$defs/row"
+                }
+              }
+            },
+            "correction": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "status"
+              ],
+              "properties": {
+                "status": {
+                  "const": "unverified"
+                }
+              }
+            },
+            "adjustment": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "status"
+              ],
+              "properties": {
+                "status": {
+                  "const": "unverified"
+                }
+              }
+            }
+          }
+        },
+        "research_rows": {
+          "$ref": "captured-candle-research.schema.json#/$defs/range"
+        },
+        "decision": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "status",
+            "blockers"
+          ],
+          "properties": {
+            "status": {
+              "const": "not_eligible"
+            },
+            "blockers": {
+              "const": [
+                "available_at_not_provided",
+                "completion_not_provider_verified",
+                "correction_unverified",
+                "adjustment_unverified",
+                "calendar_gaps_unverified",
+                "mock_environment"
+              ]
+            }
+          }
+        }
+      }
+    },
+    "limitations": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "execution_delay",
+        "capital_and_liquidation",
+        "source_time",
+        "adjustment",
+        "authority"
+      ],
+      "properties": {
+        "execution_delay": {
+          "$ref": "captured-candle-research.schema.json#/properties/limitations/properties/execution_delay"
+        },
+        "capital_and_liquidation": {
+          "$ref": "captured-candle-research.schema.json#/properties/limitations/properties/capital_and_liquidation"
+        },
+        "source_time": {
+          "const": "provider timezone, bar boundaries and publication time are not provided; completion is inferred only for offline research from a later-dated row in the same capture, and the last row is display-only and unverified"
+        },
+        "adjustment": {
+          "$ref": "captured-candle-research.schema.json#/properties/limitations/properties/adjustment"
+        },
+        "authority": {
+          "$ref": "captured-candle-research.schema.json#/properties/limitations/properties/authority"
+        }
+      }
+    },
+    "report_sha256": {
+      "$ref": "captured-candle-research.schema.json#/properties/report_sha256"
+    }
+  }
+}
